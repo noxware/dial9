@@ -627,6 +627,50 @@
                 height: 100%;
                 display: block;
             }
+            #context-switch-panel {
+                display: none;
+                height: 92px;
+                background: #15152a;
+                border-top: 1px solid #333;
+                flex-shrink: 0;
+                position: relative;
+                overflow: hidden;
+            }
+            #context-switch-panel .chart-label {
+                position: absolute;
+                top: 4px;
+                left: 8px;
+                font-size: 0.75em;
+                color: #888;
+                z-index: 2;
+            }
+            #context-switch-panel canvas {
+                width: 100%;
+                height: 100%;
+                display: block;
+            }
+            .expression-art-panel {
+                display: none;
+                height: 112px;
+                background: #15152a;
+                border-top: 1px solid #333;
+                flex-shrink: 0;
+                position: relative;
+                overflow: hidden;
+            }
+            .expression-art-panel .chart-label {
+                position: absolute;
+                top: 4px;
+                left: 8px;
+                font-size: 0.75em;
+                color: #888;
+                z-index: 2;
+            }
+            .expression-art-panel canvas {
+                width: 100%;
+                height: 100%;
+                display: block;
+            }
             #task-detail .chart-label {
                 position: absolute;
                 top: 4px;
@@ -938,6 +982,19 @@
                     <span id="cpu-panel-info" style="position:absolute;top:4px;right:12px;font-size:0.75em;color:#aaa;z-index:2;pointer-events:none"></span>
                     <canvas id="cpu-panel-canvas"></canvas>
                 </div>
+                <div id="context-switch-panel">
+                    <div class="chart-label">Context Switch Rate <span style="color:#81c784">■ voluntary</span> <span style="color:#ffb74d">■ involuntary</span></div>
+                    <span id="context-switch-panel-info" style="position:absolute;top:4px;right:12px;font-size:0.75em;color:#aaa;z-index:2;pointer-events:none"></span>
+                    <canvas id="context-switch-panel-canvas"></canvas>
+                </div>
+                <div id="expression-dinosaur-panel" class="expression-art-panel">
+                    <div class="chart-label">Expression art · interval-area / steps</div>
+                    <canvas id="expression-dinosaur-canvas"></canvas>
+                </div>
+                <div id="expression-heart-panel" class="expression-art-panel">
+                    <div class="chart-label">Expression art · line</div>
+                    <canvas id="expression-heart-canvas"></canvas>
+                </div>
                 <div id="task-detail">
                     <span class="chart-label" id="task-detail-label">Task Detail</span>
                     <span id="task-detail-status" style="position:absolute;top:4px;right:12px;font-size:0.75em;color:#aaa;z-index:2"></span>
@@ -1013,6 +1070,8 @@
         <script src="flamegraph_export.js"></script>
         <script src="flamegraph.js"></script>
         <script src="panel_layout.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/arquero@8.0.3"></script>
+        <script src="view_data_spike.js"></script>
         <script>
             const { EVENT_TYPES: ET, parseTrace, formatFrame, symbolizeChain, deduplicateSamples } = TraceParser;
             const { buildWorkerSpans, attachCpuSamples, buildActiveTaskTimeline, computeSchedulingDelays, filterPointsOfInterest, buildSpanData, collectDescendants, selectSpanRenderSet, enclosingSpans, computeSpanLayout, getTraceTimeRange, hasCpuProfileSamples, buildProcessCpuUsageSeries, computeRuntimeGroups } = TraceAnalysis;
@@ -1293,6 +1352,9 @@
                 maxCores: 0,
                 avgCores: 0,
             };
+            let contextSwitchRates = [];
+            let expressionDinosaurBands = [];
+            let expressionHeartLine = [];
             // Points of interest for navigation
             let pointsOfInterest = [];
             let currentPoiIndex = -1;
@@ -1571,9 +1633,15 @@
                 relatedItems = [];
                 hoveredWakerTaskId = null;
                 processCpuUsage = { samples: [], intervals: [], availableParallelism: null, maxCores: 0, avgCores: 0 };
+                contextSwitchRates = [];
+                expressionDinosaurBands = [];
+                expressionHeartLine = [];
                 hideStackPopup();
                 taskDetailPanel.style.display = "none";
                 document.getElementById("cpu-panel").style.display = "none";
+                document.getElementById("context-switch-panel").style.display = "none";
+                document.getElementById("expression-dinosaur-panel").style.display = "none";
+                document.getElementById("expression-heart-panel").style.display = "none";
                 schedPanelTimeRange = null;
 
                 // Default: clear the URL range only when replacing a visible
@@ -2149,6 +2217,34 @@
                         ? `, available_parallelism=${processCpuUsage.availableParallelism}`
                         : ", available_parallelism=unknown";
                     console.log(`Process CPU usage: ${processCpuUsage.intervals.length} intervals${cap}`);
+                }
+
+                try {
+                    const spike = ViewDataSpike.runContextSwitchSpike(trace.customEvents || []);
+                    contextSwitchRates = spike.rows;
+                    const panel = document.getElementById("context-switch-panel");
+                    panel.style.display = contextSwitchRates.length > 0 ? "block" : "none";
+                    document.getElementById("context-switch-panel-info").textContent =
+                        `Arquero spike · ${spike.inputRows} samples → ${contextSwitchRates.length} intervals`;
+                    console.log("Context-switch Arquero spike", spike);
+                } catch (error) {
+                    contextSwitchRates = [];
+                    document.getElementById("context-switch-panel").style.display = "none";
+                    console.warn("Context-switch Arquero spike failed", error);
+                }
+
+                try {
+                    const art = ViewDataSpike.runExpressionArtSpike();
+                    expressionDinosaurBands = art.dinosaurBands;
+                    expressionHeartLine = art.heartLine;
+                    document.getElementById("expression-dinosaur-panel").style.display = "block";
+                    document.getElementById("expression-heart-panel").style.display = "block";
+                } catch (error) {
+                    expressionDinosaurBands = [];
+                    expressionHeartLine = [];
+                    document.getElementById("expression-dinosaur-panel").style.display = "none";
+                    document.getElementById("expression-heart-panel").style.display = "none";
+                    console.warn("Expression art Arquero spike failed", error);
                 }
 
                 // Build span data from custom events.  Reset span state
@@ -2898,6 +2994,8 @@
                 if (prof) _t = _profMark(prof, `spanPanel(allSpans=${allSpans.length})`, _t);
                 renderCustomEventsPanel(scrollbarW);
                 renderProcessCpuPanel(scrollbarW);
+                renderContextSwitchPanel(scrollbarW);
+                renderExpressionArtPanels();
                 if (prof) _t = _profMark(prof, `customEvents(${genericCustomEvents.length})`, _t);
                 renderTaskDetail(scrollbarW);
                 if (prof) _t = _profMark(prof, "taskDetail", _t);
@@ -3867,6 +3965,156 @@
                     ctx.stroke();
                 }
 
+            }
+
+            function renderContextSwitchPanel(scrollbarW) {
+                const panel = document.getElementById("context-switch-panel");
+                if (panel.style.display === "none") return;
+                const c = document.getElementById("context-switch-panel-canvas");
+                const ph = 92;
+                const layout = timePanelLayout(panel, scrollbarW);
+                const { pw, drawW, nsToPanelXClamped } = layout;
+                const ctx = layout.resizeCanvas(c, ph);
+                ctx.clearRect(0, 0, pw, ph);
+                ctx.fillStyle = "#15152a";
+                ctx.fillRect(0, 0, pw, ph);
+                if (drawW <= 0) return;
+
+                const visible = contextSwitchRates.filter((row) =>
+                    row.end >= viewStart && row.start <= viewEnd
+                );
+                const maxRate = Math.max(
+                    1,
+                    ...visible.flatMap((row) => [row.voluntary_per_second, row.involuntary_per_second])
+                );
+                const chartTop = 20;
+                const chartH = ph - 28;
+                const y = (value) => chartTop + chartH - (value / maxRate) * chartH;
+
+                ctx.fillStyle = "#667";
+                ctx.font = "10px monospace";
+                ctx.textAlign = "right";
+                ctx.fillText(`${maxRate.toFixed(maxRate < 10 ? 1 : 0)}/s`, LABEL_W - 6, chartTop + 9);
+                ctx.fillText("0", LABEL_W - 6, chartTop + chartH);
+                ctx.strokeStyle = "rgba(255,255,255,0.07)";
+                for (let i = 1; i <= 3; i++) {
+                    const lineY = chartTop + (chartH * i) / 4;
+                    ctx.beginPath();
+                    ctx.moveTo(LABEL_W, lineY);
+                    ctx.lineTo(LABEL_W + drawW, lineY);
+                    ctx.stroke();
+                }
+
+                function step(field, color) {
+                    let previous = null;
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = 1.5;
+                    ctx.beginPath();
+                    for (const row of visible) {
+                        const x1 = nsToPanelXClamped(row.start);
+                        const x2 = nsToPanelXClamped(row.end);
+                        const rowY = y(row[field]);
+                        if (!previous) ctx.moveTo(x1, rowY);
+                        else ctx.lineTo(x1, rowY);
+                        ctx.lineTo(x2, rowY);
+                        previous = row;
+                    }
+                    ctx.stroke();
+                }
+
+                step("voluntary_per_second", "#81c784");
+                step("involuntary_per_second", "#ffb74d");
+            }
+
+            function expressionArtContext(panelId, canvasId) {
+                const panel = document.getElementById(panelId);
+                if (panel.style.display === "none") return null;
+                const canvas = document.getElementById(canvasId);
+                const rect = panel.getBoundingClientRect();
+                const dpr = window.devicePixelRatio || 1;
+                const width = Math.max(1, Math.floor(rect.width));
+                const height = Math.max(1, Math.floor(rect.height));
+                canvas.width = Math.round(width * dpr);
+                canvas.height = Math.round(height * dpr);
+                const ctx = canvas.getContext("2d");
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                ctx.clearRect(0, 0, width, height);
+                return { ctx, width, height };
+            }
+
+            function renderExpressionArtPanels() {
+                {
+                    const target = expressionArtContext(
+                        "expression-dinosaur-panel", "expression-dinosaur-canvas");
+                    if (target && expressionDinosaurBands.length) {
+                        const { ctx, width, height } = target;
+                        const left = 14, right = 14, top = 21, bottom = 9;
+                        const drawW = width - left - right;
+                        const drawH = height - top - bottom;
+                        ctx.fillStyle = "#101b18";
+                        ctx.fillRect(0, 0, width, height);
+                        for (const band of expressionDinosaurBands) {
+                            const x = left + band.x0 * drawW;
+                            const y = top + (1 - band.y1) * drawH;
+                            const w = (band.x1 - band.x0) * drawW;
+                            const h = (band.y1 - band.y0) * drawH;
+                            ctx.fillStyle = band.color;
+                            ctx.fillRect(x, y, w, h);
+                        }
+                        // An eye is just a point mark; keeping it here makes the
+                        // silhouette legible without giving the view a canvas API.
+                        ctx.fillStyle = "#102010";
+                        ctx.beginPath();
+                        ctx.arc(left + 0.84 * drawW, top + (1 - 0.78) * drawH, 3, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.strokeStyle = "rgba(180,255,180,0.55)";
+                        ctx.lineWidth = 1;
+                        for (const band of expressionDinosaurBands) {
+                            const x = left + band.x0 * drawW;
+                            const y = top + (1 - band.y1) * drawH;
+                            const w = (band.x1 - band.x0) * drawW;
+                            const h = (band.y1 - band.y0) * drawH;
+                            ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+                        }
+                    }
+                }
+
+                {
+                    const target = expressionArtContext(
+                        "expression-heart-panel", "expression-heart-canvas");
+                    if (target && expressionHeartLine.length) {
+                        const { ctx, width, height } = target;
+                        const left = 14, right = 14, top = 20, bottom = 9;
+                        const drawW = width - left - right;
+                        const drawH = height - top - bottom;
+                        // Line marks can opt into an equal-aspect coordinate
+                        // space. A normalized heart should not become an eye on
+                        // a very wide timeline panel.
+                        const scale = Math.min(drawW, drawH);
+                        const offsetX = left + (drawW - scale) / 2;
+                        const point = (row) => [
+                            offsetX + row.plot_x * scale,
+                            top + (1 - row.plot_y) * drawH,
+                        ];
+                        ctx.fillStyle = "#20131a";
+                        ctx.fillRect(0, 0, width, height);
+                        ctx.lineJoin = "round";
+                        ctx.lineCap = "round";
+                        for (const [lineWidth, alpha] of [[9, 0.12], [3, 1]]) {
+                            ctx.strokeStyle = lineWidth === 3
+                                ? expressionHeartLine[0].color
+                                : `rgba(255,92,119,${alpha})`;
+                            ctx.lineWidth = lineWidth;
+                            ctx.beginPath();
+                            expressionHeartLine.forEach((row, index) => {
+                                const [x, y] = point(row);
+                                if (index === 0) ctx.moveTo(x, y);
+                                else ctx.lineTo(x, y);
+                            });
+                            ctx.stroke();
+                        }
+                    }
+                }
             }
 
             function findProcessCpuIntervalAt(ns) {
