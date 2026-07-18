@@ -3,6 +3,10 @@
 - **Status:** exploratory; no public API or engine choice is final
 - **Issue:** [#574](https://github.com/dial9-rs/dial9/issues/574)
 
+> **Later direction:** [View Data Language](view-data-language.md) supersedes
+> this document's language/backend preference. The alternatives below remain as
+> exploration history and tradeoff notes.
+
 ## Goal
 
 Allow Rust libraries and applications to bundle computed data and complete custom
