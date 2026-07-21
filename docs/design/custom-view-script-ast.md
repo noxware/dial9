@@ -1,13 +1,13 @@
 # Dial9 Script IR
 
-## Características
+## Characteristics
 
-- Todo es una expresión.
-- Tipos dinámicos con semántica propia.
-- S-expressions serializadas como JSON.
-- Validado una vez y traducido a JavaScript especializado para performance cercana al JS manual.
-- Sin acceso a JavaScript, globals, DOM, network o modules.
-- Un algoritmo costoso puede bloquear la tab; no es responsabilidad del lenguaje impedirlo.
+- Everything is an expression.
+- Dynamic types with language-defined semantics.
+- S-expressions serialized as JSON.
+- Validated once and lowered to specialized JavaScript for performance close to handwritten JavaScript.
+- No access to JavaScript, globals, the DOM, the network, or modules.
+- An expensive algorithm may block the tab; preventing that is not the language's responsibility.
 
 ## S-expression
 
@@ -43,21 +43,21 @@ expression = "zero_argument_operation"
 
 |Operation kind|Arguments|
 |---|---|
-|Immediate function|Evalúa sus expresiones antes de invocar|
-|Constant|Consume un atom sin evaluarlo|
-|Variable operation|Consume un nombre y opcionalmente una expresión|
-|Control flow|Decide cuándo y cuántas veces evaluar sus argumentos|
-|Computed value|Evalúa su expresión dentro del entorno actual|
+|Immediate function|Evaluates its expressions before invocation|
+|Constant|Consumes an atom without evaluating it|
+|Variable operation|Consumes a name and, optionally, an expression|
+|Control flow|Decides when and how many times to evaluate its arguments|
+|Computed value|Evaluates its expression within the current scope|
 
-Los invokes sólo se resuelven contra operaciones registradas y computed values del bundle.
-La representación es canónica: un invoke sin argumentos es un `Atom`; una lista con un
-solo elemento, como `["do_something"]`, es inválida.
+Invokes are resolved only against registered operations and computed values from the bundle.
+The representation is canonical: a zero-argument invoke is an `Atom`; a single-element
+list such as `["do_something"]` is invalid.
 
 ## Block
 
-Un block no es un invoke. Es una posición interpretada como body por el bundle o por
-una operación de control como `case` o `for_each`. Una expresión sola es un block de
-una instrucción; varias expresiones se agrupan directamente:
+A block is not an invoke. It is a position interpreted as a body by the bundle or by
+a control-flow operation such as `case` or `for_each`. A single expression is a
+one-instruction block; multiple expressions are grouped directly:
 
 ```json
 [
@@ -96,42 +96,42 @@ una instrucción; varias expresiones se agrupan directamente:
 
 ## Dial9 functions
 
-|Function|Value lógico|
+|Function|Logical value|
 |---|---|
-|`dial9.events`|ListView ordenada por `(time, ordinal)`|
-|`dial9.metadata`|MapView global|
-|`dial9.viewport`|MapView con el rango visible|
-|`dial9.pointer`|MapView o `null`|
-|`dial9.output.emit`|Agrega un valor a un output|
+|`dial9.events`|ListView ordered by `(time, ordinal)`|
+|`dial9.metadata`|Global MapView|
+|`dial9.viewport`|MapView containing the visible range|
+|`dial9.pointer`|MapView or `null`|
+|`dial9.output.emit`|Appends a value to an output|
 
-Un computed value hereda el scope de su invocación, incluido el binding `event` de un `for_each`.
+A computed value inherits its invocation scope, including the `event` binding from a `for_each`.
 
-## Interfaces virtuales
+## Virtual interfaces
 
-|Value lógico|Implementación posible|
+|Logical value|Possible implementation|
 |---|---|
-|Event stream del host|Merge, índice, arrays o lectura lazy|
-|Event del host|Vista virtual sobre cualquier representación física|
-|Map del host|`MapView` read-only sobre cualquier representación física|
-|List del host|`ListView` read-only sobre cualquier representación física|
-|`map.new`|`Map` mutable de JavaScript|
-|`list.new`|`Array` mutable de JavaScript|
+|Host event stream|Merge, index, arrays, or lazy reads|
+|Host event|Virtual view over any physical representation|
+|Host Map|Read-only `MapView` over any physical representation|
+|Host List|Read-only `ListView` over any physical representation|
+|`map.new`|Mutable JavaScript `Map`|
+|`list.new`|Mutable JavaScript `Array`|
 
 ## Runtime values
 
-|Value|Backend inicial|
+|Value|Initial backend|
 |---|---|
 |Integer|`BigInt`|
-|Float|`Number` finito|
+|Float|Finite `Number`|
 |String|`String`|
 |Bool|`Boolean`|
 |Null|`null`|
-|List|`Array` o `ListView`|
-|Map|`Map` o `MapView`|
+|List|`Array` or `ListView`|
+|Map|`Map` or `MapView`|
 |Bytes|`Uint8Array`|
 
-`MapView` y `ListView` son shapes internos que implementan las operaciones básicas
-de Map y List sin exponer la representación física del valor.
+`MapView` and `ListView` are internal shapes that implement the basic Map and List
+operations without exposing a value's physical representation.
 
 ## Lowering
 
@@ -143,9 +143,9 @@ JSON S-expression
     -> specialized JavaScript
 ```
 
-La ejecución sobre eventos no recorre el AST ni resuelve nombres de operaciones.
+Execution over events does not walk the AST or resolve operation names.
 
-## Operaciones iniciales
+## Initial operations
 
 |Namespace|Examples|
 |---|---|
@@ -165,20 +165,20 @@ La ejecución sobre eventos no recorre el AST ni resuelve nombres de operaciones
 map.new = "map.new" | ["map.new", key, value, ...]
 ```
 
-Con argumentos, `map.new` exige pares `key, value`.
+With arguments, `map.new` requires `key, value` pairs.
 
 ## Numeric operations
 
-|Operación|Contrato|
+|Operation|Contract|
 |---|---|
-|`integer.*`|Acepta integers y devuelve integer|
-|`float.*`|Acepta floats y devuelve float|
-|`integer.divide`|Trunca hacia cero|
-|`integer.pow`|Exige un exponente integer no negativo|
-|`*.divide`|División por cero es un error|
-|`float.*`|Un resultado `NaN` o infinito es un error|
+|`integer.*`|Accepts integers and returns an integer|
+|`float.*`|Accepts floats and returns a float|
+|`integer.divide`|Truncates toward zero|
+|`integer.pow`|Requires a non-negative integer exponent|
+|`*.divide`|Division by zero is an error|
+|`float.*`|A `NaN` or infinite result is an error|
 
-# Dial9 bundle
+# Dial9 Bundle
 
 ```rust
 struct Bundle {
@@ -200,15 +200,15 @@ struct Output {
 
 ## Outputs
 
-|Propiedad|Semántica|
+|Property|Semantics|
 |---|---|
-|`dial9.output.emit(output, value)`|Agrega un valor al output declarado|
-|Orden|Orden de emisión|
-|Lifetime|Se materializa durante el script y queda inmutable al terminar|
-|Representación|Colección lógica; el backend decide su almacenamiento físico|
-|Rendering|El renderer consume valores semánticos y puede crear temporales por viewport|
+|`dial9.output.emit(output, value)`|Appends a value to the declared output|
+|Order|Emission order|
+|Lifetime|Materialized while the script runs and immutable afterward|
+|Representation|Logical collection; the backend chooses its physical storage|
+|Rendering|The renderer consumes semantic values and may create viewport-local temporary data|
 
-# CPU usage
+# CPU Usage
 
 ```json
 {
