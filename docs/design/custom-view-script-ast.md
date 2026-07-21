@@ -1,3 +1,11 @@
+# Introducción
+
+Este documento define tres componentes para crear vistas dinámicas en el viewer de Dial9:
+
+- Dial9 Script IR: un lenguaje de scripting imperativo, dinámico y minimalista, representado como S-expressions JSON y diseñado para compilarse en runtime a JavaScript especializado para su ejecución en el browser. Sólo permite las APIs registradas explícitamente y no expone I/O por defecto. El lenguaje es independiente de Dial9.
+- Stackable/composable rendering components: primitivas visuales predefinidas que consumen los outputs de los scripts para producir gráficos, tooltips, legends y otros elementos de un panel.
+- Bundle: un conjunto de computed values y custom views expresados mediante el lenguaje de scripting y los rendering components stackeables.
+
 # Dial9 Script IR
 
 ## Características
