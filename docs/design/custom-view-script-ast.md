@@ -14,8 +14,14 @@
 ```rust
 struct Program {
     version: u32,
+    computed_values: BTreeMap<String, ComputedValue>,
     outputs: BTreeMap<String, Output>,
     body: Expr,
+}
+
+struct ComputedValue {
+    unit: Option<String>,
+    expression: Expr,
 }
 
 struct Output {
@@ -66,6 +72,7 @@ struct Call {
 ```json
 {
   "version": 1,
+  "computed_values": {},
   "outputs": {
     "segments": { "units": { "start": "ns", "end": "ns" } }
   },
@@ -264,6 +271,7 @@ struct Call {
 |Argumentos de un call|Evaluados de izquierda a derecha|
 |Branches de un case|Evaluados en orden; sólo se evalúa el resultado seleccionado|
 |Binding e index de `for_each`|Locales al loop; los demás sets persisten|
+|Call `computed.*`|Evalúa en el entorno actual, incluido `event`; sin recursión|
 |`output.emit`|Captura un snapshot inmutable del valor|
 
 ## Funciones
@@ -276,10 +284,11 @@ struct Call {
 |`add`, `subtract`, `multiply`, `divide`, `remainder`, `negate`|Aritmética|
 |`integer.to_float`, `float.truncate`, `float.floor`, `float.ceil`, `float.round`|Conversión y redondeo|
 |`math.abs`, `math.sqrt`, `math.pow`, `math.log`|Matemática|
-|`map.new`, `map.get`, `map.has`, `map.set`, `map.remove`, `map.entries`|Maps mutables con keys escalares|
+|`map.new`, `map.of`, `map.get`, `map.has`, `map.set`, `map.remove`, `map.entries`|Maps mutables con keys escalares|
 |`list.new`, `list.get`, `list.set`, `list.push`, `list.length`, `list.slice`|Listas mutables|
 |`list.min`, `list.max`, `list.sum`|Agregados sobre listas|
 |`string.concat`, `string.format`, `string.starts_with`, `string.length`, `value.to_string`|Strings y textos arbitrarios|
+|`computed.<name>`|Evalúa un computed value del bundle|
 |`output.emit`|Agrega un valor a un output nombrado|
 |`diagnostic.warn`|Emite un warning asociado a la evaluación|
 
@@ -293,3 +302,158 @@ struct Call {
 |Strings|Longitud máxima|
 |Outputs|Máximo de valores emitidos|
 |Capabilities|Sin globals, DOM, network, modules, prototypes ni dynamic code|
+
+## CPU usage
+
+```json
+{
+  "version": 1,
+  "computed_values": {
+    "cpu_time": {
+      "unit": "ns",
+      "expression": {
+        "call": [
+          "add",
+          {
+            "call": [
+              "map.get",
+              { "call": ["map.get", { "get": "event" }, { "literal": { "string": "fields" } }] },
+              { "literal": { "string": "user_cpu_ns" } }
+            ]
+          },
+          {
+            "call": [
+              "map.get",
+              { "call": ["map.get", { "get": "event" }, { "literal": { "string": "fields" } }] },
+              { "literal": { "string": "system_cpu_ns" } }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "outputs": {
+    "cpu_intervals": {
+      "units": {
+        "start": "ns",
+        "end": "ns",
+        "wall_delta": "ns",
+        "cpu_delta": "ns",
+        "cores": "cores"
+      }
+    }
+  },
+  "body": {
+    "block": [
+      { "set": ["previous", { "literal": "null" }] },
+      {
+        "for_each": {
+          "binding": "event",
+          "index": null,
+          "iterable": { "get": "events" },
+          "body": {
+            "case": {
+              "branches": [
+                {
+                  "condition": {
+                    "call": [
+                      "equal",
+                      { "call": ["map.get", { "get": "event" }, { "literal": { "string": "kind" } }] },
+                      { "literal": { "string": "ProcessResourceUsageEvent" } }
+                    ]
+                  },
+                  "result": {
+                    "block": [
+                      { "set": ["time", { "call": ["map.get", { "get": "event" }, { "literal": { "string": "time" } }] }] },
+                      { "set": ["cpu_time", { "call": ["computed.cpu_time"] }] },
+                      {
+                        "case": {
+                          "branches": [
+                            {
+                              "condition": { "call": ["equal", { "get": "previous" }, { "literal": "null" }] },
+                              "result": {
+                                "set": [
+                                  "previous",
+                                  {
+                                    "call": [
+                                      "map.of",
+                                      { "literal": { "string": "time" } }, { "get": "time" },
+                                      { "literal": { "string": "cpu_time" } }, { "get": "cpu_time" }
+                                    ]
+                                  }
+                                ]
+                              }
+                            }
+                          ],
+                          "fallback": {
+                            "block": [
+                              { "set": ["start", { "call": ["map.get", { "get": "previous" }, { "literal": { "string": "time" } }] }] },
+                              { "set": ["previous_cpu_time", { "call": ["map.get", { "get": "previous" }, { "literal": { "string": "cpu_time" } }] }] },
+                              { "set": ["wall_delta", { "call": ["subtract", { "get": "time" }, { "get": "start" }] }] },
+                              { "set": ["cpu_delta", { "call": ["subtract", { "get": "cpu_time" }, { "get": "previous_cpu_time" }] }] },
+                              {
+                                "set": [
+                                  "previous",
+                                  {
+                                    "call": [
+                                      "map.of",
+                                      { "literal": { "string": "time" } }, { "get": "time" },
+                                      { "literal": { "string": "cpu_time" } }, { "get": "cpu_time" }
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "case": {
+                                  "branches": [
+                                    {
+                                      "condition": { "call": ["less_equal", { "get": "wall_delta" }, { "literal": { "integer": "0" } }] },
+                                      "result": { "literal": "null" }
+                                    },
+                                    {
+                                      "condition": { "call": ["less", { "get": "cpu_delta" }, { "literal": { "integer": "0" } }] },
+                                      "result": { "call": ["diagnostic.warn", { "literal": { "string": "CPU counter decreased" } }] }
+                                    }
+                                  ],
+                                  "fallback": {
+                                    "call": [
+                                      "output.emit",
+                                      { "literal": { "string": "cpu_intervals" } },
+                                      {
+                                        "call": [
+                                          "map.of",
+                                          { "literal": { "string": "start" } }, { "get": "start" },
+                                          { "literal": { "string": "end" } }, { "get": "time" },
+                                          { "literal": { "string": "wall_delta" } }, { "get": "wall_delta" },
+                                          { "literal": { "string": "cpu_delta" } }, { "get": "cpu_delta" },
+                                          { "literal": { "string": "cores" } },
+                                          {
+                                            "call": [
+                                              "divide",
+                                              { "call": ["integer.to_float", { "get": "cpu_delta" }] },
+                                              { "call": ["integer.to_float", { "get": "wall_delta" }] }
+                                            ]
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ],
+              "fallback": { "literal": "null" }
+            }
+          }
+        }
+      }
+    ]
+  }
+}
+```
