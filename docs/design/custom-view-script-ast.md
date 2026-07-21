@@ -57,7 +57,7 @@ enum Ast {
 ```
 
 ```json
-["math.add", ["var.get", "a"], ["var.get", "b"]]
+["integer.add", ["var.get", "a"], ["var.get", "b"]]
 ```
 
 ```json
@@ -93,7 +93,7 @@ una instrucción; varias expresiones se agrupan directamente:
 [
   ["var.set", "a", ["integer.const", "1"]],
   ["var.set", "b", ["var.get", "a"]],
-  ["math.add", ["var.get", "a"], ["var.get", "b"]]
+  ["integer.add", ["var.get", "a"], ["var.get", "b"]]
 ]
 ```
 
@@ -186,7 +186,8 @@ La ejecución sobre eventos no recorre el AST ni resuelve nombres de operaciones
 |Environment|`env.get`|
 |Control flow|`case`, `for_each`|
 |Conversion|`integer.from`, `float.from`, `string.from`, `type.of`|
-|Math|`math.add`, `math.subtract`, `math.multiply`, `math.divide`|
+|Integer math|`integer.add`, `integer.subtract`, `integer.multiply`, `integer.divide`, `integer.pow`|
+|Float math|`float.add`, `float.subtract`, `float.multiply`, `float.divide`, `float.pow`|
 |Comparison|`cmp.eq`, `cmp.lt`, `cmp.lte`, `cmp.gt`, `cmp.gte`|
 |Boolean|`bool.not`, `bool.and`, `bool.or`|
 |Event|`event.kind`, `event.time`, `event.field`|
@@ -200,6 +201,17 @@ map.new = "map.new" | ["map.new", key, value, ...]
 
 Con argumentos, `map.new` exige pares `key, value`.
 
+## Numeric operations
+
+|Operación|Contrato|
+|---|---|
+|`integer.*`|Acepta integers y devuelve integer|
+|`float.*`|Acepta floats y devuelve float|
+|`integer.divide`|Trunca hacia cero|
+|`integer.pow`|Exige un exponente integer no negativo|
+|`*.divide`|División por cero es un error|
+|`float.*`|Un resultado `NaN` o infinito es un error|
+
 ## CPU usage
 
 ```json
@@ -209,7 +221,7 @@ Con argumentos, `map.new` exige pares `key, value`.
     "cpu_time": {
       "unit": "ns",
       "expression": [
-        "math.add",
+        "integer.add",
         ["event.field", "user_cpu_ns"],
         ["event.field", "system_cpu_ns"]
       ]
@@ -243,8 +255,8 @@ Con argumentos, `map.new` exige pares `key, value`.
             "case",
             ["var.get", "has_previous"],
             [
-              ["var.set", "wall_delta", ["math.subtract", ["var.get", "current_time"], ["var.get", "previous_time"]]],
-              ["var.set", "cpu_delta", ["math.subtract", ["var.get", "current_cpu_time"], ["var.get", "previous_cpu_time"]]],
+              ["var.set", "wall_delta", ["integer.subtract", ["var.get", "current_time"], ["var.get", "previous_time"]]],
+              ["var.set", "cpu_delta", ["integer.subtract", ["var.get", "current_cpu_time"], ["var.get", "previous_cpu_time"]]],
               [
                 "case",
                 ["cmp.lte", ["var.get", "wall_delta"], "integer.zero"],
@@ -263,7 +275,7 @@ Con argumentos, `map.new` exige pares `key, value`.
                     ["string.const", "cpu_delta"], ["var.get", "cpu_delta"],
                     ["string.const", "cores"],
                     [
-                      "math.divide",
+                      "float.divide",
                       ["float.from", ["var.get", "cpu_delta"]],
                       ["float.from", ["var.get", "wall_delta"]]
                     ]
