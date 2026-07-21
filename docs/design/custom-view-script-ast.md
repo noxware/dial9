@@ -16,12 +16,12 @@ struct Bundle {
     version: u32,
     computed_values: BTreeMap<String, ComputedValue>,
     outputs: BTreeMap<String, Output>,
-    script: Ast,
+    script: SExpr,
 }
 
 struct ComputedValue {
     unit: Option<String>,
-    expression: Ast,
+    expression: SExpr,
 }
 
 struct Output {
@@ -33,18 +33,18 @@ struct Output {
 
 |Propiedad|Semántica|
 |---|---|
-|`output.emit(name, value)`|Agrega un valor al output nombrado|
+|`dial9.output.emit(output, value)`|Agrega un valor al output declarado|
 |Orden|Orden de emisión|
 |Lifetime|Se materializa durante el script y queda inmutable al terminar|
 |Representación|Colección lógica; el backend decide su almacenamiento físico|
 |Rendering|El renderer consume valores semánticos y puede crear temporales por viewport|
 
-## AST / IR
+## S-expression
 
 ```rust
-enum Ast {
-    Leaf(String),
-    List(Vec<Ast>),
+enum SExpr {
+    Atom(String),
+    List(Vec<SExpr>),
 }
 ```
 
@@ -74,13 +74,13 @@ expression = "zero_argument_operation"
 |Operation kind|Arguments|
 |---|---|
 |Immediate function|Evalúa sus expresiones antes de invocar|
-|Constant|Consume un leaf sin evaluarlo|
+|Constant|Consume un atom sin evaluarlo|
 |Variable operation|Consume un nombre y opcionalmente una expresión|
 |Control flow|Decide cuándo y cuántas veces evaluar sus argumentos|
 |Computed value|Evalúa su expresión dentro del entorno actual|
 
 Los invokes sólo se resuelven contra operaciones registradas y computed values del bundle.
-La representación es canónica: un invoke sin argumentos es un `Leaf`; una lista con un
+La representación es canónica: un invoke sin argumentos es un `Atom`; una lista con un
 solo elemento, como `["do_something"]`, es inválida.
 
 ## Block
@@ -116,7 +116,7 @@ una instrucción; varias expresiones se agrupan directamente:
   "for_each",
   "event",
   "index",
-  ["env.get", "events"],
+  "dial9.events",
   [
     ["var.set", "copy", ["var.get", "event"]],
     ["var.set", "position", ["var.get", "index"]]
@@ -124,16 +124,17 @@ una instrucción; varias expresiones se agrupan directamente:
 ]
 ```
 
-## Entorno
+## Dial9 functions
 
-|Binding|Value lógico|
+|Function|Value lógico|
 |---|---|
-|`events`|Lista inmutable ordenada por `(time, ordinal)`|
-|`metadata`|Map global read-only|
-|`viewport`|Map read-only con el rango visible|
-|`pointer`|Map read-only o `null`|
+|`dial9.events`|ListView ordenada por `(time, ordinal)`|
+|`dial9.metadata`|MapView global|
+|`dial9.viewport`|MapView con el rango visible|
+|`dial9.pointer`|MapView o `null`|
+|`dial9.output.emit`|Agrega un valor a un output|
 
-Un computed value hereda el entorno de su invocación, incluido el binding `event` de un `for_each`.
+Un computed value hereda el scope de su invocación, incluido el binding `event` de un `for_each`.
 
 ## Interfaces virtuales
 
@@ -168,7 +169,7 @@ de Map y List sin exponer la representación física del valor.
 JSON S-expression
     -> validate operations and operand shapes
     -> resolve variables, constants, fields and invokes
-    -> optimized internal IR
+    -> validated AST / internal IR
     -> specialized JavaScript
 ```
 
@@ -180,7 +181,6 @@ La ejecución sobre eventos no recorre el AST ni resuelve nombres de operaciones
 |---|---|
 |Constants|`null`, `bool.true`, `bool.false`, `integer.zero`, `integer.const`, `float.zero`, `float.const`, `string.const`|
 |Variables|`var.get`, `var.set`|
-|Environment|`env.get`|
 |Control flow|`case`, `for_each`|
 |Conversion|`integer.from`, `float.from`, `string.from`, `type.of`|
 |Integer math|`integer.add`, `integer.subtract`, `integer.multiply`, `integer.divide`, `integer.pow`|
@@ -189,7 +189,7 @@ La ejecución sobre eventos no recorre el AST ni resuelve nombres de operaciones
 |Boolean|`bool.not`, `bool.and`, `bool.or`|
 |Map|`map.new`, `map.get`, `map.has`, `map.set`, `map.remove`|
 |List|`list.new`, `list.get`, `list.set`, `list.push`, `list.length`|
-|Effects|`output.emit`, `diagnostic.warn`|
+|Effects|`diagnostic.warn`|
 
 ```text
 map.new = "map.new" | ["map.new", key, value, ...]
@@ -240,7 +240,7 @@ Con argumentos, `map.new` exige pares `key, value`.
       "for_each",
       "event",
       "index",
-      ["env.get", "events"],
+      "dial9.events",
       [
         "case",
         ["cmp.eq", ["map.get", ["var.get", "event"], ["string.const", "kind"]], ["string.const", "ProcessResourceUsageEvent"]],
@@ -261,8 +261,8 @@ Con argumentos, `map.new` exige pares `key, value`.
                 ["diagnostic.warn", ["string.const", "CPU counter decreased"]],
                 "bool.true",
                 [
-                  "output.emit",
-                  ["string.const", "cpu_intervals"],
+                  "dial9.output.emit",
+                  "cpu_intervals",
                   [
                     "map.new",
                     ["string.const", "start"], ["var.get", "previous_time"],
