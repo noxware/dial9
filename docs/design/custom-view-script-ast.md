@@ -1,307 +1,184 @@
-# Dial9 Script AST
+# Dial9 Script IR
 
 ## Características
 
 - Todo es una expresión.
 - Tipos dinámicos con semántica propia.
-- Sin coerciones implícitas, `undefined` ni truthiness.
-- JavaScript es un backend, no el lenguaje público.
-- Sin primitivas de queries: particiones y joins se construyen con estado.
-- JSON con external tagging, `snake_case` y números exactos representados como strings.
+- S-expressions serializadas como JSON.
+- Validado una vez y traducido a JavaScript especializado para performance cercana al JS manual.
+- Sin acceso a JavaScript, globals, DOM, network o modules.
+- Un algoritmo costoso puede bloquear la tab; no es responsabilidad del lenguaje impedirlo.
 
-## AST
+## Bundle
 
 ```rust
-struct Program {
+struct Bundle {
     version: u32,
     computed_values: BTreeMap<String, ComputedValue>,
     outputs: BTreeMap<String, Output>,
-    body: Expr,
+    script: Ast,
 }
 
 struct ComputedValue {
     unit: Option<String>,
-    expression: Expr,
+    expression: Ast,
 }
 
 struct Output {
     units: BTreeMap<String, String>,
 }
-
-enum Expr {
-    Literal(Literal),
-    Call(Call),
-    Get(String),
-    Set(String, Box<Expr>),
-    Block(Vec<Expr>),
-    Case {
-        branches: Vec<Branch>,
-        fallback: Option<Box<Expr>>,
-    },
-    ForEach {
-        binding: String,
-        index: Option<String>,
-        iterable: Box<Expr>,
-        body: Box<Expr>,
-    },
-    Break,
-    Continue,
-}
-
-struct Branch {
-    condition: Expr,
-    result: Expr,
-}
-
-enum Literal {
-    String(String),
-    Integer(String),
-    Float(String),
-    Bool(bool),
-    Null,
-}
-
-struct Call {
-    name: String,
-    args: Vec<Expr>,
-}
 ```
 
-## Program
+## AST / IR
+
+```rust
+enum Ast {
+    Leaf(String),
+    List(Vec<Ast>),
+}
+```
 
 ```json
-{
-  "version": 1,
-  "computed_values": {},
-  "outputs": {
-    "segments": { "units": { "start": "ns", "end": "ns" } }
-  },
-  "body": { "block": [] }
-}
+"integer.zero"
 ```
 
-## Literals
+```json
+["float.const", "1.3"]
+```
+
+```json
+["math.add", ["var.get", "a"], ["var.get", "b"]]
+```
+
+```json
+["var.set", "value", ["float.from", ["var.get", "integer_value"]]]
+```
+
+## Invoke
+
+```text
+expression = "zero_argument_operation"
+           | ["operation", argument...]
+```
+
+|Operation kind|Arguments|
+|---|---|
+|Immediate function|Evalúa sus expresiones antes de invocar|
+|Constant|Consume un leaf sin evaluarlo|
+|Variable operation|Consume un nombre y opcionalmente una expresión|
+|Control flow|Decide cuándo y cuántas veces evaluar sus argumentos|
+|Computed value|Evalúa su expresión dentro del entorno actual|
+
+Los invokes sólo se resuelven contra operaciones registradas y computed values del bundle.
+
+## Block
 
 ```json
 [
-  { "literal": { "string": "hello" } },
-  { "literal": { "integer": "123" } },
-  { "literal": { "float": "1.0" } },
-  { "literal": { "bool": true } },
-  { "literal": "null" }
+  "block",
+  ["var.set", "a", ["integer.const", "1"]],
+  ["var.set", "b", ["var.get", "a"]],
+  ["math.add", ["var.get", "a"], ["var.get", "b"]]
 ]
 ```
 
-## Variables
+## Case
 
 ```json
-{ "get": "event" }
+[
+  "case",
+  ["cmp.gte", ["var.get", "number"], "integer.zero"],
+  ["do_something"],
+  "bool.true",
+  ["fallback"]
+]
 ```
 
-```json
-{ "set": ["open", { "call": ["map.new"] }] }
-```
-
-## Calls
+## For Each
 
 ```json
-{
-  "call": [
-    "map.get",
-    { "get": "open" },
-    { "literal": { "string": "key" } }
+[
+  "for_each",
+  "event",
+  "index",
+  ["env.get", "events"],
+  [
+    "block",
+    ["var.set", "copy", ["var.get", "event"]],
+    ["var.set", "position", ["var.get", "index"]]
   ]
-}
-```
-
-```json
-{
-  "set": [
-    "cpu_time",
-    { "call": ["add", { "get": "user_time" }, { "get": "system_time" }] }
-  ]
-}
-```
-
-## Blocks
-
-```json
-{
-  "block": [
-    { "set": ["a", { "literal": { "integer": "1" } }] },
-    { "set": ["b", { "literal": { "integer": "2" } }] },
-    { "call": ["add", { "get": "a" }, { "get": "b" }] }
-  ]
-}
-```
-
-## Conditionals
-
-```json
-{
-  "case": {
-    "branches": [
-      {
-        "condition": { "call": ["less", { "get": "current" }, { "get": "previous" }] },
-        "result": { "call": ["diagnostic.warn", { "literal": { "string": "counter decreased" } }] }
-      }
-    ],
-    "fallback": { "literal": "null" }
-  }
-}
-```
-
-## Iteration
-
-```json
-{
-  "for_each": {
-    "binding": "event",
-    "index": "i",
-    "iterable": { "get": "events" },
-    "body": { "block": [] }
-  }
-}
-```
-
-```json
-"continue"
-```
-
-```json
-"break"
-```
-
-## Anteriores y siguientes
-
-```json
-{
-  "call": [
-    "list.get",
-    { "get": "events" },
-    { "call": ["subtract", { "get": "i" }, { "literal": { "integer": "1" } }] }
-  ]
-}
+]
 ```
 
 ## Entorno
 
-|Binding|Value|
+|Binding|Value lógico|
 |---|---|
 |`events`|Lista inmutable ordenada por `(time, ordinal)`|
-|`metadata`|Map global del trace|
-|`viewport`|Map con el rango visible|
-|`pointer`|Map interactivo o `null`|
+|`metadata`|Map global read-only|
+|`viewport`|Map read-only con el rango visible|
+|`pointer`|Map read-only o `null`|
 
-## Event
+Un computed value hereda el entorno de su invocación, incluido el binding `event` de un `for_each`.
 
-```json
-{
-  "kind": "String",
-  "time": "Integer",
-  "ordinal": "Integer",
-  "fields": "Map<String, Value>",
-  "units": "Map<String, String>"
-}
-```
+## Interfaces virtuales
 
-```json
-{
-  "call": [
-    "map.get",
-    { "call": ["map.get", { "get": "event" }, { "literal": { "string": "fields" } }] },
-    { "literal": { "string": "span_id" } }
-  ]
-}
-```
-
-## Estado
+|Value lógico|Implementación posible|
+|---|---|
+|Event stream del host|Merge, índice, arrays o lectura lazy|
+|Event del host|Vista virtual sobre cualquier representación física|
+|Map del host|Vista virtual read-only|
+|List del host|Vista virtual read-only|
+|`map.new`|`Map` mutable de JavaScript|
+|`list.new`|`Array` mutable de JavaScript|
 
 ```json
-{
-  "call": [
-    "map.set",
-    { "get": "open_spans" },
-    { "get": "span_id" },
-    { "get": "event" }
-  ]
-}
+["event.field", "user_cpu_ns"]
 ```
 
-## Outputs
+Puede compilarse hoy a un acceso sobre objetos y mañana a un acceso por schema, columna o field id.
 
-```json
-{
-  "call": [
-    "output.emit",
-    { "literal": { "string": "segments" } },
-    { "get": "segment" }
-  ]
-}
-```
+## Runtime values
 
-## Tipos del runtime
-
-|Value|Backend|
+|Value|Backend inicial|
 |---|---|
 |Integer|`BigInt`|
 |Float|`Number` finito|
 |String|`String`|
 |Bool|`Boolean`|
 |Null|`null`|
-|List|`Array`|
-|Map|`Map`, nunca `Object`|
+|Owned List|`Array`|
+|Owned Map|`Map`|
 |Bytes|`Uint8Array`|
 
-## Semántica
+## Lowering
 
-|Expression|Result|
+```text
+JSON S-expression
+    -> validate operations and operand shapes
+    -> resolve variables, constants, fields and invokes
+    -> optimized internal IR
+    -> specialized JavaScript
+```
+
+La ejecución sobre eventos no recorre el AST ni resuelve nombres de operaciones.
+
+## Operaciones iniciales
+
+|Namespace|Examples|
 |---|---|
-|`set`|`null`|
-|`set` de un nombre nuevo|Crea un binding del programa|
-|`block`|Resultado de la última expresión o `null`|
-|`case`|Resultado de la rama seleccionada o `null`|
-|`for_each`|`null`|
-|`get` sin binding|Error|
-|`map.get` sin key|`null`; usar `map.has` para distinguirlo|
-|`list.get` fuera de rango|`null`; índices negativos no recorren desde el final|
-|`set` sobre un binding del entorno|Error|
-|Condición no booleana|Error|
-|Integer mezclado con Float|Error; conversión explícita|
-|Argumentos de un call|Evaluados de izquierda a derecha|
-|Branches de un case|Evaluados en orden; sólo se evalúa el resultado seleccionado|
-|Binding e index de `for_each`|Locales al loop; los demás sets persisten|
-|Call `computed.*`|Evalúa en el entorno actual, incluido `event`; sin recursión|
-|`output.emit`|Captura un snapshot inmutable del valor|
-
-## Funciones
-
-|Name|Description|
-|---|---|
-|`equal`, `not_equal`|Comparación escalar sin coerción|
-|`less`, `less_equal`, `greater`, `greater_equal`|Comparación de valores compatibles|
-|`and`, `or`, `not`|Lógica booleana eager; `case` provee short-circuit|
-|`add`, `subtract`, `multiply`, `divide`, `remainder`, `negate`|Aritmética|
-|`integer.to_float`, `float.truncate`, `float.floor`, `float.ceil`, `float.round`|Conversión y redondeo|
-|`math.abs`, `math.sqrt`, `math.pow`, `math.log`|Matemática|
-|`map.new`, `map.of`, `map.get`, `map.has`, `map.set`, `map.remove`, `map.entries`|Maps mutables con keys escalares|
-|`list.new`, `list.get`, `list.set`, `list.push`, `list.length`, `list.slice`|Listas mutables|
-|`list.min`, `list.max`, `list.sum`|Agregados sobre listas|
-|`string.concat`, `string.format`, `string.starts_with`, `string.length`, `value.to_string`|Strings y textos arbitrarios|
-|`computed.<name>`|Evalúa un computed value del bundle|
-|`output.emit`|Agrega un valor a un output nombrado|
-|`diagnostic.warn`|Emite un warning asociado a la evaluación|
-
-## Límites de ejecución
-
-|Límite|Regla|
-|---|---|
-|Iterations|Presupuesto global por evaluación|
-|Loops|Iteran sobre un snapshot finito|
-|Collections|Máximo de elementos acumulados|
-|Strings|Longitud máxima|
-|Outputs|Máximo de valores emitidos|
-|Capabilities|Sin globals, DOM, network, modules, prototypes ni dynamic code|
+|Constants|`null`, `bool.true`, `bool.false`, `integer.zero`, `integer.const`, `float.zero`, `float.const`, `string.const`|
+|Variables|`var.get`, `var.set`|
+|Environment|`env.get`|
+|Control flow|`block`, `case`, `for_each`|
+|Conversion|`integer.from`, `float.from`, `string.from`, `type.of`|
+|Math|`math.add`, `math.subtract`, `math.multiply`, `math.divide`|
+|Comparison|`cmp.eq`, `cmp.lt`, `cmp.lte`, `cmp.gt`, `cmp.gte`|
+|Boolean|`bool.not`, `bool.and`, `bool.or`|
+|Event|`event.kind`, `event.time`, `event.field`|
+|Map|`map.new`, `map.of`, `map.get`, `map.has`, `map.set`, `map.remove`|
+|List|`list.new`, `list.get`, `list.set`, `list.push`, `list.length`|
+|Effects|`output.emit`, `diagnostic.warn`|
 
 ## CPU usage
 
@@ -311,25 +188,11 @@ struct Call {
   "computed_values": {
     "cpu_time": {
       "unit": "ns",
-      "expression": {
-        "call": [
-          "add",
-          {
-            "call": [
-              "map.get",
-              { "call": ["map.get", { "get": "event" }, { "literal": { "string": "fields" } }] },
-              { "literal": { "string": "user_cpu_ns" } }
-            ]
-          },
-          {
-            "call": [
-              "map.get",
-              { "call": ["map.get", { "get": "event" }, { "literal": { "string": "fields" } }] },
-              { "literal": { "string": "system_cpu_ns" } }
-            ]
-          }
-        ]
-      }
+      "expression": [
+        "math.add",
+        ["event.field", "user_cpu_ns"],
+        ["event.field", "system_cpu_ns"]
+      ]
     }
   },
   "outputs": {
@@ -343,117 +206,65 @@ struct Call {
       }
     }
   },
-  "body": {
-    "block": [
-      { "set": ["previous", { "literal": "null" }] },
-      {
-        "for_each": {
-          "binding": "event",
-          "index": null,
-          "iterable": { "get": "events" },
-          "body": {
-            "case": {
-              "branches": [
-                {
-                  "condition": {
-                    "call": [
-                      "equal",
-                      { "call": ["map.get", { "get": "event" }, { "literal": { "string": "kind" } }] },
-                      { "literal": { "string": "ProcessResourceUsageEvent" } }
+  "script": [
+    "block",
+    ["var.set", "has_previous", "bool.false"],
+    [
+      "for_each",
+      "event",
+      "index",
+      ["env.get", "events"],
+      [
+        "case",
+        ["cmp.eq", "event.kind", ["string.const", "ProcessResourceUsageEvent"]],
+        [
+          "block",
+          ["var.set", "current_time", "event.time"],
+          ["var.set", "current_cpu_time", "computed.cpu_time"],
+          [
+            "case",
+            ["var.get", "has_previous"],
+            [
+              "block",
+              ["var.set", "wall_delta", ["math.subtract", ["var.get", "current_time"], ["var.get", "previous_time"]]],
+              ["var.set", "cpu_delta", ["math.subtract", ["var.get", "current_cpu_time"], ["var.get", "previous_cpu_time"]]],
+              [
+                "case",
+                ["cmp.lte", ["var.get", "wall_delta"], "integer.zero"],
+                "null",
+                ["cmp.lt", ["var.get", "cpu_delta"], "integer.zero"],
+                ["diagnostic.warn", ["string.const", "CPU counter decreased"]],
+                "bool.true",
+                [
+                  "output.emit",
+                  ["string.const", "cpu_intervals"],
+                  [
+                    "map.of",
+                    ["string.const", "start"], ["var.get", "previous_time"],
+                    ["string.const", "end"], ["var.get", "current_time"],
+                    ["string.const", "wall_delta"], ["var.get", "wall_delta"],
+                    ["string.const", "cpu_delta"], ["var.get", "cpu_delta"],
+                    ["string.const", "cores"],
+                    [
+                      "math.divide",
+                      ["float.from", ["var.get", "cpu_delta"]],
+                      ["float.from", ["var.get", "wall_delta"]]
                     ]
-                  },
-                  "result": {
-                    "block": [
-                      { "set": ["time", { "call": ["map.get", { "get": "event" }, { "literal": { "string": "time" } }] }] },
-                      { "set": ["cpu_time", { "call": ["computed.cpu_time"] }] },
-                      {
-                        "case": {
-                          "branches": [
-                            {
-                              "condition": { "call": ["equal", { "get": "previous" }, { "literal": "null" }] },
-                              "result": {
-                                "set": [
-                                  "previous",
-                                  {
-                                    "call": [
-                                      "map.of",
-                                      { "literal": { "string": "time" } }, { "get": "time" },
-                                      { "literal": { "string": "cpu_time" } }, { "get": "cpu_time" }
-                                    ]
-                                  }
-                                ]
-                              }
-                            }
-                          ],
-                          "fallback": {
-                            "block": [
-                              { "set": ["start", { "call": ["map.get", { "get": "previous" }, { "literal": { "string": "time" } }] }] },
-                              { "set": ["previous_cpu_time", { "call": ["map.get", { "get": "previous" }, { "literal": { "string": "cpu_time" } }] }] },
-                              { "set": ["wall_delta", { "call": ["subtract", { "get": "time" }, { "get": "start" }] }] },
-                              { "set": ["cpu_delta", { "call": ["subtract", { "get": "cpu_time" }, { "get": "previous_cpu_time" }] }] },
-                              {
-                                "set": [
-                                  "previous",
-                                  {
-                                    "call": [
-                                      "map.of",
-                                      { "literal": { "string": "time" } }, { "get": "time" },
-                                      { "literal": { "string": "cpu_time" } }, { "get": "cpu_time" }
-                                    ]
-                                  }
-                                ]
-                              },
-                              {
-                                "case": {
-                                  "branches": [
-                                    {
-                                      "condition": { "call": ["less_equal", { "get": "wall_delta" }, { "literal": { "integer": "0" } }] },
-                                      "result": { "literal": "null" }
-                                    },
-                                    {
-                                      "condition": { "call": ["less", { "get": "cpu_delta" }, { "literal": { "integer": "0" } }] },
-                                      "result": { "call": ["diagnostic.warn", { "literal": { "string": "CPU counter decreased" } }] }
-                                    }
-                                  ],
-                                  "fallback": {
-                                    "call": [
-                                      "output.emit",
-                                      { "literal": { "string": "cpu_intervals" } },
-                                      {
-                                        "call": [
-                                          "map.of",
-                                          { "literal": { "string": "start" } }, { "get": "start" },
-                                          { "literal": { "string": "end" } }, { "get": "time" },
-                                          { "literal": { "string": "wall_delta" } }, { "get": "wall_delta" },
-                                          { "literal": { "string": "cpu_delta" } }, { "get": "cpu_delta" },
-                                          { "literal": { "string": "cores" } },
-                                          {
-                                            "call": [
-                                              "divide",
-                                              { "call": ["integer.to_float", { "get": "cpu_delta" }] },
-                                              { "call": ["integer.to_float", { "get": "wall_delta" }] }
-                                            ]
-                                          }
-                                        ]
-                                      }
-                                    ]
-                                  }
-                                }
-                              }
-                            ]
-                          }
-                        }
-                      }
-                    ]
-                  }
-                }
-              ],
-              "fallback": { "literal": "null" }
-            }
-          }
-        }
-      }
+                  ]
+                ]
+              ]
+            ],
+            "bool.true",
+            "null"
+          ],
+          ["var.set", "previous_time", ["var.get", "current_time"]],
+          ["var.set", "previous_cpu_time", ["var.get", "current_cpu_time"]],
+          ["var.set", "has_previous", "bool.true"]
+        ],
+        "bool.true",
+        "null"
+      ]
     ]
-  }
+  ]
 }
 ```
