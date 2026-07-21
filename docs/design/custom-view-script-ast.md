@@ -17,6 +17,43 @@ Este documento define tres componentes para crear vistas dinámicas en el viewer
 - Sin acceso a JavaScript, globals, DOM, network o modules.
 - Un algoritmo costoso puede bloquear la tab; no es responsabilidad del lenguaje impedirlo.
 
+## Seguridad
+
+El engine ofrece capability confinement, no aislamiento del browser: el JavaScript
+generado se ejecuta en el mismo realm que el viewer, pero el script sólo puede alcanzar
+los invokes y valores expuestos explícitamente por el host.
+
+### Valores foreign y ownership
+
+- Sólo `map.new` y `list.new` crean containers mutables propiedad del script.
+- Arrays, Maps y objects provenientes del host se exponen recursivamente como `ListView`
+  o `MapView` read-only. Si un valor nested también es un container, se devuelve como view.
+- Las views sólo exponen entries lógicas definidas por su adapter, nunca prototypes,
+  methods ni properties internas del object subyacente.
+- `map.set`, `list.set` y otras operaciones mutables sólo aceptan containers propiedad
+  del script; intentar aplicarlas a una view es un error.
+- Los valores devueltos por funciones registradas cruzan el mismo boundary: los
+  primitivos se aceptan, los containers se convierten en views y las funciones u otros
+  valores no soportados se rechazan.
+
+### Funciones registradas
+
+Una función registrada es una capability confiada al host. Puede mutar estado de
+JavaScript, realizar I/O o retener valores si su implementación lo permite. Registrar
+una función con efectos concede esa capability explícitamente; el engine no intenta
+hacer segura una implementación del host.
+
+Para permitir mutaciones controladas, el host puede registrar una función que valide un
+valor del script y lo escriba en su propio estado. Esa mutación queda fuera de las
+garantías del engine y es responsabilidad de la integración.
+
+### Recursos
+
+No hay límites de memoria, iteraciones ni tiempo de ejecución. Un script puede bloquear
+la tab o agotar memoria mediante un algoritmo costoso, pero eso no le concede nuevas
+capabilities. Más adelante podrían añadirse contadores de operaciones, iteraciones y
+allocations sin cambiar el IR público.
+
 ## S-expression
 
 ```rust
