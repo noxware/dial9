@@ -29,6 +29,16 @@ struct Output {
 }
 ```
 
+## Outputs
+
+|Propiedad|Semántica|
+|---|---|
+|`output.emit(name, value)`|Agrega un valor al output nombrado|
+|Orden|Orden de emisión|
+|Lifetime|Se materializa durante el script y queda inmutable al terminar|
+|Representación|Colección lógica; el backend decide su almacenamiento físico|
+|Rendering|El renderer consume valores semánticos y puede crear temporales por viewport|
+
 ## AST / IR
 
 ```rust
@@ -70,12 +80,17 @@ expression = "zero_argument_operation"
 |Computed value|Evalúa su expresión dentro del entorno actual|
 
 Los invokes sólo se resuelven contra operaciones registradas y computed values del bundle.
+La representación es canónica: un invoke sin argumentos es un `Leaf`; una lista con un
+solo elemento, como `["do_something"]`, es inválida.
 
 ## Block
 
+Un block no es un invoke. Es una posición interpretada como body por el bundle o por
+una operación de control como `case` o `for_each`. Una expresión sola es un block de
+una instrucción; varias expresiones se agrupan directamente:
+
 ```json
 [
-  "block",
   ["var.set", "a", ["integer.const", "1"]],
   ["var.set", "b", ["var.get", "a"]],
   ["math.add", ["var.get", "a"], ["var.get", "b"]]
@@ -88,9 +103,9 @@ Los invokes sólo se resuelven contra operaciones registradas y computed values 
 [
   "case",
   ["cmp.gte", ["var.get", "number"], "integer.zero"],
-  ["do_something"],
+  "do_something",
   "bool.true",
-  ["fallback"]
+  "fallback"
 ]
 ```
 
@@ -103,7 +118,6 @@ Los invokes sólo se resuelven contra operaciones registradas y computed values 
   "index",
   ["env.get", "events"],
   [
-    "block",
     ["var.set", "copy", ["var.get", "event"]],
     ["var.set", "position", ["var.get", "index"]]
   ]
@@ -170,15 +184,21 @@ La ejecución sobre eventos no recorre el AST ni resuelve nombres de operaciones
 |Constants|`null`, `bool.true`, `bool.false`, `integer.zero`, `integer.const`, `float.zero`, `float.const`, `string.const`|
 |Variables|`var.get`, `var.set`|
 |Environment|`env.get`|
-|Control flow|`block`, `case`, `for_each`|
+|Control flow|`case`, `for_each`|
 |Conversion|`integer.from`, `float.from`, `string.from`, `type.of`|
 |Math|`math.add`, `math.subtract`, `math.multiply`, `math.divide`|
 |Comparison|`cmp.eq`, `cmp.lt`, `cmp.lte`, `cmp.gt`, `cmp.gte`|
 |Boolean|`bool.not`, `bool.and`, `bool.or`|
 |Event|`event.kind`, `event.time`, `event.field`|
-|Map|`map.new`, `map.of`, `map.get`, `map.has`, `map.set`, `map.remove`|
+|Map|`map.new`, `map.get`, `map.has`, `map.set`, `map.remove`|
 |List|`list.new`, `list.get`, `list.set`, `list.push`, `list.length`|
 |Effects|`output.emit`, `diagnostic.warn`|
+
+```text
+map.new = "map.new" | ["map.new", key, value, ...]
+```
+
+Con argumentos, `map.new` exige pares `key, value`.
 
 ## CPU usage
 
@@ -207,7 +227,6 @@ La ejecución sobre eventos no recorre el AST ni resuelve nombres de operaciones
     }
   },
   "script": [
-    "block",
     ["var.set", "has_previous", "bool.false"],
     [
       "for_each",
@@ -218,14 +237,12 @@ La ejecución sobre eventos no recorre el AST ni resuelve nombres de operaciones
         "case",
         ["cmp.eq", "event.kind", ["string.const", "ProcessResourceUsageEvent"]],
         [
-          "block",
           ["var.set", "current_time", "event.time"],
           ["var.set", "current_cpu_time", "computed.cpu_time"],
           [
             "case",
             ["var.get", "has_previous"],
             [
-              "block",
               ["var.set", "wall_delta", ["math.subtract", ["var.get", "current_time"], ["var.get", "previous_time"]]],
               ["var.set", "cpu_delta", ["math.subtract", ["var.get", "current_cpu_time"], ["var.get", "previous_cpu_time"]]],
               [
@@ -239,7 +256,7 @@ La ejecución sobre eventos no recorre el AST ni resuelve nombres de operaciones
                   "output.emit",
                   ["string.const", "cpu_intervals"],
                   [
-                    "map.of",
+                    "map.new",
                     ["string.const", "start"], ["var.get", "previous_time"],
                     ["string.const", "end"], ["var.get", "current_time"],
                     ["string.const", "wall_delta"], ["var.get", "wall_delta"],
