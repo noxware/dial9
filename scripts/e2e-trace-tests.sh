@@ -44,6 +44,15 @@ node dial9-viewer/ui/test_task_lifecycle.js
 echo "--- Checking trace analysis ---"
 node dial9-viewer/ui/test_trace_analysis.js
 
+echo "--- Checking standalone script engine ---"
+node dial9-viewer/ui/test_script_engine.js
+
+echo "--- Checking custom view data bundles ---"
+node dial9-viewer/ui/test_custom_view_runtime.js
+
+echo "--- Checking stackable custom view panels ---"
+node dial9-viewer/ui/test_custom_view_panels.js
+
 echo "--- Checking trace property oracle (Rust decode parity reference) ---"
 node dial9-viewer/ui/test_trace_properties.js
 
