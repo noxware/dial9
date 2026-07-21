@@ -44,6 +44,12 @@ node dial9-viewer/ui/test_task_lifecycle.js
 echo "--- Checking trace analysis ---"
 node dial9-viewer/ui/test_trace_analysis.js
 
+echo "Running expression engine tests..."
+node dial9-viewer/ui/test_expression_engine.js
+
+echo "Running custom view demo tests..."
+node dial9-viewer/ui/test_custom_view_demo.js
+
 echo "--- Checking trace property oracle (Rust decode parity reference) ---"
 node dial9-viewer/ui/test_trace_properties.js
 

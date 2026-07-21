@@ -627,6 +627,51 @@
                 height: 100%;
                 display: block;
             }
+            .custom-view-panel {
+                display: none;
+                height: 112px;
+                background: #111b2e;
+                border-top: 1px solid #333;
+                flex-shrink: 0;
+                position: relative;
+                overflow: hidden;
+            }
+            .custom-view-panel .chart-label {
+                position: absolute;
+                top: 4px;
+                left: 8px;
+                font-size: 0.75em;
+                color: #aaa;
+                z-index: 2;
+                white-space: nowrap;
+            }
+            .custom-view-panel canvas {
+                width: 100%;
+                height: 100%;
+                display: block;
+            }
+            .custom-view-info {
+                position: absolute;
+                top: 4px;
+                right: 12px;
+                color: #aaa;
+                font-size: 0.75em;
+                z-index: 2;
+                pointer-events: none;
+            }
+            .custom-view-legend {
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+                margin-left: 10px;
+                color: #aaa;
+                font-weight: 400;
+            }
+            .custom-view-legend > span {
+                display: inline-block;
+                width: 12px;
+                height: 3px;
+            }
             #task-detail .chart-label {
                 position: absolute;
                 top: 4px;
@@ -938,6 +983,21 @@
                     <span id="cpu-panel-info" style="position:absolute;top:4px;right:12px;font-size:0.75em;color:#aaa;z-index:2;pointer-events:none"></span>
                     <canvas id="cpu-panel-canvas"></canvas>
                 </div>
+                <div id="custom-cpu-panel" class="custom-view-panel foldable-panel" data-panel-key="custom-cpu">
+                    <div class="chart-label">Custom · CPU Usage</div>
+                    <span class="custom-view-info"></span>
+                    <canvas></canvas>
+                </div>
+                <div id="custom-context-panel" class="custom-view-panel foldable-panel" data-panel-key="custom-context">
+                    <div class="chart-label">Custom · Context Switches (Cumulative)</div>
+                    <span class="custom-view-info"></span>
+                    <canvas></canvas>
+                </div>
+                <div id="custom-dino-panel" class="custom-view-panel foldable-panel" data-panel-key="custom-dino" style="height:148px">
+                    <div class="chart-label">Custom · Extremely Scientific Dinosaur</div>
+                    <span class="custom-view-info"></span>
+                    <canvas></canvas>
+                </div>
                 <div id="task-detail">
                     <span class="chart-label" id="task-detail-label">Task Detail</span>
                     <span id="task-detail-status" style="position:absolute;top:4px;right:12px;font-size:0.75em;color:#aaa;z-index:2"></span>
@@ -1009,6 +1069,8 @@
         <script src="creds.js"></script>
         <script src="trace_scope.js"></script>
         <script src="trace_analysis.js"></script>
+        <script src="expression_engine.js"></script>
+        <script src="custom_view_demo.js"></script>
         <script src="format.js"></script>
         <script src="flamegraph_export.js"></script>
         <script src="flamegraph.js"></script>
@@ -1293,6 +1355,7 @@
                 maxCores: 0,
                 avgCores: 0,
             };
+            let customViewDemo = null;
             // Points of interest for navigation
             let pointsOfInterest = [];
             let currentPoiIndex = -1;
@@ -1409,7 +1472,10 @@
             const clearRangeBtn = document.getElementById("btn-clear-range");
             const tooltip = document.getElementById("tooltip");
 
-            const FOLDABLE_PANEL_KEYS = ["spans", "events", "cpu", "queue"];
+            const FOLDABLE_PANEL_KEYS = [
+                "spans", "events", "cpu", "custom-cpu", "custom-context", "custom-dino", "queue",
+            ];
+            const DEFAULT_EXPANDED_PANEL_KEYS = new Set(["custom-cpu", "custom-context", "custom-dino"]);
             const PANEL_COLLAPSE_STORAGE_PREFIX = "dial9.viewer.panelCollapsed.";
             const viewerStorageFallback = new Map();
 
@@ -1435,7 +1501,9 @@
             }
 
             function isPanelCollapsed(key) {
-                return viewerStorageGet(panelCollapseStorageKey(key)) !== "expanded";
+                const stored = viewerStorageGet(panelCollapseStorageKey(key));
+                if (stored == null) return !DEFAULT_EXPANDED_PANEL_KEYS.has(key);
+                return stored !== "expanded";
             }
 
             function syncFoldablePanel(key) {
@@ -1500,6 +1568,17 @@
             const timelineCanvas = document.getElementById("timeline-canvas");
             const queueCanvas = document.getElementById("queue-canvas");
             const lanesContainer = document.getElementById("lanes-container");
+            Dial9CustomViews.mountInteractions({
+                formatTime: fmtTs,
+                showTooltip(html, event) {
+                    tooltip.innerHTML = html;
+                    tooltip.style.display = "block";
+                    placeTooltip(event);
+                },
+                hideTooltip() {
+                    tooltip.style.display = "none";
+                },
+            });
 
             // ── File loading ──
             dropZone.addEventListener("click", () => fileInput.click());
@@ -1571,6 +1650,8 @@
                 relatedItems = [];
                 hoveredWakerTaskId = null;
                 processCpuUsage = { samples: [], intervals: [], availableParallelism: null, maxCores: 0, avgCores: 0 };
+                customViewDemo = null;
+                Dial9CustomViews.resetPanels();
                 hideStackPopup();
                 taskDetailPanel.style.display = "none";
                 document.getElementById("cpu-panel").style.display = "none";
@@ -2084,6 +2165,12 @@
                 durationNs = timeRange.durationNs;
                 viewStart = minTs;
                 viewEnd = maxTs;
+
+                customViewDemo = Dial9CustomViews.runDemoPrograms(trace, { minTs, maxTs });
+                Dial9CustomViews.preparePanels(customViewDemo);
+                if (customViewDemo.diagnostics.length > 0) {
+                    console.warn("Custom view demo diagnostics:", customViewDemo.diagnostics);
+                }
 
                 // Build spans (also extracts queue samples and indexes wake events)
                 const spanResult = buildWorkerSpans(evts, workerIds, maxTs, trace.blockInPlaceGaps);
@@ -2898,6 +2985,12 @@
                 if (prof) _t = _profMark(prof, `spanPanel(allSpans=${allSpans.length})`, _t);
                 renderCustomEventsPanel(scrollbarW);
                 renderProcessCpuPanel(scrollbarW);
+                Dial9CustomViews.renderAll(customViewDemo, {
+                    viewStart,
+                    viewEnd,
+                    scrollbarW,
+                    layoutFor: timePanelLayout,
+                });
                 if (prof) _t = _profMark(prof, `customEvents(${genericCustomEvents.length})`, _t);
                 renderTaskDetail(scrollbarW);
                 if (prof) _t = _profMark(prof, "taskDetail", _t);
