@@ -141,16 +141,10 @@ Un computed value hereda el entorno de su invocación, incluido el binding `even
 |---|---|
 |Event stream del host|Merge, índice, arrays o lectura lazy|
 |Event del host|Vista virtual sobre cualquier representación física|
-|Map del host|Vista virtual read-only|
-|List del host|Vista virtual read-only|
+|Map del host|`MapView` read-only sobre cualquier representación física|
+|List del host|`ListView` read-only sobre cualquier representación física|
 |`map.new`|`Map` mutable de JavaScript|
 |`list.new`|`Array` mutable de JavaScript|
-
-```json
-["event.field", "user_cpu_ns"]
-```
-
-Puede compilarse hoy a un acceso sobre objetos y mañana a un acceso por schema, columna o field id.
 
 ## Runtime values
 
@@ -161,9 +155,12 @@ Puede compilarse hoy a un acceso sobre objetos y mañana a un acceso por schema,
 |String|`String`|
 |Bool|`Boolean`|
 |Null|`null`|
-|Owned List|`Array`|
-|Owned Map|`Map`|
+|List|`Array` o `ListView`|
+|Map|`Map` o `MapView`|
 |Bytes|`Uint8Array`|
+
+`MapView` y `ListView` son shapes internos que implementan las operaciones básicas
+de Map y List sin exponer la representación física del valor.
 
 ## Lowering
 
@@ -190,7 +187,6 @@ La ejecución sobre eventos no recorre el AST ni resuelve nombres de operaciones
 |Float math|`float.add`, `float.subtract`, `float.multiply`, `float.divide`, `float.pow`|
 |Comparison|`cmp.eq`, `cmp.lt`, `cmp.lte`, `cmp.gt`, `cmp.gte`|
 |Boolean|`bool.not`, `bool.and`, `bool.or`|
-|Event|`event.kind`, `event.time`, `event.field`|
 |Map|`map.new`, `map.get`, `map.has`, `map.set`, `map.remove`|
 |List|`list.new`, `list.get`, `list.set`, `list.push`, `list.length`|
 |Effects|`output.emit`, `diagnostic.warn`|
@@ -222,8 +218,8 @@ Con argumentos, `map.new` exige pares `key, value`.
       "unit": "ns",
       "expression": [
         "integer.add",
-        ["event.field", "user_cpu_ns"],
-        ["event.field", "system_cpu_ns"]
+        ["map.get", ["var.get", "event"], ["string.const", "user_cpu_ns"]],
+        ["map.get", ["var.get", "event"], ["string.const", "system_cpu_ns"]]
       ]
     }
   },
@@ -247,9 +243,9 @@ Con argumentos, `map.new` exige pares `key, value`.
       ["env.get", "events"],
       [
         "case",
-        ["cmp.eq", "event.kind", ["string.const", "ProcessResourceUsageEvent"]],
+        ["cmp.eq", ["map.get", ["var.get", "event"], ["string.const", "kind"]], ["string.const", "ProcessResourceUsageEvent"]],
         [
-          ["var.set", "current_time", "event.time"],
+          ["var.set", "current_time", ["map.get", ["var.get", "event"], ["string.const", "time"]]],
           ["var.set", "current_cpu_time", "computed.cpu_time"],
           [
             "case",
