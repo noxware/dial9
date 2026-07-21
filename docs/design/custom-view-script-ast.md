@@ -9,36 +9,6 @@
 - Sin acceso a JavaScript, globals, DOM, network o modules.
 - Un algoritmo costoso puede bloquear la tab; no es responsabilidad del lenguaje impedirlo.
 
-## Bundle
-
-```rust
-struct Bundle {
-    version: u32,
-    computed_values: BTreeMap<String, ComputedValue>,
-    outputs: BTreeMap<String, Output>,
-    script: SExpr,
-}
-
-struct ComputedValue {
-    unit: Option<String>,
-    expression: SExpr,
-}
-
-struct Output {
-    units: BTreeMap<String, String>,
-}
-```
-
-## Outputs
-
-|Propiedad|Semántica|
-|---|---|
-|`dial9.output.emit(output, value)`|Agrega un valor al output declarado|
-|Orden|Orden de emisión|
-|Lifetime|Se materializa durante el script y queda inmutable al terminar|
-|Representación|Colección lógica; el backend decide su almacenamiento físico|
-|Rendering|El renderer consume valores semánticos y puede crear temporales por viewport|
-
 ## S-expression
 
 ```rust
@@ -208,7 +178,37 @@ Con argumentos, `map.new` exige pares `key, value`.
 |`*.divide`|División por cero es un error|
 |`float.*`|Un resultado `NaN` o infinito es un error|
 
-## CPU usage
+# Dial9 bundle
+
+```rust
+struct Bundle {
+    version: u32,
+    computed_values: BTreeMap<String, ComputedValue>,
+    outputs: BTreeMap<String, Output>,
+    script: SExpr,
+}
+
+struct ComputedValue {
+    unit: Option<String>,
+    expression: SExpr,
+}
+
+struct Output {
+    units: BTreeMap<String, String>,
+}
+```
+
+## Outputs
+
+|Propiedad|Semántica|
+|---|---|
+|`dial9.output.emit(output, value)`|Agrega un valor al output declarado|
+|Orden|Orden de emisión|
+|Lifetime|Se materializa durante el script y queda inmutable al terminar|
+|Representación|Colección lógica; el backend decide su almacenamiento físico|
+|Rendering|El renderer consume valores semánticos y puede crear temporales por viewport|
+
+# CPU usage
 
 ```json
 {
