@@ -26,15 +26,17 @@ los invokes y valores expuestos explícitamente por el host.
 ### Valores foreign y ownership
 
 - Sólo `map.new` y `list.new` crean containers mutables propiedad del script.
-- Arrays, Maps y objects provenientes del host se exponen recursivamente como `ListView`
-  o `MapView` read-only. Si un valor nested también es un container, se devuelve como view.
+- Arrays, Maps y objects provenientes del host se exponen como `ListView` o `MapView`
+  read-only.
 - Las views sólo exponen entries lógicas definidas por su adapter, nunca prototypes,
   methods ni properties internas del object subyacente.
+- El retorno de una función registrada y cada lectura sobre una view atraviesan el mismo
+  normalizer. Los primitivos se aceptan, los containers se wrappean como views y los
+  valores no soportados se rechazan. La regla se aplica nuevamente a cada valor nested.
 - `map.set`, `list.set` y otras operaciones mutables sólo aceptan containers propiedad
   del script; intentar aplicarlas a una view es un error.
-- Los valores devueltos por funciones registradas cruzan el mismo boundary: los
-  primitivos se aceptan, los containers se convierten en views y las funciones u otros
-  valores no soportados se rechazan.
+- Por lo tanto, el value graph visible para el script sólo contiene primitivos,
+  containers creados por el lenguaje y views; nunca raw objects del host.
 
 ### Funciones registradas
 
