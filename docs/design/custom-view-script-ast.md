@@ -10,7 +10,8 @@ Este documento define tres componentes para crear vistas dinámicas en el viewer
 
 ## Características
 
-- Toda forma ejecutable es un invoke; un block sólo agrupa invokes.
+- Toda forma ejecutable es un invoke; un program y cada body son blocks que sólo
+  agrupan invokes y no producen values.
 - Tipos dinámicos con semántica propia.
 - S-expressions serializadas como JSON.
 - Validado una vez y traducido a JavaScript especializado para performance cercana al JS manual.
@@ -30,9 +31,10 @@ los invokes y valores expuestos explícitamente por el host.
   read-only.
 - Las views sólo exponen entries lógicas definidas por su adapter, nunca prototypes,
   methods ni properties internas del object subyacente.
-- El retorno de una función registrada y cada lectura sobre una view atraviesan el mismo
-  normalizer. Los primitivos se aceptan, los containers se wrappean como views y los
-  valores no soportados se rechazan. La regla se aplica nuevamente a cada valor nested.
+- El retorno de una función registrada y cada lectura sobre una view se normalizan de
+  forma lazy mediante el mismo normalizer. Los primitivos se aceptan, los containers se
+  wrappean como views y los valores no soportados se rechazan. La regla se aplica
+  nuevamente a cada valor nested cuando es leído.
 - `map.set`, `list.set` y otras operaciones mutables sólo aceptan containers propiedad
   del script; intentar aplicarlas a una view es un error.
 - Por lo tanto, el value graph visible para el script sólo contiene primitivos,
@@ -75,19 +77,19 @@ enum SExpr {
 ```
 
 ```json
-"integer.zero"
+"bigint.zero"
 ```
 
 ```json
-["float.const", "1.3"]
+["number.const", "1.3"]
 ```
 
 ```json
-["integer.add", ["var.get", "a"], ["var.get", "b"]]
+["bigint.add", ["var.get", "a"], ["var.get", "b"]]
 ```
 
 ```json
-["var.let", "value", ["float.from", ["var.get", "integer_value"]]]
+["var.let", "value", ["number.from", ["var.get", "bigint_value"]]]
 ```
 
 ## Invoke
@@ -102,7 +104,7 @@ invoke = "zero_argument_operation"
 |Immediate function|Evalúa sus operands antes de invocar|Value|
 |Primitive literal|Consume atoms de payload sin evaluarlos|Value|
 |Variable operation|Consume un nombre; `var.let` y `var.set` también consumen un value invoke|Value para `var.get`; none para `var.let` y `var.set`|
-|Control flow|Decide cuándo y cuántas veces evaluar sus operands|None|
+|Control flow|Decide cuándo y cuántas veces evaluar sus operands o blocks|None|
 
 Los invokes sólo se resuelven contra operaciones built-in y funciones registradas.
 La representación es canónica: un invoke sin argumentos es un `Atom`; una lista con un
@@ -120,15 +122,15 @@ Un invoke puede ser una función, cuyos argumentos se evalúan antes de invocarl
 construcción especial, que controla cómo evalúa los operandos o blocks que recibe.
 
 Las operaciones suelen pertenecer al namespace de su tipo, siguiendo una convención
-similar a las funciones de módulos de Elixir. Por ejemplo, `float.add` sólo acepta
-floats; los integers utilizan `integer.add`.
+similar a las funciones de módulos de Elixir. Por ejemplo, `number.add` sólo acepta
+numbers; los bigints utilizan `bigint.add`.
 
 ### Literales
 
 Los literales primitivos parametrizados utilizan normalmente `<type>.const`, por ejemplo
 `["string.const", "hello"]`. `null.const` sigue la misma convención sin recibir
 argumentos. `bool.true` y `bool.false` son excepciones porque son los dos únicos valores
-booleanos; no existe `bool.const`. `integer.zero` y `float.zero` son formas de
+booleanos; no existe `bool.const`. `bigint.zero` y `number.zero` son formas de
 conveniencia sin argumentos.
 
 Las estructuras no primitivas se construyen con `<type>.new`, por ejemplo `list.new`.
@@ -138,7 +140,7 @@ Las estructuras no primitivas se construyen con `<type>.new`, por ejemplo `list.
 Las conversiones siguen la convención de Rust `<target-type>.from`:
 
 ```json
-["float.from", ["var.get", "integer_value"]]
+["number.from", ["var.get", "bigint_value"]]
 ```
 
 ### Tipos
@@ -147,7 +149,7 @@ Las comprobaciones de tipo siguen la convención `<type>.is`. Aceptan cualquier 
 nunca fallan y devuelven un bool:
 
 ```json
-["float.is", ["var.get", "value"]]
+["number.is", ["var.get", "value"]]
 ```
 
 Para debugging, `diagnostic.type_name` devuelve el nombre del tipo lógico:
@@ -167,15 +169,27 @@ short-circuit y no evalúan el segundo operando cuando el primero determina el r
 
 ## Block
 
-Un block no es un invoke y no produce un value. Es un body contextual que contiene uno
-o más invokes. Un block de un solo invoke no necesita wrapper; varios invokes se
-agrupan directamente:
+Un block no es un invoke y no produce un value. El program raíz y cada body de control
+flow son siempre arrays de uno o más invokes, incluso cuando contienen un solo invoke.
+El contexto determina que el array es un block; no se infiere observando su primer
+elemento.
+
+Ejecutar un program no retorna un value al host. La integración obtiene resultados
+mediante las funciones registradas que decida exponer.
+
+Un block puede contener invokes Atom, incluso en la primera posición:
+
+```json
+["host.start", "host.finish"]
+```
+
+Los invokes con operands se anidan dentro del block:
 
 ```json
 [
-  ["var.let", "a", ["integer.const", "1"]],
+  ["var.let", "a", ["bigint.const", "1"]],
   ["var.let", "b", ["var.get", "a"]],
-  ["integer.add", ["var.get", "a"], ["var.get", "b"]]
+  ["bigint.add", ["var.get", "a"], ["var.get", "b"]]
 ]
 ```
 
@@ -194,21 +208,23 @@ bindings item/index pertenecen al scope de su iteración.
 
 ## Case
 
-`case` ejecuta el body de la primera condición `bool.true` y no produce un value.
+`case` ejecuta el body de la primera condición `bool.true` y no produce un value. Cada
+body es un block, aunque contenga un solo invoke.
 
 ```json
 [
   "case",
-  ["cmp.gte", ["var.get", "number"], "integer.zero"],
-  "do_something",
+  ["cmp.gte", ["var.get", "bigint_value"], "bigint.zero"],
+  ["do_something"],
   "bool.true",
-  "fallback"
+  ["fallback"]
 ]
 ```
 
 ## For Each
 
-`for_each` ejecuta su body para cada elemento y no produce un value.
+`for_each` ejecuta su body para cada elemento y no produce un value. Expone el índice
+como Number.
 
 ```json
 [
@@ -253,8 +269,8 @@ válidos dentro de un loop.
 
 |Value|Backend inicial|
 |---|---|
-|Integer|`BigInt`|
-|Float|`Number` finito|
+|BigInt|`BigInt`|
+|Number|`Number` finito|
 |String|`String`|
 |Bool|`Boolean`|
 |Null|`null`|
@@ -263,6 +279,9 @@ válidos dentro de un loop.
 
 `MapView` y `ListView` son shapes internos que implementan las operaciones básicas
 de Map y List sin exponer la representación física del valor.
+
+Los valores `number` y `bigint` de JavaScript corresponden directamente a Number y
+BigInt del lenguaje.
 
 ## Lowering
 
@@ -280,14 +299,14 @@ La ejecución sobre eventos no recorre el AST ni resuelve nombres de operaciones
 
 |Namespace|Examples|
 |---|---|
-|Primitive literals|`null.const`, `bool.true`, `bool.false`, `integer.zero`, `integer.const`, `float.zero`, `float.const`, `string.const`|
+|Primitive literals|`null.const`, `bool.true`, `bool.false`, `bigint.zero`, `bigint.const`, `number.zero`, `number.const`, `string.const`|
 |Variables|`var.let`, `var.get`, `var.set`|
 |Control flow|`case`, `for_each`, `loop.break`, `loop.continue`|
-|Conversion|`integer.from`, `float.from`, `string.from`|
+|Conversion|`bigint.from`, `number.from`, `string.from`|
 |String|`string.concat`|
-|Type checks|`null.is`, `bool.is`, `integer.is`, `float.is`, `string.is`, `list.is`, `map.is`|
-|Integer math|`integer.add`, `integer.subtract`, `integer.multiply`, `integer.divide`, `integer.pow`|
-|Float math|`float.add`, `float.subtract`, `float.multiply`, `float.divide`, `float.pow`|
+|Type checks|`null.is`, `bool.is`, `bigint.is`, `number.is`, `string.is`, `list.is`, `map.is`|
+|BigInt math|`bigint.add`, `bigint.subtract`, `bigint.multiply`, `bigint.divide`, `bigint.pow`|
+|Number math|`number.add`, `number.subtract`, `number.multiply`, `number.divide`, `number.pow`|
 |Comparison|`cmp.eq`, `cmp.lt`, `cmp.lte`, `cmp.gt`, `cmp.gte`|
 |Boolean|`bool.not`, `bool.and`, `bool.or`|
 |Map|`map.new`, `map.get`, `map.has`, `map.set`, `map.remove`|
@@ -300,16 +319,19 @@ map.new = "map.new" | ["map.new", key, value, ...]
 
 Con argumentos, `map.new` exige pares `key, value`.
 
+`list.length` devuelve un Number. `list.get` y `list.set` aceptan como índice un Number
+safe integer no negativo; `list.set` exige que el índice ya exista.
+
 ## Numeric operations
 
 |Operación|Contrato|
 |---|---|
-|`integer.*`|Acepta integers y devuelve integer|
-|`float.*`|Acepta floats y devuelve float|
-|`integer.divide`|Trunca hacia cero|
-|`integer.pow`|Exige un exponente integer no negativo|
+|`bigint.*`|Acepta bigints y devuelve bigint|
+|`number.*`|Acepta numbers y devuelve number|
+|`bigint.divide`|Trunca hacia cero|
+|`bigint.pow`|Exige un exponente bigint no negativo|
 |`*.divide`|División por cero es un error|
-|`float.*`|Un resultado `NaN` o infinito es un error|
+|`number.*`|Un resultado `NaN` o infinito es un error|
 
 # Dial9 bundle
 
@@ -317,7 +339,7 @@ Con argumentos, `map.new` exige pares `key, value`.
 struct Bundle {
     version: u32,
     outputs: BTreeMap<String, Output>,
-    script: SExpr,
+    script: Vec<SExpr>,
 }
 
 struct Output {
@@ -361,60 +383,92 @@ struct Output {
       "index",
       "dial9.events",
       [
-        "case",
-        ["cmp.eq", ["map.get", ["var.get", "event"], ["string.const", "kind"]], ["string.const", "ProcessResourceUsageEvent"]],
         [
-          ["var.let", "current_time", ["map.get", ["var.get", "event"], ["string.const", "time"]]],
+          "case",
           [
-            "var.let",
-            "current_cpu_time",
-            [
-              "integer.add",
-              ["map.get", ["var.get", "event"], ["string.const", "user_cpu_ns"]],
-              ["map.get", ["var.get", "event"], ["string.const", "system_cpu_ns"]]
-            ]
+            "cmp.eq",
+            ["map.get", ["var.get", "event"], ["string.const", "kind"]],
+            ["string.const", "ProcessResourceUsageEvent"]
           ],
           [
-            "case",
-            ["var.get", "has_previous"],
             [
-              ["var.let", "wall_delta", ["integer.subtract", ["var.get", "current_time"], ["var.get", "previous_time"]]],
-              ["var.let", "cpu_delta", ["integer.subtract", ["var.get", "current_cpu_time"], ["var.get", "previous_cpu_time"]]],
+              "var.let",
+              "current_time",
+              ["map.get", ["var.get", "event"], ["string.const", "time"]]
+            ],
+            [
+              "var.let",
+              "current_cpu_time",
               [
-                "case",
-                ["cmp.lte", ["var.get", "wall_delta"], "integer.zero"],
-                "null.const",
-                ["cmp.lt", ["var.get", "cpu_delta"], "integer.zero"],
-                ["diagnostic.warn", ["string.const", "CPU counter decreased"]],
-                "bool.true",
+                "bigint.add",
+                ["map.get", ["var.get", "event"], ["string.const", "user_cpu_ns"]],
+                ["map.get", ["var.get", "event"], ["string.const", "system_cpu_ns"]]
+              ]
+            ],
+            [
+              "case",
+              ["var.get", "has_previous"],
+              [
                 [
-                  "dial9.output.emit",
-                  "cpu_intervals",
+                  "var.let",
+                  "wall_delta",
                   [
-                    "map.new",
-                    ["string.const", "start"], ["var.get", "previous_time"],
-                    ["string.const", "end"], ["var.get", "current_time"],
-                    ["string.const", "wall_delta"], ["var.get", "wall_delta"],
-                    ["string.const", "cpu_delta"], ["var.get", "cpu_delta"],
-                    ["string.const", "cores"],
+                    "bigint.subtract",
+                    ["var.get", "current_time"],
+                    ["var.get", "previous_time"]
+                  ]
+                ],
+                [
+                  "var.let",
+                  "cpu_delta",
+                  [
+                    "bigint.subtract",
+                    ["var.get", "current_cpu_time"],
+                    ["var.get", "previous_cpu_time"]
+                  ]
+                ],
+                [
+                  "case",
+                  ["cmp.lte", ["var.get", "wall_delta"], "bigint.zero"],
+                  ["null.const"],
+                  ["cmp.lt", ["var.get", "cpu_delta"], "bigint.zero"],
+                  [["diagnostic.warn", ["string.const", "CPU counter decreased"]]],
+                  "bool.true",
+                  [
                     [
-                      "float.divide",
-                      ["float.from", ["var.get", "cpu_delta"]],
-                      ["float.from", ["var.get", "wall_delta"]]
+                      "dial9.output.emit",
+                      "cpu_intervals",
+                      [
+                        "map.new",
+                        ["string.const", "start"],
+                        ["var.get", "previous_time"],
+                        ["string.const", "end"],
+                        ["var.get", "current_time"],
+                        ["string.const", "wall_delta"],
+                        ["var.get", "wall_delta"],
+                        ["string.const", "cpu_delta"],
+                        ["var.get", "cpu_delta"],
+                        ["string.const", "cores"],
+                        [
+                          "number.divide",
+                          ["number.from", ["var.get", "cpu_delta"]],
+                          ["number.from", ["var.get", "wall_delta"]]
+                        ]
+                      ]
                     ]
                   ]
                 ]
-              ]
+              ],
+              "bool.true",
+              ["null.const"]
             ],
-            "bool.true",
-            "null.const"
+            ["var.set", "previous_time", ["var.get", "current_time"]],
+            ["var.set", "previous_cpu_time", ["var.get", "current_cpu_time"]],
+            ["var.set", "has_previous", "bool.true"]
           ],
-          ["var.set", "previous_time", ["var.get", "current_time"]],
-          ["var.set", "previous_cpu_time", ["var.get", "current_cpu_time"]],
-          ["var.set", "has_previous", "bool.true"]
-        ],
-        "bool.true",
-        "null.const"
+          "bool.true",
+          ["null.const"]
+        ]
       ]
     ]
   ]

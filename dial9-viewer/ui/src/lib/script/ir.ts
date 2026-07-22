@@ -38,7 +38,8 @@ export interface CompileOptions {
   readonly onDiagnostic?: (diagnostic: ScriptDiagnostic) => void;
 }
 
-export type CompiledProgram = () => ScriptValue | undefined;
+export type ScriptBlock = readonly SExpr[];
+export type CompiledProgram = () => void;
 
 export class ScriptCompileError extends Error {
   readonly path: string;
@@ -130,27 +131,27 @@ const none = (statement: string): CompiledNone => ({ kind: "none", statement });
 const EAGER_RUNTIME_OPERATIONS: Readonly<
   Record<string, readonly [keyof Runtime & string, number]>
 > = {
-  "integer.from": ["integerFrom", 1],
-  "float.from": ["floatFrom", 1],
+  "bigint.from": ["bigintFrom", 1],
+  "number.from": ["numberFrom", 1],
   "string.from": ["stringFrom", 1],
   "string.concat": ["stringConcat", 2],
   "null.is": ["nullIs", 1],
   "bool.is": ["boolIs", 1],
-  "integer.is": ["integerIs", 1],
-  "float.is": ["floatIs", 1],
+  "bigint.is": ["bigintIs", 1],
+  "number.is": ["numberIs", 1],
   "string.is": ["stringIs", 1],
   "list.is": ["listIs", 1],
   "map.is": ["mapIs", 1],
-  "integer.add": ["integerAdd", 2],
-  "integer.subtract": ["integerSubtract", 2],
-  "integer.multiply": ["integerMultiply", 2],
-  "integer.divide": ["integerDivide", 2],
-  "integer.pow": ["integerPow", 2],
-  "float.add": ["floatAdd", 2],
-  "float.subtract": ["floatSubtract", 2],
-  "float.multiply": ["floatMultiply", 2],
-  "float.divide": ["floatDivide", 2],
-  "float.pow": ["floatPow", 2],
+  "bigint.add": ["bigintAdd", 2],
+  "bigint.subtract": ["bigintSubtract", 2],
+  "bigint.multiply": ["bigintMultiply", 2],
+  "bigint.divide": ["bigintDivide", 2],
+  "bigint.pow": ["bigintPow", 2],
+  "number.add": ["numberAdd", 2],
+  "number.subtract": ["numberSubtract", 2],
+  "number.multiply": ["numberMultiply", 2],
+  "number.divide": ["numberDivide", 2],
+  "number.pow": ["numberPow", 2],
   "cmp.eq": ["compareEqual", 2],
   "cmp.lt": ["compareLess", 2],
   "cmp.lte": ["compareLessEqual", 2],
@@ -171,10 +172,10 @@ const BUILT_INS = new Set([
   "null.const",
   "bool.true",
   "bool.false",
-  "integer.zero",
-  "integer.const",
-  "float.zero",
-  "float.const",
+  "bigint.zero",
+  "bigint.const",
+  "number.zero",
+  "number.const",
   "string.const",
   "var.let",
   "var.get",
@@ -193,7 +194,10 @@ const BUILT_INS = new Set([
 ]);
 
 /** Validate and compile a Script IR program into a reusable native JS function. */
-export function compile(sexpr: SExpr, options: CompileOptions = {}): CompiledProgram {
+export function compile(program: ScriptBlock, options: CompileOptions = {}): CompiledProgram {
+  if (!Array.isArray(program)) {
+    throw new ScriptCompileError("program must be a block");
+  }
   const externalEntries = Object.entries(options.functions ?? {});
   const externalIds = new Map<string, number>();
   const externalFunctions: ExternalFunction[] = [];
@@ -217,7 +221,7 @@ export function compile(sexpr: SExpr, options: CompileOptions = {}): CompiledPro
     nextTemporary: 0,
   };
   const root: Scope = { parent: null, bindings: new Map() };
-  const body = compileRoot(sexpr, "$", root, 0, context);
+  const body = compileBlock(program, "$", root, 0, context);
   const temporaryDeclarations =
     context.expressionTemporaries.length === 0
       ? ""
@@ -233,20 +237,6 @@ export function compile(sexpr: SExpr, options: CompileOptions = {}): CompiledPro
     const message = error instanceof Error ? error.message : String(error);
     throw new ScriptCompileError(`failed to generate JavaScript: ${message}`);
   }
-}
-
-function compileRoot(
-  node: SExpr,
-  path: string,
-  scope: Scope,
-  loopDepth: number,
-  context: CompileContext,
-): string {
-  if (isBlock(node)) return compileBlock(node, path, scope, loopDepth, context);
-  const compiled = compileInvoke(node, path, scope, loopDepth, context);
-  return compiled.kind === "value"
-    ? `return ${compiled.expression};`
-    : `${compiled.statement}\nreturn undefined;`;
 }
 
 function compileBlock(
@@ -272,20 +262,10 @@ function compileBody(
   loopDepth: number,
   context: CompileContext,
 ): string {
-  return isBlock(node)
-    ? compileBlock(node, path, scope, loopDepth, context)
-    : compileStatement(node, path, scope, loopDepth, context);
-}
-
-function compileStatement(
-  node: SExpr,
-  path: string,
-  scope: Scope,
-  loopDepth: number,
-  context: CompileContext,
-): string {
-  const compiled = compileInvoke(node, path, scope, loopDepth, context);
-  return compiled.kind === "value" ? `${compiled.expression};` : compiled.statement;
+  if (!Array.isArray(node)) {
+    throw new ScriptCompileError("body must be a block", path);
+  }
+  return compileBlock(node, path, scope, loopDepth, context);
 }
 
 function compileValue(
@@ -295,7 +275,6 @@ function compileValue(
   loopDepth: number,
   context: CompileContext,
 ): string {
-  if (isBlock(node)) throw new ScriptCompileError("a block cannot be used as a value", path);
   const compiled = compileInvoke(node, path, scope, loopDepth, context);
   if (compiled.kind === "none") {
     throw new ScriptCompileError("this invoke does not produce a value", path);
@@ -322,27 +301,27 @@ function compileInvoke(
     case "bool.false":
       exactArity(operation, operands, 0, path);
       return value("false");
-    case "integer.zero":
+    case "bigint.zero":
       exactArity(operation, operands, 0, path);
       return value("0n");
-    case "float.zero":
+    case "number.zero":
       exactArity(operation, operands, 0, path);
       return value("0");
-    case "integer.const": {
+    case "bigint.const": {
       exactArity(operation, operands, 1, path);
-      const payload = atom(operands[0], `${path}[1]`, "integer literal");
+      const payload = atom(operands[0], `${path}[1]`, "bigint literal");
       try {
         return value(`${BigInt(payload).toString()}n`);
       } catch {
-        throw new ScriptCompileError(`${quote(payload)} is not an integer literal`, `${path}[1]`);
+        throw new ScriptCompileError(`${quote(payload)} is not a bigint literal`, `${path}[1]`);
       }
     }
-    case "float.const": {
+    case "number.const": {
       exactArity(operation, operands, 1, path);
-      const payload = atom(operands[0], `${path}[1]`, "float literal");
-      const parsed = parseFloatLiteral(payload);
+      const payload = atom(operands[0], `${path}[1]`, "number literal");
+      const parsed = parseNumberLiteral(payload);
       if (parsed === null) {
-        throw new ScriptCompileError(`${quote(payload)} is not a finite float literal`, `${path}[1]`);
+        throw new ScriptCompileError(`${quote(payload)} is not a finite number literal`, `${path}[1]`);
       }
       return value(Object.is(parsed, -0) ? "-0" : String(parsed));
     }
@@ -498,7 +477,7 @@ function compileForEach(
         `for (let ${indexTemporary} = 0; ${indexTemporary} < ${lengthTemporary}; ${indexTemporary}++) {\n` +
           indent(
             `let ${itemVariable} = runtime.listGetAt(${sourceTemporary}, ${indexTemporary});\n` +
-              `let ${indexVariable} = BigInt(${indexTemporary});\n` +
+              `let ${indexVariable} = ${indexTemporary};\n` +
               body,
           ) +
           `\n}`,
@@ -577,10 +556,6 @@ function splitInvoke(node: SExpr, path: string): { operation: string; operands: 
   return { operation, operands: node.slice(1) };
 }
 
-function isBlock(node: SExpr): node is readonly SExpr[] {
-  return Array.isArray(node) && node.length > 0 && typeof node[0] !== "string";
-}
-
 function exactArity(
   operation: string,
   operands: readonly SExpr[],
@@ -629,7 +604,7 @@ function quote(value: string): string {
   return JSON.stringify(value);
 }
 
-function parseFloatLiteral(value: string): number | null {
+function parseNumberLiteral(value: string): number | null {
   if (value.trim() === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
@@ -729,11 +704,11 @@ class Runtime {
     return typeof input === "boolean";
   }
 
-  integerIs(input: ScriptValue): boolean {
+  bigintIs(input: ScriptValue): boolean {
     return typeof input === "bigint";
   }
 
-  floatIs(input: ScriptValue): boolean {
+  numberIs(input: ScriptValue): boolean {
     return typeof input === "number";
   }
 
@@ -749,7 +724,7 @@ class Runtime {
     return input instanceof Map || isMapView(input);
   }
 
-  integerFrom(input: ScriptValue): bigint | null {
+  bigintFrom(input: ScriptValue): bigint | null {
     try {
       if (typeof input === "bigint") return input;
       if (typeof input === "number") return BigInt(Math.trunc(input));
@@ -760,7 +735,7 @@ class Runtime {
     }
   }
 
-  floatFrom(input: ScriptValue): number | null {
+  numberFrom(input: ScriptValue): number | null {
     let converted: number;
     if (typeof input === "number") return input;
     if (typeof input === "bigint") converted = Number(input);
@@ -786,19 +761,19 @@ class Runtime {
     return typeof left === "string" && typeof right === "string" ? left + right : null;
   }
 
-  integerAdd(left: ScriptValue, right: ScriptValue): bigint | null {
-    return integerBinary(left, right, (a, b) => a + b);
+  bigintAdd(left: ScriptValue, right: ScriptValue): bigint | null {
+    return bigintBinary(left, right, (a, b) => a + b);
   }
 
-  integerSubtract(left: ScriptValue, right: ScriptValue): bigint | null {
-    return integerBinary(left, right, (a, b) => a - b);
+  bigintSubtract(left: ScriptValue, right: ScriptValue): bigint | null {
+    return bigintBinary(left, right, (a, b) => a - b);
   }
 
-  integerMultiply(left: ScriptValue, right: ScriptValue): bigint | null {
-    return integerBinary(left, right, (a, b) => a * b);
+  bigintMultiply(left: ScriptValue, right: ScriptValue): bigint | null {
+    return bigintBinary(left, right, (a, b) => a * b);
   }
 
-  integerDivide(left: ScriptValue, right: ScriptValue): bigint | null {
+  bigintDivide(left: ScriptValue, right: ScriptValue): bigint | null {
     if (typeof left !== "bigint" || typeof right !== "bigint" || right === 0n) return null;
     try {
       return left / right;
@@ -807,7 +782,7 @@ class Runtime {
     }
   }
 
-  integerPow(left: ScriptValue, right: ScriptValue): bigint | null {
+  bigintPow(left: ScriptValue, right: ScriptValue): bigint | null {
     if (typeof left !== "bigint" || typeof right !== "bigint" || right < 0n) return null;
     try {
       return left ** right;
@@ -816,26 +791,26 @@ class Runtime {
     }
   }
 
-  floatAdd(left: ScriptValue, right: ScriptValue): number | null {
-    return floatBinary(left, right, (a, b) => a + b);
+  numberAdd(left: ScriptValue, right: ScriptValue): number | null {
+    return numberBinary(left, right, (a, b) => a + b);
   }
 
-  floatSubtract(left: ScriptValue, right: ScriptValue): number | null {
-    return floatBinary(left, right, (a, b) => a - b);
+  numberSubtract(left: ScriptValue, right: ScriptValue): number | null {
+    return numberBinary(left, right, (a, b) => a - b);
   }
 
-  floatMultiply(left: ScriptValue, right: ScriptValue): number | null {
-    return floatBinary(left, right, (a, b) => a * b);
+  numberMultiply(left: ScriptValue, right: ScriptValue): number | null {
+    return numberBinary(left, right, (a, b) => a * b);
   }
 
-  floatDivide(left: ScriptValue, right: ScriptValue): number | null {
+  numberDivide(left: ScriptValue, right: ScriptValue): number | null {
     if (typeof left !== "number" || typeof right !== "number" || right === 0) return null;
     const result = left / right;
     return Number.isFinite(result) ? result : null;
   }
 
-  floatPow(left: ScriptValue, right: ScriptValue): number | null {
-    return floatBinary(left, right, (a, b) => a ** b);
+  numberPow(left: ScriptValue, right: ScriptValue): number | null {
+    return numberBinary(left, right, (a, b) => a ** b);
   }
 
   compareEqual(left: ScriptValue, right: ScriptValue): boolean {
@@ -914,10 +889,8 @@ class Runtime {
   }
 
   listGet(input: ScriptValue, index: ScriptValue): ScriptValue | null {
-    if (typeof index !== "bigint" || index < 0n || index > BigInt(Number.MAX_SAFE_INTEGER)) {
-      return null;
-    }
-    return this.listGetAt(input, Number(index));
+    const nativeIndex = listIndex(index);
+    return nativeIndex === null ? null : this.listGetAt(input, nativeIndex);
   }
 
   listGetAt(input: ScriptValue, index: number): ScriptValue | null {
@@ -937,7 +910,9 @@ class Runtime {
     }
     const nativeIndex = listIndex(index);
     if (nativeIndex === null || nativeIndex >= input.length) {
-      throw new ScriptRuntimeError("list.set requires an existing integer index");
+      throw new ScriptRuntimeError(
+        "list.set requires an existing non-negative safe-integer number index",
+      );
     }
     input[nativeIndex] = entry;
   }
@@ -950,9 +925,9 @@ class Runtime {
     input.push(entry);
   }
 
-  listLength(input: ScriptValue): bigint | null {
-    if (Array.isArray(input)) return BigInt(input.length);
-    return isListView(input) ? BigInt(this.checkedViewLength(input)) : null;
+  listLength(input: ScriptValue): number | null {
+    if (Array.isArray(input)) return input.length;
+    return isListView(input) ? this.checkedViewLength(input) : null;
   }
 
   iterableLength(input: ScriptValue): number | null {
@@ -970,8 +945,8 @@ class Runtime {
   diagnosticTypeName(input: ScriptValue): string {
     if (input === null) return "null";
     if (typeof input === "boolean") return "bool";
-    if (typeof input === "bigint") return "integer";
-    if (typeof input === "number") return "float";
+    if (typeof input === "bigint") return "bigint";
+    if (typeof input === "number") return "number";
     if (typeof input === "string") return "string";
     if (Array.isArray(input) || isListView(input)) return "list";
     return "map";
@@ -994,7 +969,7 @@ class Runtime {
   }
 }
 
-function integerBinary(
+function bigintBinary(
   left: ScriptValue,
   right: ScriptValue,
   operation: (left: bigint, right: bigint) => bigint,
@@ -1007,7 +982,7 @@ function integerBinary(
   }
 }
 
-function floatBinary(
+function numberBinary(
   left: ScriptValue,
   right: ScriptValue,
   operation: (left: number, right: number) => number,
@@ -1030,6 +1005,6 @@ function compareOrdered(
 }
 
 function listIndex(input: ScriptValue): number | null {
-  if (typeof input !== "bigint" || input < 0n || input > BigInt(0xffff_ffff - 1)) return null;
-  return Number(input);
+  if (typeof input !== "number" || !Number.isSafeInteger(input) || input < 0) return null;
+  return input;
 }
