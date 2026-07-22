@@ -287,6 +287,7 @@ La ejecución sobre eventos no recorre el AST ni resuelve nombres de operaciones
 |Variables|`var.let`, `var.get`, `var.set`|
 |Control flow|`case`, `for_each`, `loop.break`, `loop.continue`|
 |Conversion|`integer.from`, `float.from`, `string.from`|
+|String|`string.concat`|
 |Type checks|`null.is`, `bool.is`, `integer.is`, `float.is`, `string.is`, `list.is`, `map.is`|
 |Integer math|`integer.add`, `integer.subtract`, `integer.multiply`, `integer.divide`, `integer.pow`|
 |Float math|`float.add`, `float.subtract`, `float.multiply`, `float.divide`, `float.pow`|
