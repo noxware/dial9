@@ -85,7 +85,7 @@ enum SExpr {
 ```
 
 ```json
-["var.set", "value", ["float.from", ["var.get", "integer_value"]]]
+["var.let", "value", ["float.from", ["var.get", "integer_value"]]]
 ```
 
 ## Invoke
@@ -99,7 +99,7 @@ invoke = "zero_argument_operation"
 |---|---|---|
 |Immediate function|Evalúa sus operands antes de invocar|Value|
 |Primitive literal|Consume atoms de payload sin evaluarlos|Value|
-|Variable operation|Consume un nombre y opcionalmente un value invoke|Value para `var.get`; none para `var.set`|
+|Variable operation|Consume un nombre; `var.let` y `var.set` también consumen un value invoke|Value para `var.get`; none para `var.let` y `var.set`|
 |Control flow|Decide cuándo y cuántas veces evaluar sus operands|None|
 |Computed value|Evalúa su expresión dentro del scope actual|Value|
 
@@ -166,17 +166,30 @@ short-circuit y no evalúan el segundo operando cuando el primero determina el r
 
 ## Block
 
-Un block no es un invoke y no produce un value. Es una secuencia usada como body por el
-bundle o por una operación de control como `case` o `for_each`. Un invoke solo no
-necesita wrapper; varios invokes se agrupan directamente:
+Un block no es un invoke y no produce un value. Es un body contextual que contiene uno
+o más invokes. Un block de un solo invoke no necesita wrapper; varios invokes se
+agrupan directamente:
 
 ```json
 [
-  ["var.set", "a", ["integer.const", "1"]],
-  ["var.set", "b", ["var.get", "a"]],
+  ["var.let", "a", ["integer.const", "1"]],
+  ["var.let", "b", ["var.get", "a"]],
   ["integer.add", ["var.get", "a"], ["var.get", "b"]]
 ]
 ```
+
+## Variable scopes
+
+|Operation|Semantics|
+|---|---|
+|`var.let`|Declara un binding en el scope actual; puede shadow uno exterior, pero no redeclararse en el mismo scope|
+|`var.get`|Lee el binding visible más cercano|
+|`var.set`|Actualiza el binding visible más cercano; falla si no existe|
+
+Cada body introduce un scope aunque contenga un solo invoke. El script usa el root scope;
+cada branch de `case` usa un child scope y cada iteración de `for_each` crea uno nuevo.
+El scope se descarta al terminar el body, incluidos `loop.continue` y `loop.break`. Los
+bindings item/index pertenecen al scope de su iteración.
 
 ## Case
 
@@ -203,8 +216,8 @@ necesita wrapper; varios invokes se agrupan directamente:
   "index",
   "dial9.events",
   [
-    ["var.set", "copy", ["var.get", "event"]],
-    ["var.set", "position", ["var.get", "index"]]
+    ["var.let", "copy", ["var.get", "event"]],
+    ["var.let", "position", ["var.get", "index"]]
   ]
 ]
 ```
@@ -270,7 +283,7 @@ La ejecución sobre eventos no recorre el AST ni resuelve nombres de operaciones
 |Namespace|Examples|
 |---|---|
 |Primitive literals|`null.const`, `bool.true`, `bool.false`, `integer.zero`, `integer.const`, `float.zero`, `float.const`, `string.const`|
-|Variables|`var.get`, `var.set`|
+|Variables|`var.let`, `var.get`, `var.set`|
 |Control flow|`case`, `for_each`, `loop.break`, `loop.continue`|
 |Conversion|`integer.from`, `float.from`, `string.from`|
 |Type checks|`null.is`, `bool.is`, `integer.is`, `float.is`, `string.is`, `list.is`, `map.is`, `bytes.is`|
@@ -356,7 +369,9 @@ struct Output {
     }
   },
   "script": [
-    ["var.set", "has_previous", "bool.false"],
+    ["var.let", "has_previous", "bool.false"],
+    ["var.let", "previous_time", "null.const"],
+    ["var.let", "previous_cpu_time", "null.const"],
     [
       "for_each",
       "event",
@@ -366,14 +381,14 @@ struct Output {
         "case",
         ["cmp.eq", ["map.get", ["var.get", "event"], ["string.const", "kind"]], ["string.const", "ProcessResourceUsageEvent"]],
         [
-          ["var.set", "current_time", ["map.get", ["var.get", "event"], ["string.const", "time"]]],
-          ["var.set", "current_cpu_time", "computed.cpu_time"],
+          ["var.let", "current_time", ["map.get", ["var.get", "event"], ["string.const", "time"]]],
+          ["var.let", "current_cpu_time", "computed.cpu_time"],
           [
             "case",
             ["var.get", "has_previous"],
             [
-              ["var.set", "wall_delta", ["integer.subtract", ["var.get", "current_time"], ["var.get", "previous_time"]]],
-              ["var.set", "cpu_delta", ["integer.subtract", ["var.get", "current_cpu_time"], ["var.get", "previous_cpu_time"]]],
+              ["var.let", "wall_delta", ["integer.subtract", ["var.get", "current_time"], ["var.get", "previous_time"]]],
+              ["var.let", "cpu_delta", ["integer.subtract", ["var.get", "current_cpu_time"], ["var.get", "previous_cpu_time"]]],
               [
                 "case",
                 ["cmp.lte", ["var.get", "wall_delta"], "integer.zero"],
