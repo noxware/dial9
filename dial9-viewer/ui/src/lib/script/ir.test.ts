@@ -232,7 +232,7 @@ describe("control flow", () => {
     const seen: Array<[ScriptValue, ScriptValue]> = [];
     const program: ScriptBlock = [
       [
-        "for_each",
+        "list.for_each",
         "item",
         "index",
         ["list.new", bigintExpr(10), bigintExpr(20), bigintExpr(30), bigintExpr(40)],
@@ -280,7 +280,7 @@ describe("CPU usage specification example", () => {
       ["var.let", "previous_time", "null.const"],
       ["var.let", "previous_cpu_time", "null.const"],
       [
-        "for_each",
+        "list.for_each",
         "event",
         "index",
         "dial9.events",

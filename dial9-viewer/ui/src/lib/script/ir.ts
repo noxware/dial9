@@ -181,7 +181,7 @@ const BUILT_INS = new Set([
   "var.get",
   "var.set",
   "case",
-  "for_each",
+  "list.for_each",
   "loop.break",
   "loop.continue",
   "bool.and",
@@ -356,7 +356,7 @@ function compileInvoke(
     }
     case "case":
       return compileCase(operands, path, scope, loopDepth, context);
-    case "for_each":
+    case "list.for_each":
       return compileForEach(operands, path, scope, loopDepth, context);
     case "loop.break":
       exactArity(operation, operands, 0, path);
@@ -447,11 +447,14 @@ function compileForEach(
   loopDepth: number,
   context: CompileContext,
 ): CompiledNone {
-  exactArity("for_each", operands, 4, path);
+  exactArity("list.for_each", operands, 4, path);
   const itemName = atom(operands[0], `${path}[1]`, "item binding name");
   const indexName = atom(operands[1], `${path}[2]`, "index binding name");
   if (itemName === indexName) {
-    throw new ScriptCompileError("for_each item and index bindings must have different names", path);
+    throw new ScriptCompileError(
+      "list.for_each item and index bindings must have different names",
+      path,
+    );
   }
   const source = compileValue(operands[2]!, `${path}[3]`, scope, loopDepth, context);
   const sourceTemporary = nextTemporary(context, "list");

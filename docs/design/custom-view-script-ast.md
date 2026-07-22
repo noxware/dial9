@@ -58,6 +58,13 @@ la tab o agotar memoria mediante un algoritmo costoso, pero eso no le concede nu
 capabilities. Más adelante podrían añadirse contadores de operaciones, iteraciones y
 allocations sin cambiar el IR público.
 
+### Backend JavaScript
+
+El backend compila mediante `new Function`, por lo que requiere una Content Security
+Policy que permita evaluación dinámica, normalmente mediante `script-src 'unsafe-eval'`.
+Un intérprete evitaría ese requisito, pero el backend inicial prioriza generar
+JavaScript especializado para el hot path.
+
 ## Errores
 
 - Recoverable errors provienen de datos inválidos o ausentes, como una conversión
@@ -202,7 +209,7 @@ Los invokes con operands se anidan dentro del block:
 |`var.set`|Actualiza el binding visible más cercano; falla si no existe|
 
 Cada body introduce un scope aunque contenga un solo invoke. El script usa el root scope;
-cada branch de `case` usa un child scope y cada iteración de `for_each` crea uno nuevo.
+cada branch de `case` usa un child scope y cada iteración de `list.for_each` crea uno nuevo.
 El scope se descarta al terminar el body, incluidos `loop.continue` y `loop.break`. Los
 bindings item/index pertenecen al scope de su iteración.
 
@@ -221,14 +228,15 @@ body es un block, aunque contenga un solo invoke.
 ]
 ```
 
-## For Each
+## List For Each
 
-`for_each` ejecuta su body para cada elemento y no produce un value. Expone el índice
-como Number.
+`list.for_each` ejecuta su body para cada elemento y no produce un value. Expone el
+índice como Number. Mutar la lista iterada durante la ejecución tiene comportamiento
+indefinido.
 
 ```json
 [
-  "for_each",
+  "list.for_each",
   "event",
   "index",
   "dial9.events",
@@ -301,7 +309,7 @@ La ejecución sobre eventos no recorre el AST ni resuelve nombres de operaciones
 |---|---|
 |Primitive literals|`null.const`, `bool.true`, `bool.false`, `bigint.zero`, `bigint.const`, `number.zero`, `number.const`, `string.const`|
 |Variables|`var.let`, `var.get`, `var.set`|
-|Control flow|`case`, `for_each`, `loop.break`, `loop.continue`|
+|Control flow|`case`, `list.for_each`, `loop.break`, `loop.continue`|
 |Conversion|`bigint.from`, `number.from`, `string.from`|
 |String|`string.concat`|
 |Type checks|`null.is`, `bool.is`, `bigint.is`, `number.is`, `string.is`, `list.is`, `map.is`|
@@ -378,7 +386,7 @@ struct Output {
     ["var.let", "previous_time", "null.const"],
     ["var.let", "previous_cpu_time", "null.const"],
     [
-      "for_each",
+      "list.for_each",
       "event",
       "index",
       "dial9.events",
