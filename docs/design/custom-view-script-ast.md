@@ -10,7 +10,7 @@ Este documento define tres componentes para crear vistas dinámicas en el viewer
 
 ## Características
 
-- Toda expresión ejecutable es un invoke; un block sólo agrupa expresiones.
+- Toda forma ejecutable es un invoke; un block sólo agrupa invokes.
 - Tipos dinámicos con semántica propia.
 - S-expressions serializadas como JSON.
 - Validado una vez y traducido a JavaScript especializado para performance cercana al JS manual.
@@ -91,17 +91,17 @@ enum SExpr {
 ## Invoke
 
 ```text
-expression = "zero_argument_operation"
-           | ["operation", argument...]
+invoke = "zero_argument_operation"
+       | ["operation", argument...]
 ```
 
-|Operation kind|Arguments|
-|---|---|
-|Immediate function|Evalúa sus expresiones antes de invocar|
-|Primitive literal|Produce un literal; sus atoms de payload no se evalúan|
-|Variable operation|Consume un nombre y opcionalmente una expresión|
-|Control flow|Decide cuándo y cuántas veces evaluar sus argumentos|
-|Computed value|Evalúa su expresión dentro del entorno actual|
+|Operation kind|Arguments|Result|
+|---|---|---|
+|Immediate function|Evalúa sus operands antes de invocar|Value|
+|Primitive literal|Consume atoms de payload sin evaluarlos|Value|
+|Variable operation|Consume un nombre y opcionalmente un value invoke|Value para `var.get`; none para `var.set`|
+|Control flow|Decide cuándo y cuántas veces evaluar sus operands|None|
+|Computed value|Evalúa su expresión dentro del scope actual|Value|
 
 Los invokes sólo se resuelven contra operaciones registradas y computed values del bundle.
 La representación es canónica: un invoke sin argumentos es un `Atom`; una lista con un
@@ -166,9 +166,9 @@ short-circuit y no evalúan el segundo operando cuando el primero determina el r
 
 ## Block
 
-Un block no es un invoke. Es una posición interpretada como body por el bundle o por
-una operación de control como `case` o `for_each`. Una expresión sola es un block de
-una instrucción; varias expresiones se agrupan directamente:
+Un block no es un invoke y no produce un value. Es una secuencia usada como body por el
+bundle o por una operación de control como `case` o `for_each`. Un invoke solo no
+necesita wrapper; varios invokes se agrupan directamente:
 
 ```json
 [
@@ -179,6 +179,8 @@ una instrucción; varias expresiones se agrupan directamente:
 ```
 
 ## Case
+
+`case` ejecuta el body de la primera condición `bool.true` y no produce un value.
 
 ```json
 [
@@ -192,6 +194,8 @@ una instrucción; varias expresiones se agrupan directamente:
 
 ## For Each
 
+`for_each` ejecuta su body para cada elemento y no produce un value.
+
 ```json
 [
   "for_each",
@@ -204,6 +208,11 @@ una instrucción; varias expresiones se agrupan directamente:
   ]
 ]
 ```
+
+## Loop control
+
+`loop.break` y `loop.continue` no reciben argumentos ni producen un value. Sólo son
+válidos dentro de un loop.
 
 ## Dial9 functions
 
@@ -262,7 +271,7 @@ La ejecución sobre eventos no recorre el AST ni resuelve nombres de operaciones
 |---|---|
 |Primitive literals|`null.const`, `bool.true`, `bool.false`, `integer.zero`, `integer.const`, `float.zero`, `float.const`, `string.const`|
 |Variables|`var.get`, `var.set`|
-|Control flow|`case`, `for_each`|
+|Control flow|`case`, `for_each`, `loop.break`, `loop.continue`|
 |Conversion|`integer.from`, `float.from`, `string.from`|
 |Type checks|`null.is`, `bool.is`, `integer.is`, `float.is`, `string.is`, `list.is`, `map.is`, `bytes.is`|
 |Integer math|`integer.add`, `integer.subtract`, `integer.multiply`, `integer.divide`, `integer.pow`|
