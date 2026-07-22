@@ -54,6 +54,15 @@ la tab o agotar memoria mediante un algoritmo costoso, pero eso no le concede nu
 capabilities. Más adelante podrían añadirse contadores de operaciones, iteraciones y
 allocations sin cambiar el IR público.
 
+## Errores
+
+- Recoverable errors provienen de datos inválidos o ausentes, como una conversión
+  fallida, tipos incompatibles, división por cero o un resultado no finito. Devuelven
+  `null`, que puede propagarse o manejarse explícitamente con `null.is`.
+- Fatal errors indican un programa inválido o una violación del runtime, como un invoke
+  desconocido, arity incorrecta o un intento de mutar una view. Abortan la ejecución
+  actual y producen un diagnóstico.
+
 ## S-expression
 
 ```rust
@@ -148,6 +157,12 @@ Para debugging, `diagnostic.type_name` devuelve el nombre del tipo lógico:
 
 La representación física no afecta estos resultados: `Array` y `ListView` son list;
 `Map` y `MapView` son map.
+
+### Booleanos
+
+`bool.not`, `bool.and` y `bool.or` sólo aceptan bools; cualquier otro valor, incluido
+`null`, produce `null` como recoverable type error. `bool.and` y `bool.or` hacen
+short-circuit y no evalúan el segundo operando cuando el primero determina el resultado.
 
 ## Block
 
