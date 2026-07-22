@@ -35,7 +35,6 @@ export type ExternalFunction = (...args: ScriptValue[]) => unknown;
 
 export interface CompileOptions {
   readonly functions?: Readonly<Record<string, ExternalFunction>>;
-  readonly computedValues?: Readonly<Record<string, SExpr>>;
   readonly onDiagnostic?: (diagnostic: ScriptDiagnostic) => void;
 }
 
@@ -108,8 +107,6 @@ interface Scope {
 
 interface CompileContext {
   readonly externalIds: ReadonlyMap<string, number>;
-  readonly computedValues: ReadonlyMap<string, SExpr>;
-  readonly computedStack: string[];
   readonly expressionTemporaries: string[];
   nextVariable: number;
   nextTemporary: number;
@@ -203,7 +200,7 @@ export function compile(sexpr: SExpr, options: CompileOptions = {}): CompiledPro
 
   for (const [name, fn] of externalEntries) {
     if (name.length === 0) throw new ScriptCompileError("external invoke name cannot be empty");
-    if (BUILT_INS.has(name) || name.startsWith("computed.")) {
+    if (BUILT_INS.has(name)) {
       throw new ScriptCompileError(`external invoke ${quote(name)} uses a reserved name`);
     }
     if (typeof fn !== "function") {
@@ -213,20 +210,8 @@ export function compile(sexpr: SExpr, options: CompileOptions = {}): CompiledPro
     externalFunctions.push(fn);
   }
 
-  const computedValues = new Map<string, SExpr>();
-  for (const [name, expression] of Object.entries(options.computedValues ?? {})) {
-    if (name.length === 0 || name.includes(".")) {
-      throw new ScriptCompileError(
-        `computed value name ${quote(name)} must be a non-empty unqualified name`,
-      );
-    }
-    computedValues.set(name, expression);
-  }
-
   const context: CompileContext = {
     externalIds,
-    computedValues,
-    computedStack: [],
     expressionTemporaries: [],
     nextVariable: 0,
     nextTemporary: 0,
@@ -431,27 +416,6 @@ function compileInvoke(
     exactArity(operation, operands, arity, path);
     const args = compileValues(operands, path, scope, loopDepth, context);
     return value(`runtime.${method}(${args.join(",")})`);
-  }
-
-  if (operation.startsWith("computed.")) {
-    exactArity(operation, operands, 0, path);
-    const name = operation.slice("computed.".length);
-    const expression = context.computedValues.get(name);
-    if (expression === undefined) {
-      throw new ScriptCompileError(`unknown computed value ${quote(name)}`, path);
-    }
-    if (context.computedStack.includes(name)) {
-      const cycle = [...context.computedStack, name].join(" -> ");
-      throw new ScriptCompileError(`computed value cycle: ${cycle}`, path);
-    }
-    context.computedStack.push(name);
-    try {
-      return value(
-        compileValue(expression, `computed.${name}`, scope, loopDepth, context),
-      );
-    } finally {
-      context.computedStack.pop();
-    }
   }
 
   const externalId = context.externalIds.get(operation);

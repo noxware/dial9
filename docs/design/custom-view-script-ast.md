@@ -4,7 +4,7 @@ Este documento define tres componentes para crear vistas dinámicas en el viewer
 
 - Dial9 Script IR: un lenguaje de scripting imperativo, dinámico y minimalista, representado como S-expressions JSON y diseñado para compilarse en runtime a JavaScript especializado para su ejecución en el browser. Sólo permite las APIs registradas explícitamente y no expone I/O por defecto. El lenguaje es independiente de Dial9.
 - Stackable/composable rendering components: primitivas visuales predefinidas que consumen los outputs de los scripts para producir gráficos, tooltips, legends y otros elementos de un panel.
-- Bundle: un conjunto de computed values y custom views expresados mediante el lenguaje de scripting y los rendering components stackeables.
+- Bundle: un script, sus outputs y custom views expresadas mediante los rendering components stackeables.
 
 # Dial9 Script IR
 
@@ -103,9 +103,8 @@ invoke = "zero_argument_operation"
 |Primitive literal|Consume atoms de payload sin evaluarlos|Value|
 |Variable operation|Consume un nombre; `var.let` y `var.set` también consumen un value invoke|Value para `var.get`; none para `var.let` y `var.set`|
 |Control flow|Decide cuándo y cuántas veces evaluar sus operands|None|
-|Computed value|Evalúa su expresión dentro del scope actual|Value|
 
-Los invokes sólo se resuelven contra operaciones registradas y computed values del bundle.
+Los invokes sólo se resuelven contra operaciones built-in y funciones registradas.
 La representación es canónica: un invoke sin argumentos es un `Atom`; una lista con un
 solo elemento, como `["do_something"]`, es inválida.
 
@@ -239,8 +238,6 @@ válidos dentro de un loop.
 |`dial9.pointer`|MapView o `null`|
 |`dial9.output.emit`|Agrega un valor a un output|
 
-Un computed value hereda el scope de su invocación, incluido el binding `event` de un `for_each`.
-
 ## Interfaces virtuales
 
 |Value lógico|Implementación posible|
@@ -319,14 +316,8 @@ Con argumentos, `map.new` exige pares `key, value`.
 ```rust
 struct Bundle {
     version: u32,
-    computed_values: BTreeMap<String, ComputedValue>,
     outputs: BTreeMap<String, Output>,
     script: SExpr,
-}
-
-struct ComputedValue {
-    unit: Option<String>,
-    expression: SExpr,
 }
 
 struct Output {
@@ -349,16 +340,6 @@ struct Output {
 ```json
 {
   "version": 1,
-  "computed_values": {
-    "cpu_time": {
-      "unit": "ns",
-      "expression": [
-        "integer.add",
-        ["map.get", ["var.get", "event"], ["string.const", "user_cpu_ns"]],
-        ["map.get", ["var.get", "event"], ["string.const", "system_cpu_ns"]]
-      ]
-    }
-  },
   "outputs": {
     "cpu_intervals": {
       "units": {
@@ -384,7 +365,15 @@ struct Output {
         ["cmp.eq", ["map.get", ["var.get", "event"], ["string.const", "kind"]], ["string.const", "ProcessResourceUsageEvent"]],
         [
           ["var.let", "current_time", ["map.get", ["var.get", "event"], ["string.const", "time"]]],
-          ["var.let", "current_cpu_time", "computed.cpu_time"],
+          [
+            "var.let",
+            "current_cpu_time",
+            [
+              "integer.add",
+              ["map.get", ["var.get", "event"], ["string.const", "user_cpu_ns"]],
+              ["map.get", ["var.get", "event"], ["string.const", "system_cpu_ns"]]
+            ]
+          ],
           [
             "case",
             ["var.get", "has_previous"],

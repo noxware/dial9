@@ -241,42 +241,6 @@ describe("control flow", () => {
   });
 });
 
-describe("computed values", () => {
-  it("expands in the invocation scope and can reference other computed values", () => {
-    const seen: ScriptValue[] = [];
-    const program: SExpr = [
-      "for_each",
-      "event",
-      "index",
-      ["list.new", integer(2), integer(4)],
-      ["test.capture", "computed.quadruple"],
-    ];
-
-    compile(program, {
-      computedValues: {
-        double: ["integer.add", get("event"), get("event")],
-        quadruple: ["integer.multiply", "computed.double", integer(2)],
-      },
-      functions: {
-        "test.capture": (entry) => {
-          seen.push(entry);
-          return null;
-        },
-      },
-    })();
-    expect(seen).toEqual([8n, 16n]);
-  });
-
-  it("rejects unknown and cyclic computed values", () => {
-    expect(() => compile("computed.missing")).toThrow(/unknown computed value/);
-    expect(() =>
-      compile("computed.a", {
-        computedValues: { a: "computed.b", b: "computed.a" },
-      }),
-    ).toThrow(/computed value cycle: a -> b -> a/);
-  });
-});
-
 describe("CPU usage specification example", () => {
   it("derives intervals through registered Dial9 invokes without engine coupling", () => {
     const field = (name: string): SExpr => ["map.get", get("event"), string(name)];
@@ -294,7 +258,11 @@ describe("CPU usage specification example", () => {
           ["cmp.eq", field("kind"), string("ProcessResourceUsageEvent")],
           [
             ["var.let", "current_time", field("time")],
-            ["var.let", "current_cpu_time", "computed.cpu_time"],
+            [
+              "var.let",
+              "current_cpu_time",
+              ["integer.add", field("user_cpu_ns"), field("system_cpu_ns")],
+            ],
             [
               "case",
               get("has_previous"),
@@ -359,9 +327,6 @@ describe("CPU usage specification example", () => {
     const emitted: Map<ScriptValue, ScriptValue>[] = [];
     const diagnostics: string[] = [];
     const program = compile(script, {
-      computedValues: {
-        cpu_time: ["integer.add", field("user_cpu_ns"), field("system_cpu_ns")],
-      },
       functions: {
         "dial9.events": () => events,
         cpu_intervals: () => "cpu_intervals",
@@ -648,12 +613,9 @@ describe("validation", () => {
     );
   });
 
-  it("rejects reserved external names and invalid computed names", () => {
+  it("rejects reserved external names", () => {
     expect(() => compile("integer.zero", { functions: { "integer.add": () => 1n } })).toThrow(
       /reserved name/,
-    );
-    expect(() => compile("integer.zero", { computedValues: { "bad.name": integer(1) } })).toThrow(
-      /unqualified name/,
     );
   });
 });
