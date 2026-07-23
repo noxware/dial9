@@ -13,6 +13,7 @@ import {
   compile,
   createListView,
   createMapView,
+  type MapView,
   type SExpr,
   type ScriptValue,
 } from "./ir.js";
@@ -200,6 +201,39 @@ function nativeCpuProgram(): void {
   nativeCpuIntervals = intervals;
 }
 
+let nativeViewCpuIntervals: NativeCpuInterval[] = [];
+
+function nativeViewCpuProgram(): void {
+  const intervals: NativeCpuInterval[] = [];
+  let previousTime: number | null = null;
+  let previousCpuTime: number | null = null;
+
+  for (let index = 0; index < cpuEventList.length; index++) {
+    const event = cpuEventList.get(index) as MapView;
+    if (event.get("kind") !== RESOURCE_EVENT) continue;
+    const currentTime = event.get("time") as number;
+    const currentCpuTime =
+      (event.get("user_cpu_ns") as number) + (event.get("system_cpu_ns") as number);
+    if (previousTime !== null && previousCpuTime !== null) {
+      const wallDeltaNs = currentTime - previousTime;
+      const cpuDeltaNs = currentCpuTime - previousCpuTime;
+      if (wallDeltaNs > 0 && cpuDeltaNs >= 0) {
+        intervals.push({
+          start: previousTime,
+          end: currentTime,
+          wallDeltaNs,
+          cpuDeltaNs,
+          cores: cpuDeltaNs / wallDeltaNs,
+        });
+      }
+    }
+    previousTime = currentTime;
+    previousCpuTime = currentCpuTime;
+  }
+
+  nativeViewCpuIntervals = intervals;
+}
+
 let currentViewerCpuResult: ReturnType<typeof buildProcessCpuUsageSeries> | null = null;
 
 function currentViewerCpuProgram(): void {
@@ -209,11 +243,28 @@ function currentViewerCpuProgram(): void {
 const get = (name: string): SExpr => ["var.get", name];
 const string = (value: string): SExpr => ["string.const", value];
 const field = (name: string): SExpr => ["map.get", get("event"), string(name)];
+const cores = (): SExpr => ["number.divide", get("cpu_delta"), get("wall_delta")];
+const intervalMap = (): SExpr => [
+  "map.new",
+  string("start"),
+  get("previous_time"),
+  string("end"),
+  get("current_time"),
+  string("wallDeltaNs"),
+  get("wall_delta"),
+  string("cpuDeltaNs"),
+  get("cpu_delta"),
+  string("cores"),
+  cores(),
+];
 
-let scriptCpuIntervals: Map<ScriptValue, ScriptValue>[] = [];
-
-const scriptCpuProgram = compile(
-  [
+function cpuDerivationProgram(
+  validIntervalBody: readonly SExpr[],
+  before: readonly SExpr[] = [],
+  after: readonly SExpr[] = [],
+): SExpr[] {
+  return [
+    ...before,
     ["var.let", "has_previous", "bool.false"],
     ["var.let", "previous_time", "null.const"],
     ["var.let", "previous_cpu_time", "null.const"],
@@ -254,25 +305,7 @@ const scriptCpuProgram = compile(
                     ["cmp.gt", get("wall_delta"), "number.zero"],
                     ["cmp.gte", get("cpu_delta"), "number.zero"],
                   ],
-                  [
-                    [
-                      "dial9.output.emit",
-                      "cpu_intervals",
-                      [
-                        "map.new",
-                        string("start"),
-                        get("previous_time"),
-                        string("end"),
-                        get("current_time"),
-                        string("wallDeltaNs"),
-                        get("wall_delta"),
-                        string("cpuDeltaNs"),
-                        get("cpu_delta"),
-                        string("cores"),
-                        ["number.divide", get("cpu_delta"), get("wall_delta")],
-                      ],
-                    ],
-                  ],
+                  validIntervalBody,
                   "bool.true",
                   ["null.const"],
                 ],
@@ -289,10 +322,102 @@ const scriptCpuProgram = compile(
         ],
       ],
     ],
+    ...after,
+  ];
+}
+
+const dial9Events = { "dial9.events": () => cpuEventList };
+
+let probeValue: ScriptValue = null;
+const consumeProbe = (value: ScriptValue): null => {
+  probeValue = value;
+  return null;
+};
+
+const filterOnlyProgram = compile(
+  [
+    ["var.let", "matched", "number.zero"],
+    [
+      "list.for_each",
+      "event",
+      "index",
+      "dial9.events",
+      [
+        [
+          "case",
+          ["cmp.eq", field("kind"), string(RESOURCE_EVENT)],
+          [
+            [
+              "var.set",
+              "matched",
+              ["number.add", get("matched"), ["number.const", "1"]],
+            ],
+          ],
+          "bool.true",
+          ["null.const"],
+        ],
+      ],
+    ],
+    ["benchmark.consume", get("matched")],
   ],
+  { functions: { ...dial9Events, "benchmark.consume": consumeProbe } },
+);
+
+const computeOnlyProgram = compile(
+  cpuDerivationProgram(
+    [["var.set", "checksum", ["number.add", get("checksum"), cores()]]],
+    [["var.let", "checksum", "number.zero"]],
+    [["benchmark.consume", get("checksum")]],
+  ),
+  { functions: { ...dial9Events, "benchmark.consume": consumeProbe } },
+);
+
+let scalarCpuIntervals: ScriptValue[] = [];
+const emitScalarProgram = compile(
+  cpuDerivationProgram([["dial9.output.emit", "cpu_values", cores()]]),
   {
     functions: {
-      "dial9.events": () => cpuEventList,
+      ...dial9Events,
+      cpu_values: () => "cpu_values",
+      "dial9.output.emit": (output, value) => {
+        if (output !== "cpu_values") throw new TypeError("invalid scalar output");
+        scalarCpuIntervals.push(value);
+        return null;
+      },
+    },
+  },
+);
+
+function runEmitScalarProgram(): void {
+  scalarCpuIntervals = [];
+  emitScalarProgram();
+}
+
+const collectScalarsProgram = compile(
+  cpuDerivationProgram(
+    [["list.push", get("collected"), cores()]],
+    [["var.let", "collected", "list.new"]],
+    [["benchmark.consume", get("collected")]],
+  ),
+  { functions: { ...dial9Events, "benchmark.consume": consumeProbe } },
+);
+
+const collectMapsProgram = compile(
+  cpuDerivationProgram(
+    [["list.push", get("collected"), intervalMap()]],
+    [["var.let", "collected", "list.new"]],
+    [["benchmark.consume", get("collected")]],
+  ),
+  { functions: { ...dial9Events, "benchmark.consume": consumeProbe } },
+);
+
+let scriptCpuIntervals: Map<ScriptValue, ScriptValue>[] = [];
+
+const scriptCpuProgram = compile(
+  cpuDerivationProgram([["dial9.output.emit", "cpu_intervals", intervalMap()]]),
+  {
+    functions: {
+      ...dial9Events,
       cpu_intervals: () => "cpu_intervals",
       "dial9.output.emit": (output, interval) => {
         if (output !== "cpu_intervals" || !(interval instanceof Map)) {
@@ -311,22 +436,50 @@ function runScriptCpuProgram(): void {
 }
 
 nativeCpuProgram();
+nativeViewCpuProgram();
 currentViewerCpuProgram();
+filterOnlyProgram();
+const filterCount = probeValue;
+computeOnlyProgram();
+const computeChecksum = probeValue;
+runEmitScalarProgram();
+collectScalarsProgram();
+const collectedScalars = probeValue;
+collectMapsProgram();
+const collectedMaps = probeValue;
 runScriptCpuProgram();
 
 const expectedIntervals = EVENT_COUNT / 4 - 1;
 if (
   nativeCpuIntervals.length !== expectedIntervals ||
+  nativeViewCpuIntervals.length !== expectedIntervals ||
   currentViewerCpuResult?.intervals.length !== expectedIntervals ||
+  filterCount !== EVENT_COUNT / 4 ||
+  typeof computeChecksum !== "number" ||
+  Math.abs(computeChecksum - expectedIntervals * 0.05) > 1e-9 ||
+  scalarCpuIntervals.length !== expectedIntervals ||
+  scalarCpuIntervals.at(-1) !== 0.05 ||
+  !Array.isArray(collectedScalars) ||
+  collectedScalars.length !== expectedIntervals ||
+  collectedScalars.at(-1) !== 0.05 ||
+  !Array.isArray(collectedMaps) ||
+  collectedMaps.length !== expectedIntervals ||
+  !(collectedMaps.at(-1) instanceof Map) ||
   scriptCpuIntervals.length !== expectedIntervals ||
   scriptCpuIntervals.at(-1)?.get("cores") !== 0.05
 ) {
   throw new Error("CPU benchmark programs produced different results");
 }
 
-describe(`derive CPU intervals from ${EVENT_COUNT.toLocaleString()} mixed events`, () => {
-  const options = { time: 1_500 };
-  bench("JavaScript direct single pass", nativeCpuProgram, options);
-  bench("Current viewer buildProcessCpuUsageSeries", currentViewerCpuProgram, options);
-  bench("Script IR over ListView/MapView", runScriptCpuProgram, options);
+describe(`CPU bottlenecks over ${EVENT_COUNT.toLocaleString()} mixed events`, () => {
+  const options = { time: 1_000 };
+  bench("01 JS direct objects + object outputs", nativeCpuProgram, options);
+  bench("02 JS direct views + object outputs", nativeViewCpuProgram, options);
+  bench("03 current viewer CPU implementation", currentViewerCpuProgram, options);
+  bench("04 IR views + filter only", filterOnlyProgram, options);
+  bench("05 IR views + CPU math, no outputs", computeOnlyProgram, options);
+  bench("06 IR CPU math + scalars collected once", collectScalarsProgram, options);
+  bench("07 IR CPU math + scalar emit", runEmitScalarProgram, options);
+  bench("08 IR CPU math + maps collected once", collectMapsProgram, options);
+  bench("09 IR CPU math + map emit", runScriptCpuProgram, options);
 });
