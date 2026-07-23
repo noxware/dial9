@@ -74,6 +74,195 @@ normalizeForeign(view[LIST_VIEW_GET](index))
 
 Using an instruction with the wrong structure encounters a missing private symbol and fails before applying a trace-controlled property key or JavaScript coercion. View getters expose logical foreign data, not properties of the wrapper, and recursively normalize nested results.
 
+## Instructions
+
+Numeric literal payloads are validated as complete literals, parsed, and emitted again in canonical form. `parseFloat` is not used, and trace-provided payloads are never copied directly into generated JavaScript.
+
+### Literals
+
+```json
+"undefined.const"
+"null.const"
+"bool.true"
+"bool.false"
+["number.const", "4.3"]
+["bigint.const", "42"]
+["string.const", "hello"]
+"obj.new"
+"list.new"
+["obj.new", ["string.const", "x"], ["number.const", "4.3"]]
+["list.new", ["number.const", "1"], ["number.const", "2"]]
+```
+
+### Type predicates
+
+```json
+["undefined.is", ["var.get", "value"]]
+["null.is", ["var.get", "value"]]
+["bool.is", ["var.get", "value"]]
+["number.is", ["var.get", "value"]]
+["bigint.is", ["var.get", "value"]]
+["string.is", ["var.get", "value"]]
+["obj.is", ["var.get", "value"]]
+["list.is", ["var.get", "value"]]
+["map_view.is", ["var.get", "value"]]
+["list_view.is", ["var.get", "value"]]
+```
+
+### Conversions
+
+```json
+["number.from", ["var.get", "value"]]
+["bigint.from", ["var.get", "value"]]
+["string.from", ["var.get", "value"]]
+```
+
+### Number
+
+```json
+["number.add", ["var.get", "left"], ["var.get", "right"]]
+["number.subtract", ["var.get", "left"], ["var.get", "right"]]
+["number.multiply", ["var.get", "left"], ["var.get", "right"]]
+["number.divide", ["var.get", "left"], ["var.get", "right"]]
+["number.remainder", ["var.get", "left"], ["var.get", "right"]]
+["number.pow", ["var.get", "base"], ["var.get", "exponent"]]
+["number.negate", ["var.get", "value"]]
+["number.abs", ["var.get", "value"]]
+["number.floor", ["var.get", "value"]]
+["number.ceil", ["var.get", "value"]]
+["number.round", ["var.get", "value"]]
+["number.trunc", ["var.get", "value"]]
+["number.min", ["var.get", "left"], ["var.get", "right"]]
+["number.max", ["var.get", "left"], ["var.get", "right"]]
+["number.is_finite", ["var.get", "value"]]
+["number.is_nan", ["var.get", "value"]]
+```
+
+### BigInt
+
+```json
+["bigint.add", ["var.get", "left"], ["var.get", "right"]]
+["bigint.subtract", ["var.get", "left"], ["var.get", "right"]]
+["bigint.multiply", ["var.get", "left"], ["var.get", "right"]]
+["bigint.divide", ["var.get", "left"], ["var.get", "right"]]
+["bigint.remainder", ["var.get", "left"], ["var.get", "right"]]
+["bigint.pow", ["var.get", "base"], ["var.get", "exponent"]]
+["bigint.negate", ["var.get", "value"]]
+```
+
+### Comparison and logic
+
+```json
+["cmp.strict_equal", ["var.get", "left"], ["var.get", "right"]]
+["cmp.strict_not_equal", ["var.get", "left"], ["var.get", "right"]]
+["cmp.lt", ["var.get", "left"], ["var.get", "right"]]
+["cmp.lte", ["var.get", "left"], ["var.get", "right"]]
+["cmp.gt", ["var.get", "left"], ["var.get", "right"]]
+["cmp.gte", ["var.get", "left"], ["var.get", "right"]]
+["bool.not", ["var.get", "value"]]
+["bool.and", ["var.get", "left"], ["var.get", "right"]]
+["bool.or", ["var.get", "left"], ["var.get", "right"]]
+```
+
+### String
+
+```json
+["string.concat", ["var.get", "left"], ["var.get", "right"]]
+["string.length", ["var.get", "value"]]
+["string.includes", ["var.get", "value"], ["var.get", "search"]]
+["string.starts_with", ["var.get", "value"], ["var.get", "prefix"]]
+["string.ends_with", ["var.get", "value"], ["var.get", "suffix"]]
+["string.slice", ["var.get", "value"], ["var.get", "start"], ["var.get", "end"]]
+```
+
+### Variables
+
+```json
+["var.let", "value", ["number.const", "1"]]
+["var.get", "value"]
+["var.set", "value", ["number.const", "2"]]
+```
+
+### Control flow
+
+```json
+[
+  "if",
+  ["cmp.gt", ["var.get", "value"], ["number.const", "0"]],
+  [
+    ["var.set", "result", ["string.const", "positive"]]
+  ],
+  [
+    ["var.set", "result", ["string.const", "not positive"]]
+  ]
+]
+
+[
+  "while",
+  ["cmp.lt", ["var.get", "index"], ["number.const", "10"]],
+  [
+    ["var.set", "index", ["number.add", ["var.get", "index"], ["number.const", "1"]]]
+  ]
+]
+
+"loop.break"
+"loop.continue"
+```
+
+### Object
+
+```json
+["obj.get", ["var.get", "object"], ["string.const", "key"]]
+["obj.set", ["var.get", "object"], ["string.const", "key"], ["var.get", "value"]]
+["obj.has", ["var.get", "object"], ["string.const", "key"]]
+["obj.delete", ["var.get", "object"], ["string.const", "key"]]
+["obj.keys", ["var.get", "object"]]
+```
+
+### List
+
+```json
+["list.get", ["var.get", "list"], ["number.const", "0"]]
+["list.set", ["var.get", "list"], ["number.const", "0"], ["var.get", "value"]]
+["list.push", ["var.get", "list"], ["var.get", "value"]]
+["list.pop", ["var.get", "list"]]
+["list.length", ["var.get", "list"]]
+[
+  "list.for_each",
+  "item",
+  "index",
+  ["var.get", "list"],
+  [
+    ["consume", ["var.get", "item"], ["var.get", "index"]]
+  ]
+]
+```
+
+### Read-only views
+
+```json
+["map_view.get", ["var.get", "view"], ["string.const", "key"]]
+["map_view.has", ["var.get", "view"], ["string.const", "key"]]
+["list_view.get", ["var.get", "view"], ["number.const", "0"]]
+["list_view.length", ["var.get", "view"]]
+[
+  "list_view.for_each",
+  "item",
+  "index",
+  ["var.get", "view"],
+  [
+    ["consume", ["var.get", "item"], ["var.get", "index"]]
+  ]
+]
+```
+
+### Registered capabilities
+
+```json
+"host.events"
+["host.emit", ["string.const", "output"], ["var.get", "value"]]
+```
+
 ## Performance
 
 The IR is a safe subset of JavaScript compiled to straightforward JavaScript code. Instructions lower as directly as possible to native operations, with small symbol indirections and other targeted protections only where required to preserve the security boundary.
