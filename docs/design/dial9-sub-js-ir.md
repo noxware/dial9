@@ -117,57 +117,46 @@ Numeric literal payloads are validated as complete literals, parsed, and emitted
 ["string.from", ["var.get", "value"]]
 ```
 
-### Number
+### Operators
+
+`op.eq` and `op.neq` map to JavaScript strict equality (`===` and `!==`). The IR does not expose coercive equality.
 
 ```json
-["number.add", ["var.get", "left"], ["var.get", "right"]]
-["number.subtract", ["var.get", "left"], ["var.get", "right"]]
-["number.multiply", ["var.get", "left"], ["var.get", "right"]]
-["number.divide", ["var.get", "left"], ["var.get", "right"]]
-["number.remainder", ["var.get", "left"], ["var.get", "right"]]
-["number.pow", ["var.get", "base"], ["var.get", "exponent"]]
-["number.negate", ["var.get", "value"]]
-["number.abs", ["var.get", "value"]]
-["number.floor", ["var.get", "value"]]
-["number.ceil", ["var.get", "value"]]
-["number.round", ["var.get", "value"]]
-["number.trunc", ["var.get", "value"]]
-["number.min", ["var.get", "left"], ["var.get", "right"]]
-["number.max", ["var.get", "left"], ["var.get", "right"]]
+["op.add", ["var.get", "left"], ["var.get", "right"]]
+["op.subtract", ["var.get", "left"], ["var.get", "right"]]
+["op.multiply", ["var.get", "left"], ["var.get", "right"]]
+["op.divide", ["var.get", "left"], ["var.get", "right"]]
+["op.remainder", ["var.get", "left"], ["var.get", "right"]]
+["op.pow", ["var.get", "base"], ["var.get", "exponent"]]
+["op.negate", ["var.get", "value"]]
+["op.eq", ["var.get", "left"], ["var.get", "right"]]
+["op.neq", ["var.get", "left"], ["var.get", "right"]]
+["op.lt", ["var.get", "left"], ["var.get", "right"]]
+["op.lte", ["var.get", "left"], ["var.get", "right"]]
+["op.gt", ["var.get", "left"], ["var.get", "right"]]
+["op.gte", ["var.get", "left"], ["var.get", "right"]]
+["op.not", ["var.get", "value"]]
+["op.and", ["var.get", "left"], ["var.get", "right"]]
+["op.or", ["var.get", "left"], ["var.get", "right"]]
+```
+
+### Math
+
+```json
+["math.abs", ["var.get", "value"]]
+["math.floor", ["var.get", "value"]]
+["math.ceil", ["var.get", "value"]]
+["math.round", ["var.get", "value"]]
+["math.trunc", ["var.get", "value"]]
+["math.min", ["var.get", "left"], ["var.get", "right"]]
+["math.max", ["var.get", "left"], ["var.get", "right"]]
 ["number.is_finite", ["var.get", "value"]]
 ["number.is_nan", ["var.get", "value"]]
-```
-
-### BigInt
-
-```json
-["bigint.add", ["var.get", "left"], ["var.get", "right"]]
-["bigint.subtract", ["var.get", "left"], ["var.get", "right"]]
-["bigint.multiply", ["var.get", "left"], ["var.get", "right"]]
-["bigint.divide", ["var.get", "left"], ["var.get", "right"]]
-["bigint.remainder", ["var.get", "left"], ["var.get", "right"]]
-["bigint.pow", ["var.get", "base"], ["var.get", "exponent"]]
-["bigint.negate", ["var.get", "value"]]
-```
-
-### Comparison and logic
-
-```json
-["cmp.strict_equal", ["var.get", "left"], ["var.get", "right"]]
-["cmp.strict_not_equal", ["var.get", "left"], ["var.get", "right"]]
-["cmp.lt", ["var.get", "left"], ["var.get", "right"]]
-["cmp.lte", ["var.get", "left"], ["var.get", "right"]]
-["cmp.gt", ["var.get", "left"], ["var.get", "right"]]
-["cmp.gte", ["var.get", "left"], ["var.get", "right"]]
-["bool.not", ["var.get", "value"]]
-["bool.and", ["var.get", "left"], ["var.get", "right"]]
-["bool.or", ["var.get", "left"], ["var.get", "right"]]
 ```
 
 ### String
 
 ```json
-["string.concat", ["var.get", "left"], ["var.get", "right"]]
 ["string.length", ["var.get", "value"]]
 ["string.includes", ["var.get", "value"], ["var.get", "search"]]
 ["string.starts_with", ["var.get", "value"], ["var.get", "prefix"]]
@@ -187,21 +176,24 @@ Numeric literal payloads are validated as complete literals, parsed, and emitted
 
 ```json
 [
-  "if",
-  ["cmp.gt", ["var.get", "value"], ["number.const", "0"]],
+  "case",
+  ["op.gt", ["var.get", "value"], ["number.const", "0"]],
   [
     ["var.set", "result", ["string.const", "positive"]]
   ],
+  "bool.true",
   [
     ["var.set", "result", ["string.const", "not positive"]]
   ]
 ]
 
 [
-  "while",
-  ["cmp.lt", ["var.get", "index"], ["number.const", "10"]],
+  "loop.for_each",
+  "item",
+  "index",
+  ["var.get", "values"],
   [
-    ["var.set", "index", ["number.add", ["var.get", "index"], ["number.const", "1"]]]
+    ["consume", ["var.get", "item"], ["var.get", "index"]]
   ]
 ]
 
@@ -227,15 +219,6 @@ Numeric literal payloads are validated as complete literals, parsed, and emitted
 ["list.push", ["var.get", "list"], ["var.get", "value"]]
 ["list.pop", ["var.get", "list"]]
 ["list.length", ["var.get", "list"]]
-[
-  "list.for_each",
-  "item",
-  "index",
-  ["var.get", "list"],
-  [
-    ["consume", ["var.get", "item"], ["var.get", "index"]]
-  ]
-]
 ```
 
 ### Read-only views
@@ -245,15 +228,6 @@ Numeric literal payloads are validated as complete literals, parsed, and emitted
 ["map_view.has", ["var.get", "view"], ["string.const", "key"]]
 ["list_view.get", ["var.get", "view"], ["number.const", "0"]]
 ["list_view.length", ["var.get", "view"]]
-[
-  "list_view.for_each",
-  "item",
-  "index",
-  ["var.get", "view"],
-  [
-    ["consume", ["var.get", "item"], ["var.get", "index"]]
-  ]
-]
 ```
 
 ### Registered capabilities
