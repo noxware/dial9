@@ -18,20 +18,18 @@
 - Consequently, applying `obj.get` to a string cannot reach `String.prototype`: the instruction first requires the private object symbol and fails when it is absent.
 - The subset cannot traverse JavaScript prototypes, extract methods, or invoke arbitrary values. JavaScript gadgets such as `"".constructor.constructor("return globalThis")()` must therefore be impossible to express.
 - Symbols and wrapper internals cannot be accessed, reflected on, or enumerated by programs.
-- Native JavaScript objects, arrays, maps, proxies, and functions never enter a program directly.
+- Foreign JavaScript objects, arrays, maps, proxies, and functions never enter a program directly.
 - `MapView` and `ListView` provide read-only access to foreign structures. Values returned by a view are lazily normalized to primitives or further views, so nested host values cannot leak into the program.
-- Only the trusted viewer can register external functions and views. Their return values are normalized to supported primitives or read-only views before the program can observe them.
-- Variable scopes are represented by a private chain of objects terminated by a null prototype, rather than by JavaScript variables. `var.get` and `var.set` only traverse this chain, so names such as `window` or `globalThis` cannot resolve to JavaScript globals.
+- Only the trusted viewer can register external functions and views. Their return values are normalized to supported values before the program can observe them; raw structures become read-only views.
+- Variable scopes are represented by a private chain of objects terminated by a null prototype, rather than by JavaScript variables. Each binding is an internal null-prototype `{ value }` cell, so `var.get` and `var.set` use direct property access through the scope chain without resolving names such as `window` or `globalThis` against JavaScript globals. One object and one cell per lexical binding are created per program execution; repeated scope entries reset cell values to `undefined` without changing object shapes.
 
 ## Structured values
 
 Private symbols are unique `Symbol()` values held by the runtime, never global `Symbol.for()` values. A program can use the operations associated with a wrapper but cannot obtain its symbol or backing value.
 
 ```js
-const object = {
-  __proto__: null,
-  [OBJECT]: { __proto__: null },
-};
+const object = Object.create(null);
+object[OBJECT] = object;
 
 const list = {
   __proto__: null,
@@ -40,13 +38,16 @@ const list = {
 
 const mapView = {
   __proto__: null,
-  [MAP_VIEW_GET]: trustedMapGetter,
+  [MAP_VIEW_ADAPTER]: trustedMapAdapter,
+  [MAP_VIEW_GET]: normalizingMapGetter,
+  [MAP_VIEW_HAS]: mapViewHas,
 };
 
 const listView = {
   __proto__: null,
-  [LIST_VIEW_LENGTH]: trustedLengthGetter,
-  [LIST_VIEW_GET]: trustedListGetter,
+  [LIST_VIEW_ADAPTER]: trustedListAdapter,
+  [LIST_VIEW_LENGTH]: listViewLength,
+  [LIST_VIEW_GET]: normalizingListGetter,
 };
 ```
 
@@ -60,19 +61,35 @@ object[OBJECT][key]
 object[OBJECT][key] = value
 
 // list.get(list, index)
-list[LIST][index]
+list[LIST][+index]
 
 // list.push(list, value)
 list[LIST].push(value)
 
 // map_view.get(view, key)
-normalizeForeign(view[MAP_VIEW_GET](key))
+view[MAP_VIEW_GET](key)
+
+// map_view.has(view, key)
+view[MAP_VIEW_HAS](key)
 
 // list_view.get(view, index)
-normalizeForeign(view[LIST_VIEW_GET](index))
+view[LIST_VIEW_GET](+index)
+
+// list_view.length(view)
+view[LIST_VIEW_LENGTH]()
 ```
 
-Using an instruction with the wrong structure encounters a missing private symbol and fails before applying a trace-controlled property key or JavaScript coercion. View getters expose logical foreign data, not properties of the wrapper, and recursively normalize nested results.
+Using an instruction with the wrong structure encounters a missing private symbol and fails before applying a trace-controlled property key or JavaScript coercion. List indices are converted to numbers before touching their hidden native array, so strings such as `__proto__` cannot traverse `Array.prototype`. View getters expose logical foreign data, not properties of the wrapper, and recursively normalize nested results.
+
+## Host boundary
+
+Registered functions receive `ScriptValue` arguments. A sink such as `host.emit` may store an emitted wrapper by reference in an output list; it does not need to unwrap, clone, or serialize it. Trusted consumers inspect stored values through the runtime's host reader, which recognizes each wrapper and accesses its private symbol without exposing that capability to the program. Because outputs retain references, mutations performed by the program after an emit are visible to later consumers.
+
+## Execution
+
+- An invoke is either its zero-argument operation atom or a non-empty list containing an operation followed by its operands. A one-item list is rejected.
+- Programs and control-flow bodies are blocks: lists of invokes, including when they contain only one invoke.
+- `compile` returns a reusable function with no return value. Programs communicate with the host only through registered capabilities.
 
 ## Instructions
 
