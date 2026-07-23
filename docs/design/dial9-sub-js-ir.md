@@ -21,7 +21,7 @@
 - Foreign JavaScript objects, arrays, maps, proxies, and functions never enter a program directly.
 - `MapView` and `ListView` provide read-only access to foreign structures. Values returned by a view are lazily normalized to primitives or further views, so nested host values cannot leak into the program.
 - Only the trusted viewer can register external functions and views. Their return values are normalized to supported values before the program can observe them; raw structures become read-only views.
-- Variable scopes are represented by a private chain of objects terminated by a null prototype, rather than by JavaScript variables. Each binding is an internal null-prototype `{ value }` cell, so `var.get` and `var.set` use direct property access through the scope chain without resolving names such as `window` or `globalThis` against JavaScript globals. One object and one cell per lexical binding are created per program execution; repeated scope entries reset cell values to `undefined` without changing object shapes.
+- Variable names are resolved against a lexical scope tree at compile time. Each binding receives a compiler-generated identifier such as `$v0`; trace-provided names never become JavaScript identifiers. `var.get` and `var.set` fail compilation when no binding exists in the current or an enclosing scope, so names such as `window` and `globalThis` cannot resolve to JavaScript globals. Every block predeclares its bindings before its instructions are compiled, preventing an earlier access from accidentally resolving past a later shadowing declaration. Bindings are emitted as native `let` declarations inside the strict generated function.
 
 ## Structured values
 

@@ -227,16 +227,19 @@ export const scriptValueReader: ScriptValueReader = {
 
 interface CompileContext {
   readonly externalIds: ReadonlyMap<string, number>;
-  readonly scopes: Array<{ readonly name: string; readonly parent: string | null }>;
-  readonly bindings: Map<string, Set<string>>;
   readonly expressionTemporaries: string[];
-  nextScope: number;
+  nextVariable: number;
   nextTemporary: number;
+}
+
+interface LexicalScope {
+  readonly parent: LexicalScope | null;
+  readonly bindings: Map<string, string>;
 }
 
 interface Frame {
   readonly path: string;
-  readonly scope: string;
+  readonly scope: LexicalScope;
   readonly loopDepth: number;
   readonly context: CompileContext;
 }
@@ -252,7 +255,6 @@ interface RuntimeBindings {
   readonly MAP_VIEW_HAS: typeof MAP_VIEW_HAS;
   readonly LIST_VIEW_GET: typeof LIST_VIEW_GET;
   readonly LIST_VIEW_LENGTH: typeof LIST_VIEW_LENGTH;
-  readonly scope: (parent: object | null) => object;
   readonly newObject: () => ScriptObject;
   readonly hasOwn: typeof Object.hasOwn;
   readonly objectKeys: (value: ScriptObject) => ScriptList;
@@ -403,31 +405,21 @@ export function compile(program: ScriptBlock, options: CompileOptions = {}): Com
 
   const context: CompileContext = {
     externalIds,
-    scopes: [{ name: "$scope0", parent: null }],
-    bindings: new Map(),
     expressionTemporaries: [],
-    nextScope: 1,
+    nextVariable: 0,
     nextTemporary: 0,
   };
-  const frame: Frame = { path: "$", scope: "$scope0", loopDepth: 0, context };
-  const body = compileBlock(program, frame);
-  const scopes = context.scopes
-    .map(({ name, parent }) => `const ${name}=$.scope(${parent ?? "null"});`)
-    .join("\n");
-  const bindings = [...context.bindings]
-    .flatMap(([scope, names]) =>
-      [...names].map(
-        (name) => `${scope}[${stringLiteral(name)}]={__proto__:null,value:void 0};`,
-      ),
-    )
-    .join("\n");
+  const rootScope = createScope(null);
+  const frame: Frame = { path: "$", scope: rootScope, loopDepth: 0, context };
+  predeclareBlock(program, frame);
+  const body = `${declareScope(rootScope)}${compileBlock(program, frame)}`;
   const temporaries =
     context.expressionTemporaries.length === 0
       ? ""
       : `let ${context.expressionTemporaries.join(",")};\n`;
   const source =
     `"use strict";\nreturn function compiledSubJsProgram(){\n` +
-    indent(`${scopes}\n${bindings}\n${temporaries}${body}`) +
+    indent(`"use strict";\n${temporaries}${body}`) +
     `\n};`;
 
   try {
@@ -446,7 +438,6 @@ function createRuntime(externals: readonly ExternalFunction[]): RuntimeBindings 
     MAP_VIEW_HAS,
     LIST_VIEW_GET,
     LIST_VIEW_LENGTH,
-    scope: (parent) => Object.create(parent),
     newObject() {
       const object = Object.create(null) as ScriptObject;
       (object as { [OBJECT]: ScriptObject })[OBJECT] = object;
@@ -586,9 +577,9 @@ function compileInvoke(node: SExpr, frame: Frame): Compiled {
     case "var.let": {
       exactArity(operation, operands, 2, frame.path);
       const name = atom(operands[0], at(frame, "[1]").path, "variable name");
-      addBinding(frame.context, frame.scope, name);
+      const binding = resolveOwnBinding(frame.scope, name, at(frame, "[1]").path);
       return statement(
-        `${frame.scope}[${stringLiteral(name)}].value=${compileValue(
+        `${binding}=${compileValue(
           operands[1]!,
           at(frame, "[2]"),
         )};`,
@@ -597,13 +588,14 @@ function compileInvoke(node: SExpr, frame: Frame): Compiled {
     case "var.get": {
       exactArity(operation, operands, 1, frame.path);
       const name = atom(operands[0], at(frame, "[1]").path, "variable name");
-      return expression(`(${frame.scope}[${stringLiteral(name)}]?.value)`);
+      return expression(resolveBinding(frame.scope, name, at(frame, "[1]").path));
     }
     case "var.set": {
       exactArity(operation, operands, 2, frame.path);
       const name = atom(operands[0], at(frame, "[1]").path, "variable name");
+      const binding = resolveBinding(frame.scope, name, at(frame, "[1]").path);
       return expression(
-        `(${frame.scope}[${stringLiteral(name)}].value=${compileValue(
+        `(${binding}=${compileValue(
           operands[1]!,
           at(frame, "[2]"),
         )})`,
@@ -714,19 +706,21 @@ function compileCase(operands: readonly SExpr[], frame: Frame): Compiled {
   const branches: string[] = [];
   for (let index = 0; index < operands.length; index += 2) {
     const condition = compileValue(operands[index]!, at(frame, `[${index + 1}]`));
-    const scope = nextScope(frame.context, frame.scope);
+    const scope = createScope(frame.scope);
     const bodyNode = operands[index + 1]!;
     if (!Array.isArray(bodyNode)) {
       throw new ScriptCompileError("body must be a block", at(frame, `[${index + 2}]`).path);
     }
-    const body = compileBlock(bodyNode, {
+    const bodyFrame = {
       ...frame,
       path: at(frame, `[${index + 2}]`).path,
       scope,
-    });
+    };
+    predeclareBlock(bodyNode, bodyFrame);
+    const body = compileBlock(bodyNode, bodyFrame);
     branches.push(
       `${index === 0 ? "if" : "else if"}(${condition}){\n` +
-        indent(`${clearScope(frame.context, scope)}${body}`) +
+        indent(`${declareScope(scope)}${body}`) +
         `\n}`,
     );
   }
@@ -746,28 +740,32 @@ function compileForEach(operands: readonly SExpr[], frame: Frame): Compiled {
   if (!Array.isArray(bodyNode)) {
     throw new ScriptCompileError("body must be a block", at(frame, "[4]").path);
   }
-  const iterationScope = nextScope(frame.context, frame.scope);
-  addBinding(frame.context, iterationScope, itemName);
-  addBinding(frame.context, iterationScope, indexName);
-  const body = compileBlock(bodyNode, {
+  const iterationScope = createScope(frame.scope);
+  const itemBinding = declareBinding(frame.context, iterationScope, itemName);
+  const indexBinding = declareBinding(frame.context, iterationScope, indexName);
+  const bodyFrame = {
     ...frame,
     path: at(frame, "[4]").path,
     scope: iterationScope,
     loopDepth: frame.loopDepth + 1,
-  });
+  };
+  predeclareBlock(bodyNode, bodyFrame);
+  const body = compileBlock(bodyNode, bodyFrame);
   const sourceName = nextTemporary(frame.context, "source");
   const backingName = nextTemporary(frame.context, "backing");
   const lengthName = nextTemporary(frame.context, "length");
   const generatedIndex = nextTemporary(frame.context, "index");
-  const itemKey = stringLiteral(itemName);
-  const indexKey = stringLiteral(indexName);
 
   const loop = (item: string): string =>
     `for(let ${generatedIndex}=0;${generatedIndex}<${lengthName};${generatedIndex}++){\n` +
     indent(
-      clearScope(frame.context, iterationScope, new Set([itemName, indexName])) +
-        `${iterationScope}[${itemKey}].value=${item};\n` +
-        `${iterationScope}[${indexKey}].value=${generatedIndex};\n` +
+      declareScope(
+        iterationScope,
+        new Map([
+          [itemBinding, item],
+          [indexBinding, generatedIndex],
+        ]),
+      ) +
         body,
     ) +
     `\n}`;
@@ -889,31 +887,58 @@ function at(frame: Frame, path: string): Frame {
   return { ...frame, path: `${frame.path}${path}` };
 }
 
-function nextScope(context: CompileContext, parent: string): string {
-  const name = `$scope${context.nextScope++}`;
-  context.scopes.push({ name, parent });
-  return name;
+function createScope(parent: LexicalScope | null): LexicalScope {
+  return { parent, bindings: new Map() };
 }
 
-function addBinding(context: CompileContext, scope: string, name: string): void {
-  let names = context.bindings.get(scope);
-  if (names === undefined) {
-    names = new Set();
-    context.bindings.set(scope, names);
+function predeclareBlock(block: readonly SExpr[], frame: Frame): void {
+  for (let index = 0; index < block.length; index++) {
+    const invokeFrame = at(frame, `[${index}]`);
+    const { operation, operands } = splitInvoke(block[index]!, invokeFrame.path);
+    if (operation !== "var.let") continue;
+    exactArity(operation, operands, 2, invokeFrame.path);
+    const name = atom(operands[0], at(invokeFrame, "[1]").path, "variable name");
+    declareBinding(frame.context, frame.scope, name);
   }
-  names.add(name);
 }
 
-function clearScope(
+function declareBinding(
   context: CompileContext,
-  scope: string,
-  excluded: ReadonlySet<string> = new Set(),
+  scope: LexicalScope,
+  name: string,
 ): string {
-  const names = context.bindings.get(scope);
-  if (names === undefined) return "";
-  return [...names]
-    .filter((name) => !excluded.has(name))
-    .map((name) => `${scope}[${stringLiteral(name)}].value=void 0;\n`)
+  const existing = scope.bindings.get(name);
+  if (existing !== undefined) return existing;
+  const binding = `$v${context.nextVariable++}`;
+  scope.bindings.set(name, binding);
+  return binding;
+}
+
+function resolveOwnBinding(scope: LexicalScope, name: string, path: string): string {
+  const binding = scope.bindings.get(name);
+  if (binding === undefined) {
+    throw new ScriptCompileError(`variable ${quote(name)} is not declared in this scope`, path);
+  }
+  return binding;
+}
+
+function resolveBinding(scope: LexicalScope, name: string, path: string): string {
+  for (let current: LexicalScope | null = scope; current !== null; current = current.parent) {
+    const binding = current.bindings.get(name);
+    if (binding !== undefined) return binding;
+  }
+  throw new ScriptCompileError(`variable ${quote(name)} is not declared`, path);
+}
+
+function declareScope(
+  scope: LexicalScope,
+  initializers: ReadonlyMap<string, string> = new Map(),
+): string {
+  return [...scope.bindings.values()]
+    .map((binding) => {
+      const initializer = initializers.get(binding);
+      return initializer === undefined ? `let ${binding};\n` : `let ${binding}=${initializer};\n`;
+    })
     .join("");
 }
 

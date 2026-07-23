@@ -159,7 +159,7 @@ describe("JavaScript lowering", () => {
 });
 
 describe("variables and control flow", () => {
-  it("uses private null-terminated scope chains with shadowing and nearest set", () => {
+  it("resolves lexical bindings at compile time with shadowing and nearest set", () => {
     const seen: ScriptValue[] = [];
     const program: ScriptBlock = [
       ["var.let", "value", number(1)],
@@ -181,6 +181,18 @@ describe("variables and control flow", () => {
         ],
       ],
       ["capture", get("value")],
+      [
+        "case",
+        "bool.true",
+        [
+          ["capture", get("value")],
+          ["var.set", "value", number(9)],
+          ["capture", get("value")],
+          ["var.let", "value", number(2)],
+          ["capture", get("value")],
+        ],
+      ],
+      ["capture", get("value")],
     ];
 
     compile(program, {
@@ -191,9 +203,13 @@ describe("variables and control flow", () => {
       },
     })();
 
-    expect(seen).toEqual([3, 1, 4]);
-    expect(evaluate(["var.get", "missing"])).toBeUndefined();
-    expect(() => compile([["var.set", "missing", number(1)]])()).toThrow(TypeError);
+    expect(seen).toEqual([3, 1, 4, undefined, 9, 2, 4]);
+    expect(() => compile([["capture", ["var.get", "missing"]]], {
+      functions: { capture: () => undefined },
+    })).toThrow(/variable "missing" is not declared/);
+    expect(() => compile([["var.set", "missing", number(1)]])).toThrow(
+      /variable "missing" is not declared/,
+    );
   });
 
   it("executes the first truthy case", () => {
@@ -434,25 +450,37 @@ describe("trace confinement", () => {
     expect((globalThis as Record<string, unknown>)[marker]).toBeUndefined();
   });
 
-  it("never resolves variable names against JavaScript globals", () => {
-    expect(evaluate(["var.get", "globalThis"])).toBeUndefined();
-    expect(evaluate(["var.get", "window"])).toBeUndefined();
-    let protoBinding: ScriptValue;
+  it("never resolves guest variable names against JavaScript globals", () => {
+    expect(() => compile([["capture", ["var.get", "globalThis"]]], {
+      functions: { capture: () => undefined },
+    })).toThrow(/variable "globalThis" is not declared/);
+    expect(() => compile([["capture", ["var.get", "window"]]], {
+      functions: { capture: () => undefined },
+    })).toThrow(/variable "window" is not declared/);
+
+    const bindings: ScriptValue[] = [];
     compile(
       [
+        ["var.let", "globalThis", number(1)],
+        ["var.set", "globalThis", number(2)],
+        ["var.let", "window", number(3)],
         ["var.let", "__proto__", number(42)],
+        ["capture", ["var.get", "globalThis"]],
+        ["capture", ["var.get", "window"]],
         ["capture", ["var.get", "__proto__"]],
       ],
       {
         functions: {
           capture(value) {
-            protoBinding = value;
+            bindings.push(value);
           },
         },
       },
     )();
-    expect(protoBinding!).toBe(42);
-    expect(() => compile([["var.set", "globalThis", number(1)]])()).toThrow(TypeError);
+    expect(bindings).toEqual([2, 3, 42]);
+    expect(() => compile([["var.set", "globalThis", number(1)]])).toThrow(
+      /variable "globalThis" is not declared/,
+    );
   });
 
   it("blocks prototype traversal through object and list instructions", () => {
