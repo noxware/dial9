@@ -5,6 +5,9 @@ pub use dial9_core::buffer::{Disk, DiskBuffer, Memory, MemoryBuffer};
 pub use dial9_core::handle::Dial9Handle;
 pub use dial9_core::recorder::{RecorderBuilder, RecorderSourceExt, recorder};
 pub use dial9_core::recording::Recorder;
+pub use dial9_macro::script;
+
+pub mod script;
 
 /// Building blocks for extending dial9: implement a [`Source`](crate::core::Source),
 /// write custom encoders, author custom segment processors, reach the raw

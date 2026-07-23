@@ -26,7 +26,7 @@ required-features = ["cli"]
 dial9-core = { workspace = true }
 dial9-perf-self-profile = { workspace = true, optional = true }
 dial9-tokio-telemetry = { version = "0.5.0-rc0", path = "../dial9-tokio-telemetry", optional = true }
-dial9-macro = { workspace = true, optional = true }
+dial9-macro = { workspace = true }
 
 dial9-viewer = { version = "0.5.0-rc0", path = "../dial9-viewer", optional = true }
 anyhow = { version = "1", optional = true }
@@ -59,7 +59,6 @@ pipeline = [
 ## `Dial9TokioHandle`, `Dial9Config`, and the Tokio event sources.
 tokio = [
     "dep:dial9-tokio-telemetry",
-    "dep:dial9-macro",
     "dep:tokio",
     "dep:bon",
     "dep:tracing",

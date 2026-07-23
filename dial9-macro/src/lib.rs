@@ -4,6 +4,8 @@ use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::{ExprClosure, ItemFn, Path, Token, parse_macro_input};
 
+mod script_ir;
+
 enum ConfigSource {
     Path(Path),
     Closure(ExprClosure),
@@ -105,6 +107,34 @@ fn expand_main(args: MainArgs, input: ItemFn) -> Result<TokenStream2, syn::Error
             __dial9_out
         }
     })
+}
+
+/// Compile Rust-like syntax into a [`dial9::script::SExpr`].
+///
+/// The macro accepts the imperative subset represented by Dial9 Script IR:
+/// literals, invoke paths and calls, local bindings, assignment, `if`/`else`,
+/// `for (item, index) in values`, `break`, and `continue`. Rust operators are
+/// intentionally unsupported; invoke the typed operation explicitly, such as
+/// `integer::add(left, right)`.
+///
+/// ```ignore
+/// dial9::script! {
+///     let previous = null;
+///     for (event, index) in dial9::events {
+///         if null::is(previous) {
+///             previous = map::get(event, "time");
+///         }
+///     }
+/// }
+/// ```
+#[proc_macro]
+pub fn script(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as script_ir::Script);
+
+    match script_ir::expand(input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
 }
 
 /// Instrument an async main function with dial9 telemetry.
