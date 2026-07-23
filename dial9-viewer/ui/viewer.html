@@ -6599,6 +6599,13 @@
                         scheduleCrosshairRedraw();
                         return;
                     }
+                    // Declarative custom panels own their layer tooltips too.
+                    if (e.target.closest && e.target.closest(".custom-view-panel")) {
+                        mouseNs = eventToTimelineNs(e.clientX);
+                        lanesContainer.style.cursor = "";
+                        scheduleCrosshairRedraw();
+                        return;
+                    }
                     const rect = lanesContainer.getBoundingClientRect();
                     const mouseX = e.clientX - rect.left - LABEL_W;
                     const drawW = rect.width - LABEL_W;
