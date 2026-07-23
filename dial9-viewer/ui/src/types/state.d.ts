@@ -31,6 +31,7 @@ export type FoldablePanelKind = "spans" | "events" | "cpu" | "queue";
  * task is selected and is NOT foldable.
  */
 export type PanelKind = FoldablePanelKind | "task-detail";
+export type PanelGeometryKind = PanelKind | "custom-view";
 
 // ── Clock display vocabulary ────────────────────────────────────────────
 
@@ -538,7 +539,7 @@ export interface LaneGeometry {
  * panel_layout.js output so every panel's time axis lines up.
  */
 export interface PanelGeometry {
-  kind: PanelKind;
+  kind: PanelGeometryKind;
   /** Shared ns<->x mapping (frozen-core invariant). */
   time: TimePanelLayout;
   /** Panel canvas height in CSS px. */

@@ -1,0 +1,30 @@
+[package]
+name = "dial9-viewer-extension-demo"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+trace-fixture = [
+    "dep:dial9-trace-format",
+    "dep:dial9-perf-self-profile",
+]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+dial9-viewer-extension = { path = "../../dial9-viewer-extension" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+dial9-trace-format = { workspace = true, optional = true }
+dial9-perf-self-profile = { path = "../../perf-self-profile", optional = true, features = [
+    "process-resource",
+    "unstable-events",
+] }
+
+[[bin]]
+name = "make_trace"
+path = "src/bin/make_trace.rs"
+required-features = ["trace-fixture"]

@@ -6,7 +6,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { gunzipSync, gzipSync } from "node:zlib";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   canStreamDecode,
   loadTrace,
@@ -17,6 +17,15 @@ import {
   parseTraceBuffer,
 } from "./load.js";
 import type { ParsedTrace } from "./load.js";
+import {
+  createViewerExtensionWorkerBody,
+  type ViewerExtensionWorkerBodyDeps,
+} from "./viewer-extension-worker/body.js";
+import type {
+  ViewerExtensionWorkerFactory,
+  ViewerExtensionWorkerPort,
+  ViewerExtensionWorkerResponse,
+} from "./viewer-extension-worker/protocol.js";
 
 // ── Fixtures: the demo trace, raw and gzipped, fully in memory ──────────
 
@@ -76,6 +85,7 @@ function installFetchMock(urlToBytes: Record<string, Uint8Array>): void {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  vi.restoreAllMocks();
 });
 
 const bytesOf = (buf: ArrayBuffer): Uint8Array => new Uint8Array(buf);
@@ -86,6 +96,118 @@ function expectBytesEqual(actual: Uint8Array, expected: Uint8Array): void {
   expect(actual.length).toBe(expected.length);
   expect(Buffer.from(actual).equals(Buffer.from(expected))).toBe(true);
 }
+
+function traceWithViewerExtension(
+  trace: Uint8Array,
+  module = Uint8Array.of(0, 0x61, 0x73, 0x6d, 1, 0, 0, 0),
+): Uint8Array {
+  const name = new TextEncoder().encode("demo");
+  const frameLength = 7 + name.length + module.length;
+  const result = new Uint8Array(trace.length + frameLength);
+  result.set(trace.subarray(0, 5));
+  const view = new DataView(result.buffer);
+  let offset = 5;
+  view.setUint8(offset++, 0x07);
+  view.setUint16(offset, name.length, true);
+  offset += 2;
+  view.setUint32(offset, module.length, true);
+  offset += 4;
+  result.set(name, offset);
+  offset += name.length;
+  result.set(module, offset);
+  result.set(trace.subarray(5), 5 + frameLength);
+  return result;
+}
+
+function emptyViewBundleOutput(): Uint8Array {
+  const manifest = new TextEncoder().encode(
+    JSON.stringify({ version: 1, panels: [] }),
+  );
+  const result = new Uint8Array(16 + manifest.length);
+  result.set([0x44, 0x39, 0x56, 0x4f, 1, 0, 0, 0]);
+  const view = new DataView(result.buffer);
+  view.setUint32(8, manifest.length, true);
+  view.setUint32(12, 0, true);
+  result.set(manifest, 16);
+  return result;
+}
+
+function testAbiInstantiate(
+  output: Uint8Array,
+  options: { readonly trapOnPush?: boolean } = {},
+): NonNullable<ViewerExtensionWorkerBodyDeps["instantiate"]> {
+  return async (module) => {
+    const memory = new WebAssembly.Memory({ initial: 1, maximum: 1024 });
+    return {
+      name: module.name,
+      disabled: false,
+      exports: {
+        memory,
+        dial9_abi_version: () => 1,
+        dial9_input_alloc: (length: number) => {
+          const missing = length - memory.buffer.byteLength;
+          if (missing > 0) memory.grow(Math.ceil(missing / 65_536));
+          return 0;
+        },
+        dial9_push: () => {
+          if (options.trapOnPush) {
+            throw new WebAssembly.RuntimeError("guest trapped");
+          }
+          return 0;
+        },
+        dial9_finish: () => {
+          new Uint8Array(memory.buffer, 0, output.length).set(output);
+          return 0;
+        },
+        dial9_output_ptr: () => 0,
+        dial9_output_len: () => output.length,
+        dial9_error_ptr: () => 0,
+        dial9_error_len: () => 0,
+      },
+    };
+  };
+}
+
+function inProcessExtensionWorker(
+  deps: ViewerExtensionWorkerBodyDeps = {},
+): {
+  readonly factory: ViewerExtensionWorkerFactory;
+  terminated(): boolean;
+} {
+  let receive: (message: ViewerExtensionWorkerResponse) => void = () => {};
+  let terminated = false;
+  const body = createViewerExtensionWorkerBody(
+    (message) => queueMicrotask(() => receive(message)),
+    deps,
+  );
+  const port: ViewerExtensionWorkerPort = {
+    postMessage(message): void {
+      if (!terminated) queueMicrotask(() => body.handle(message));
+    },
+    onMessage(fn): void {
+      receive = fn;
+    },
+    onError(): void {},
+    terminate(): void {
+      terminated = true;
+    },
+  };
+  return {
+    factory: () => port,
+    terminated: () => terminated,
+  };
+}
+
+type ParsedTraceWithExtensions = ParsedTrace & {
+  viewerExtensions?: readonly {
+    readonly name: string;
+    readonly bundle: {
+      readonly panels: readonly unknown[];
+      readonly tables: Readonly<Record<string, unknown>>;
+    };
+  }[];
+  viewerExtensionWarnings?: readonly string[];
+};
 
 // ── Buffered path: fetch + gunzip + concat ───────────────────────────────
 
@@ -224,6 +346,185 @@ describe("loadTraceOnMainThread", () => {
     load.abort();
     await expect(load.done).rejects.toMatchObject({ name: "AbortError" });
     expect(store.updates).toHaveLength(0);
+  });
+
+  it("does not start loading when the external signal is already aborted", async () => {
+    installFetchMock({ "/t.bin": gzTrace });
+    const signal = new AbortController();
+    signal.abort();
+    let workerConstructed = false;
+    const store = fakeStore();
+
+    const load = loadTraceOnMainThread(store, ["/t.bin"], {
+      signal: signal.signal,
+      extensionWorker: () => {
+        workerConstructed = true;
+        throw new Error("worker must not be constructed");
+      },
+    });
+
+    await expect(load.done).rejects.toMatchObject({ name: "AbortError" });
+    expect(workerConstructed).toBe(false);
+    expect(calls).toHaveLength(0);
+    expect(store.updates).toHaveLength(0);
+  });
+
+  it("streams embedded extensions through the ABI and attaches decoded output", async () => {
+    const embeddedTrace = traceWithViewerExtension(rawTrace);
+    installFetchMock({ "/t.bin": new Uint8Array(gzipSync(embeddedTrace)) });
+    const worker = inProcessExtensionWorker({
+      instantiate: testAbiInstantiate(emptyViewBundleOutput()),
+    });
+    const store = fakeStore();
+
+    const result = await loadTraceOnMainThread(store, ["/t.bin"], {
+      extensionWorker: worker.factory,
+    }).done;
+    const trace = result.trace as ParsedTraceWithExtensions;
+
+    expect(trace.events.length).toBe(singleEvents);
+    expect(trace.viewerExtensions).toHaveLength(1);
+    expect(trace.viewerExtensions?.[0]).toMatchObject({
+      name: "demo",
+      bundle: { panels: [] },
+    });
+    expect(
+      Object.keys(trace.viewerExtensions?.[0]?.bundle.tables ?? {}),
+    ).toEqual([]);
+    expect(trace.viewerExtensionWarnings).toEqual([]);
+    expectBytesEqual(new Uint8Array(result.buffer), embeddedTrace);
+    expect(result.trace).toBe(store.updates[0]!.trace);
+    expect(worker.terminated()).toBe(true);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("keeps the base trace when an embedded module fails validation", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const embeddedTrace = traceWithViewerExtension(rawTrace);
+    installFetchMock({ "/t.bin": new Uint8Array(gzipSync(embeddedTrace)) });
+    const worker = inProcessExtensionWorker();
+    const store = fakeStore();
+
+    const result = await loadTraceOnMainThread(store, ["/t.bin"], {
+      extensionWorker: worker.factory,
+    }).done;
+    const trace = result.trace as ParsedTraceWithExtensions;
+
+    expect(trace.events.length).toBe(singleEvents);
+    expect(trace.viewerExtensions).toEqual([]);
+    expect(trace.viewerExtensionWarnings?.[0]).toMatch(/^demo: /);
+    expectBytesEqual(new Uint8Array(result.buffer), embeddedTrace);
+    expect(store.updates).toHaveLength(1);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("keeps the base trace when an accepted extension traps", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const embeddedTrace = traceWithViewerExtension(rawTrace);
+    installFetchMock({ "/t.bin": new Uint8Array(gzipSync(embeddedTrace)) });
+    const worker = inProcessExtensionWorker({
+      instantiate: testAbiInstantiate(emptyViewBundleOutput(), {
+        trapOnPush: true,
+      }),
+    });
+    const store = fakeStore();
+
+    const result = await loadTraceOnMainThread(store, ["/t.bin"], {
+      extensionWorker: worker.factory,
+    }).done;
+    const trace = result.trace as ParsedTraceWithExtensions;
+
+    expect(trace.events.length).toBe(singleEvents);
+    expect(trace.viewerExtensions).toEqual([]);
+    expect(trace.viewerExtensionWarnings).toContain("demo: guest trapped");
+    expect(store.updates).toHaveLength(1);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("restarts parsing from clean sinks when the isolated worker fails mid-stream", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    installFetchMock({ "/t.bin": gzTrace });
+    let receive: (message: ViewerExtensionWorkerResponse) => void = () => {};
+    let reportError: (error: unknown) => void = () => {};
+    let terminated = false;
+    let sentPartial = false;
+    const partial = rawTrace.slice(0, Math.floor(rawTrace.byteLength / 2));
+    const extensionWorker: ViewerExtensionWorkerFactory = () => ({
+      postMessage(message): void {
+        if (message.kind === "start") {
+          queueMicrotask(() =>
+            receive({ kind: "ready", extensions: [], warnings: [] }),
+          );
+        } else if (!sentPartial) {
+          sentPartial = true;
+          queueMicrotask(() =>
+            receive({
+              kind: "chunk",
+              buffer: partial.buffer,
+              byteOffset: partial.byteOffset,
+              byteLength: partial.byteLength,
+            }),
+          );
+        } else {
+          queueMicrotask(() => reportError(new Error("worker crashed")));
+        }
+      },
+      onMessage(fn): void {
+        receive = fn;
+      },
+      onError(fn): void {
+        reportError = fn;
+      },
+      terminate(): void {
+        terminated = true;
+      },
+    });
+    const store = fakeStore();
+
+    const result = await loadTraceOnMainThread(store, ["/t.bin"], {
+      extensionWorker,
+    }).done;
+
+    expect(result.trace.events.length).toBe(singleEvents);
+    expect(store.updates).toHaveLength(1);
+    expect(calls).toHaveLength(1);
+    expect(terminated).toBe(true);
+  });
+
+  it("loads the base trace when the extension worker cannot be constructed", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    installFetchMock({ "/t.bin": gzTrace });
+    const store = fakeStore();
+
+    const result = await loadTraceOnMainThread(store, ["/t.bin"], {
+      extensionWorker: () => {
+        throw new DOMException("worker blocked by CSP", "SecurityError");
+      },
+    }).done;
+
+    expect(result.trace.events.length).toBe(singleEvents);
+    expect(store.updates).toHaveLength(1);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("aborts a stalled extension worker and never touches the store", async () => {
+    let terminated = false;
+    const extensionWorker: ViewerExtensionWorkerFactory = () => ({
+      postMessage(): void {},
+      onMessage(): void {},
+      onError(): void {},
+      terminate(): void {
+        terminated = true;
+      },
+    });
+    const store = fakeStore();
+    const load = loadTraceOnMainThread(store, ["/t.bin"], { extensionWorker });
+
+    load.abort();
+
+    await expect(load.done).rejects.toMatchObject({ name: "AbortError" });
+    expect(store.updates).toHaveLength(0);
+    expect(terminated).toBe(true);
   });
 });
 

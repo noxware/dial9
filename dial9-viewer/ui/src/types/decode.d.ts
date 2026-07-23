@@ -152,6 +152,11 @@ declare module "*/decode.js" {
      * as opposed to a real EOF.
      */
     needMoreBytes: boolean;
+    /**
+     * Streaming mode only: the incomplete tail is specifically a viewer
+     * extension frame. The stream parser rejects this condition at EOF.
+     */
+    incompleteViewerExtension: boolean;
 
     /** Current byte offset into the buffer. */
     get position(): number;

@@ -175,6 +175,9 @@ pub struct Encoder<W: Write = Vec<u8>> {
     /// slots) have had their schema frame emitted on this encoder. 256 bits =
     /// 32 bytes inline.
     registered_ids: [u64; (crate::STATIC_WIRE_ID_LIMIT as usize) / 64],
+    /// Viewer extensions are discoverable only in the contiguous preamble
+    /// immediately after a trace header.
+    extension_preamble_open: bool,
 }
 
 impl Default for Encoder<Vec<u8>> {
@@ -197,6 +200,7 @@ impl Encoder<Vec<u8>> {
             schema_ids: FxHashMap::default(),
             slot_cache: Vec::new(),
             registered_ids: [0; (crate::STATIC_WIRE_ID_LIMIT as usize) / 64],
+            extension_preamble_open: true,
         }
     }
 
@@ -221,6 +225,7 @@ impl<W: Write> Encoder<W> {
             schema_ids: FxHashMap::default(),
             slot_cache: Vec::new(),
             registered_ids: [0; (crate::STATIC_WIRE_ID_LIMIT as usize) / 64],
+            extension_preamble_open: true,
         })
     }
 
@@ -270,6 +275,7 @@ impl<W: Write> Encoder<W> {
             schema_ids,
             slot_cache: Vec::new(),
             registered_ids: [0; (crate::STATIC_WIRE_ID_LIMIT as usize) / 64],
+            extension_preamble_open: false,
         }
     }
 
@@ -300,6 +306,7 @@ impl<W: Write> Encoder<W> {
         self.schema_ids.clear();
         self.slot_cache.fill(0);
         self.registered_ids.fill(0);
+        self.extension_preamble_open = true;
         // creating a new EncodeState resets the timestamp delta
         let old_state = std::mem::replace(&mut self.state, EncodeState::new(new_writer));
         Ok(old_state.writer.into_inner())
@@ -330,6 +337,7 @@ impl<W: Write> Encoder<W> {
                 ),
             ));
         }
+        self.extension_preamble_open = false;
         let id = self.registry.next_type_id();
         codec::encode_schema(id, &schema.entry, &mut self.state.writer)?;
         if !schema.entry.annotations.is_empty() {
@@ -388,6 +396,7 @@ impl<W: Write> Encoder<W> {
     ) -> io::Result<()> {
         use crate::types::FieldValue;
 
+        self.extension_preamble_open = false;
         let type_id = self.ensure_registered(schema)?;
         let expected_fields = schema.entry.fields.len();
 
@@ -428,6 +437,7 @@ impl<W: Write> Encoder<W> {
     /// Write a derived TraceEvent. Auto-registers the schema on first call for this type.
     /// Handles timestamp encoding: emits TimestampReset if needed, packs u24 delta in header.
     pub fn write<T: TraceEvent + 'static>(&mut self, event: &T) -> io::Result<()> {
+        self.extension_preamble_open = false;
         let slot = T::type_slot();
         let tid = if slot != 0 && slot < crate::STATIC_WIRE_ID_LIMIT {
             let word = (slot >> 6) as usize;
@@ -506,6 +516,7 @@ impl<W: Write> Encoder<W> {
         if let Some(&id) = self.string_pool.get(s) {
             return Ok(InternedString(id));
         }
+        self.extension_preamble_open = false;
         let id = self.next_pool_id;
         self.next_pool_id += 1;
         self.string_pool.insert(s.to_string(), id);
@@ -520,6 +531,7 @@ impl<W: Write> Encoder<W> {
     }
 
     pub fn write_string_pool(&mut self, entries: &[PoolEntry]) -> io::Result<()> {
+        self.extension_preamble_open = false;
         codec::encode_string_pool(entries, &mut self.state.writer)
     }
 
@@ -529,6 +541,7 @@ impl<W: Write> Encoder<W> {
         if let Some(&id) = self.stack_pool.get(frames) {
             return Ok(InternedStackFrames(id));
         }
+        self.extension_preamble_open = false;
         let id = self.next_stack_pool_id;
         self.next_stack_pool_id += 1;
         self.stack_pool.insert(frames.into(), id);
@@ -545,7 +558,22 @@ impl<W: Write> Encoder<W> {
     }
 
     pub fn write_stack_pool(&mut self, entries: &[StackPoolEntry]) -> io::Result<()> {
+        self.extension_preamble_open = false;
         codec::encode_stack_pool(entries, &mut self.state.writer)
+    }
+
+    /// Embed a named WebAssembly viewer extension in the trace preamble.
+    ///
+    /// All extensions must be written immediately after the file header,
+    /// before any schema, pool, or event frame.
+    pub fn write_viewer_extension(&mut self, name: &str, wasm: &[u8]) -> io::Result<()> {
+        if !self.extension_preamble_open {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "viewer extensions must be written before all other frames",
+            ));
+        }
+        codec::encode_viewer_extension(name, wasm, &mut self.state.writer)
     }
 
     /// Flush the underlying writer.
@@ -562,6 +590,7 @@ impl<W: Write> Encoder<W> {
     pub fn into_raw_encoder(self) -> RawEncoder<W> {
         RawEncoder {
             writer: self.state.writer,
+            extension_preamble_open: self.extension_preamble_open,
         }
     }
 }
@@ -574,12 +603,25 @@ impl<W: Write> Encoder<W> {
 /// writer while tracking the total byte count.
 pub struct RawEncoder<W> {
     writer: CountingWriter<W>,
+    extension_preamble_open: bool,
 }
 
 impl<W: Write> RawEncoder<W> {
     /// Write pre-encoded bytes to the underlying writer.
     pub fn write_raw(&mut self, bytes: &[u8]) -> io::Result<()> {
+        self.extension_preamble_open = false;
         self.writer.write_all(bytes)
+    }
+
+    /// Embed a named WebAssembly viewer extension in the trace preamble.
+    pub fn write_viewer_extension(&mut self, name: &str, wasm: &[u8]) -> io::Result<()> {
+        if !self.extension_preamble_open {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "viewer extensions must be written before all other frames",
+            ));
+        }
+        codec::encode_viewer_extension(name, wasm, &mut self.writer)
     }
 
     /// Total bytes written (including bytes written by the [`Encoder`] before
@@ -1474,5 +1516,29 @@ mod tests {
         assert_eq!(events[0].1, vec![FieldValue::Varint(1)]);
         assert_eq!(events[1].0, Some(2_000));
         assert_eq!(events[1].1, vec![FieldValue::Varint(2)]);
+    }
+
+    #[test]
+    fn viewer_extensions_are_rejected_after_the_preamble() {
+        let mut encoder = Encoder::new();
+        encoder.write_viewer_extension("first", b"\0asm").unwrap();
+        encoder
+            .register_schema(
+                "Ev",
+                vec![FieldDef {
+                    name: "v".into(),
+                    field_type: FieldType::Varint,
+                }],
+            )
+            .unwrap();
+        let error = encoder
+            .write_viewer_extension("late", b"\0asm")
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+
+        let mut raw = Encoder::new().into_raw_encoder();
+        raw.write_raw(&[codec::TAG_TIMESTAMP_RESET]).unwrap();
+        let error = raw.write_viewer_extension("late", b"\0asm").unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
 }

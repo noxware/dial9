@@ -475,6 +475,53 @@ body {
 }
 .d9-track-canvas { display: block; }
 
+/* ── Trace-provided custom-view tracks ───────────────────────────────── */
+.d9-custom-view-canvas-wrap { position: relative; }
+.d9-custom-view-legends {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+}
+.d9-custom-view-legend {
+    position: absolute;
+    top: 4px;
+    max-width: calc(50% - 8px);
+    margin: 0;
+    padding: 3px 6px;
+    list-style: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px 9px;
+    color: var(--d9-fg-muted);
+    background: rgba(10, 14, 28, 0.78);
+    border: 1px solid var(--d9-border);
+    border-radius: 3px;
+    font-size: 9px;
+    line-height: 1.1;
+}
+.d9-custom-view-legend--left { left: 5px; }
+.d9-custom-view-legend--right { right: 5px; justify-content: flex-end; }
+.d9-custom-view-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+}
+.d9-custom-view-legend-swatch {
+    width: 12px;
+    height: 3px;
+    flex: none;
+    border-radius: 1px;
+}
+.d9-custom-view-legend-label,
+.d9-custom-view-legend-value {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.d9-custom-view-legend-value { color: var(--d9-fg); }
+
 /* ── Worker-lanes box: fixed-height rows in a resizeable inner-scroll box ── */
 /* The lanes track stacks its label + scroll box in a row, then a resize gutter
    below. Rows are a FIXED height and the box scrolls internally, so 64+ workers

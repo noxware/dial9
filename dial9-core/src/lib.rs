@@ -22,6 +22,7 @@ pub(crate) use test_util_pub;
 pub mod boot_id;
 /// Rotating trace-segment buffers: the on-disk and in-memory sinks.
 pub mod buffer;
+pub use buffer::{ViewerExtension, ViewerExtensionError};
 /// Monotonic/realtime clock readings, the trace time base.
 pub mod clock;
 /// Central ring buffer of encoded event batches awaiting write.

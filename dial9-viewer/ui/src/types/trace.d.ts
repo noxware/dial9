@@ -25,8 +25,10 @@
 // samples, sched events, queue series, block-in-place gaps. Type-only
 // re-exports; erased at build time.
 
+import type { ParsedTrace as CoreParsedTrace } from "../../trace_parser.js";
+import type { ViewBundle } from "../lib/custom-views/index.js";
+
 export type {
-  ParsedTrace,
   TraceEvent,
   CpuSample,
   CustomTraceEvent,
@@ -41,6 +43,21 @@ export type {
   ParseProgress,
   ParseOptions,
 } from "../../trace_parser.js";
+
+/** One decoded extension payload carried by the app-level parsed trace. */
+export interface ViewerExtension {
+  readonly name: string;
+  readonly bundle: ViewBundle;
+}
+
+/**
+ * The frozen parser result plus viewer-only extension data decoded by the
+ * surrounding load pipeline. The optional field keeps core parser results
+ * assignable without teaching the parser about UI manifests.
+ */
+export type ParsedTrace = CoreParsedTrace & {
+  readonly viewerExtensions?: readonly ViewerExtension[];
+};
 
 export type {
   PollSpan,

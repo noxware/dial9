@@ -31,6 +31,7 @@ import type { SpansTrackController } from "./spans-track.js";
 import type { QueueTrackController } from "./queue-track.js";
 import type { TaskDetailTrackController } from "./task-detail-track.js";
 import type { EventsTrackController } from "./events-track.js";
+import type { CustomViewTrackController } from "./custom-view-track.js";
 
 export interface TracksViewModel {
   /** True once a trace is loaded (tracks render empty until then). */
@@ -71,6 +72,8 @@ export interface TracksViewModel {
   /** Height (CSS px) of the worker-lanes scroll box. The lanes row sizes its
    *  viewport to this; the user drag-resizes it via the lanes bottom gutter. */
   lanesViewportHeight: number;
+  /** Trace-provided panels, appended after the persisted built-in catalogue. */
+  customTracks: readonly TrackSpec[];
 }
 
 /**
@@ -81,11 +84,12 @@ export interface TracksViewModel {
  * (label-only) - collapse is a height override, not a hide.
  */
 export function visibleTracks(vm: TracksViewModel): TrackSpec[] {
-  return orderedTracks(vm.trackOrder).filter((t) => {
+  const builtins = orderedTracks(vm.trackOrder).filter((t) => {
     if (t.selectionOnly && !vm.taskSelected) return false;
     if (vm.hasTrace && vm.emptyTracks.has(t.id)) return false;
     return true;
   });
+  return [...builtins, ...vm.customTracks];
 }
 
 /**
@@ -118,6 +122,7 @@ export function tracksTemplate(
   taskDetailTrack?: TaskDetailTrackController,
   eventsTrack?: EventsTrackController,
   queueTrack?: QueueTrackController,
+  customViewTracks?: ReadonlyMap<TrackId, CustomViewTrackController>,
 ): TemplateResult {
   const tracks = visibleTracks(vm);
   return html`
@@ -143,6 +148,7 @@ export function tracksTemplate(
             taskDetailTrack,
             eventsTrack,
             queueTrack,
+            customViewTracks,
           );
           // Manageable tracks (the foldable analysis surfaces) gain the shell-
           // owned collapse caret + reorder grip; structural/task-detail tracks
@@ -169,7 +175,10 @@ function innerRow(
   taskDetailTrack?: TaskDetailTrackController,
   eventsTrack?: EventsTrackController,
   queueTrack?: QueueTrackController,
+  customViewTracks?: ReadonlyMap<TrackId, CustomViewTrackController>,
 ): TemplateResult {
+  const customViewTrack = customViewTracks?.get(t.id);
+  if (customViewTrack !== undefined) return customViewTrack.rowTemplate(t);
   if (t.id === "lanes") return lanesTrackRow(t, vm.lanesViewportHeight);
   if (t.id === "spans" && spansTrack !== undefined) return spansTrack.rowTemplate(t);
   if (t.id === "queue" && queueTrack !== undefined) return queueTrack.rowTemplate(t);
@@ -358,6 +367,7 @@ export function sizeTracks(
   taskDetailTrack?: TaskDetailTrackController,
   eventsTrack?: EventsTrackController,
   queueTrack?: QueueTrackController,
+  customViewTracks?: ReadonlyMap<TrackId, CustomViewTrackController>,
 ): TrackSizing[] {
   const dpr = (typeof devicePixelRatio === "number" ? devicePixelRatio : 1) || 1;
   // Full column width and the LANES-BOX scrollbar gutter, so every track's draw
@@ -366,6 +376,13 @@ export function sizeTracks(
   const pw = columnEl.clientWidth;
   const scrollbarW = lanesScrollbarWidth(columnEl);
   const out: TrackSizing[] = [];
+  const canvases = new Map<string, HTMLCanvasElement>();
+  for (const canvas of columnEl.querySelectorAll<HTMLCanvasElement>(
+    "canvas[data-track-canvas]",
+  )) {
+    const id = canvas.dataset["trackCanvas"];
+    if (id !== undefined) canvases.set(id, canvas);
+  }
   for (const track of visibleTracks(vm)) {
     // A collapsed track is label-only: its drawing body is hidden by CSS
     // (`.d9-track-manage.is-collapsed`) and its canvas is not painted this
@@ -385,9 +402,7 @@ export function sizeTracks(
       out.push({ id: track.id, drawW: 0, height: track.height });
       continue;
     }
-    const canvas = columnEl.querySelector<HTMLCanvasElement>(
-      `canvas[data-track-canvas="${track.id}"]`,
-    );
+    const canvas = canvases.get(track.id);
     if (!canvas) continue;
     const geometry = trackGeometry(track, {
       pw,
@@ -401,6 +416,20 @@ export function sizeTracks(
     // collapsed column; render nothing but keep the slot.
     if (drawW <= 0) {
       out.push({ id: track.id, drawW: 0, height: track.height });
+      continue;
+    }
+    const customViewTrack = customViewTracks?.get(track.id);
+    if (customViewTrack !== undefined) {
+      customViewTrack.paint(
+        canvas,
+        drawW,
+        track.height,
+        dpr,
+        vm.viewStart,
+        vm.viewEnd,
+      );
+      canvas.dataset["drawW"] = String(Math.round(drawW));
+      out.push({ id: track.id, drawW, height: track.height });
       continue;
     }
     // The spans track owns its own canvas sizing + draw: it reserves a controls

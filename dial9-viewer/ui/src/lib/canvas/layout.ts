@@ -18,7 +18,7 @@ import type { TimePanelLayout } from "../../../panel_layout.js";
 import type {
   LaneGeometry,
   PanelGeometry,
-  PanelKind,
+  PanelGeometryKind,
 } from "../../types/state.js";
 import type { RuntimeGroup } from "../../types/trace.js";
 
@@ -90,7 +90,7 @@ export function timePanelLayout(opts: TimePanelLayoutOpts): TimePanelLayout {
 }
 
 export interface PanelGeometryOpts extends TimePanelLayoutOpts {
-  kind: PanelKind;
+  kind: PanelGeometryKind;
   /** Panel canvas height in CSS px. */
   height: number;
   /** Device pixel ratio the backing store is scaled by. */

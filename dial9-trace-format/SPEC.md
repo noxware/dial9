@@ -39,6 +39,7 @@ Every frame begins with a 1-byte tag:
 | `0x04` | Stack Pool         |
 | `0x05` | Timestamp Reset    |
 | `0x06` | Schema Annotations |
+| `0x07` | Viewer Extension   |
 
 Unknown tags **must** cause the decoder to stop (the stream cannot be advanced without knowing the frame size).
 
@@ -176,6 +177,24 @@ Multiple annotation frames for the same `type_id` are permitted; the decoder acc
 A decoder that encounters an annotation frame referencing an unknown `type_id` may skip it leniently (the annotations have nowhere to attach).
 
 Annotation keys and values are free-form at the wire level. By convention, the `unit` key carries a field's unit; the values the viewer recognizes for human-friendly rendering are `ns`, `us`, `ms`, `s`, and `bytes` (the same set the `#[traceevent(unit = "...")]` derive attribute accepts at compile time). Unrecognized values render as the raw number.
+
+### Viewer Extension Frame (`0x07`)
+
+Embeds a named WebAssembly module for use by a compatible viewer. The trace
+format treats the module as opaque bytes.
+
+| Field    | Type            | Description                      |
+| -------- | --------------- | -------------------------------- |
+| tag      | u8              | `0x07`                           |
+| name_len | u16             | Length of the name in bytes      |
+| wasm_len | u32             | Length of the module in bytes    |
+| name     | [u8; name_len]  | UTF-8 extension name             |
+| wasm     | [u8; wasm_len]  | Raw WebAssembly module bytes     |
+
+Viewer extension frames form a contiguous preamble immediately after each
+trace header, before any other frame. Multiple extensions may appear in that
+preamble; their order is preserved. Repeated headers in a concatenated stream
+start a new preamble.
 
 ## Field Types
 

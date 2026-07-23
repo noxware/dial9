@@ -8,6 +8,7 @@ use crate::primitives::fs;
 use crate::rate_limit::rate_limited;
 use crate::sealed::SegmentRef;
 use std::collections::VecDeque;
+use std::fmt;
 use std::io::BufWriter;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
@@ -49,6 +50,74 @@ impl BufferMode for Memory {
 pub type DiskBuffer = SegmentWriter<Disk>;
 /// Alias for the in-memory writer.
 pub type MemoryBuffer = SegmentWriter<Memory>;
+
+const MAX_VIEWER_EXTENSION_NAME_BYTES: usize = 4096;
+const MAX_VIEWER_EXTENSION_WASM_BYTES: usize = 2 * 1024 * 1024;
+pub(crate) const MAX_VIEWER_EXTENSIONS: usize = 8;
+
+/// A named WebAssembly module embedded in every trace segment for the viewer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ViewerExtension {
+    name: String,
+    wasm: Arc<[u8]>,
+}
+
+/// Invalid viewer-extension registration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ViewerExtensionError(String);
+
+impl ViewerExtensionError {
+    pub(crate) fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+}
+
+impl fmt::Display for ViewerExtensionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ViewerExtensionError {}
+
+impl ViewerExtension {
+    /// Create an extension without copying an existing `Arc<[u8]>`.
+    pub fn new(
+        name: impl Into<String>,
+        wasm: impl Into<Arc<[u8]>>,
+    ) -> Result<Self, ViewerExtensionError> {
+        let name = name.into();
+        let wasm = wasm.into();
+        if name.is_empty() {
+            return Err(ViewerExtensionError::new(
+                "viewer-extension name cannot be empty",
+            ));
+        }
+        if name.len() > MAX_VIEWER_EXTENSION_NAME_BYTES {
+            return Err(ViewerExtensionError::new(format!(
+                "viewer-extension name is {} bytes; limit is {MAX_VIEWER_EXTENSION_NAME_BYTES}",
+                name.len()
+            )));
+        }
+        if wasm.len() > MAX_VIEWER_EXTENSION_WASM_BYTES {
+            return Err(ViewerExtensionError::new(format!(
+                "viewer-extension module is {} bytes; limit is {MAX_VIEWER_EXTENSION_WASM_BYTES}",
+                wasm.len()
+            )));
+        }
+        Ok(Self { name, wasm })
+    }
+
+    /// Extension name stored in the trace.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// WebAssembly module bytes stored in the trace.
+    pub fn wasm(&self) -> &[u8] {
+        &self.wasm
+    }
+}
 
 /// Segment-metadata key carrying the crates.io version of
 /// `dial9-tokio-telemetry`. Populated by default, any user-supplied entry with
@@ -195,6 +264,8 @@ pub struct SegmentWriter<Mode: BufferMode = Disk> {
     /// Metadata written at the start of each segment. Updated by the flush
     /// thread to include runtime names alongside any user-provided entries.
     segment_metadata: SegmentMetadata,
+    /// Viewer extensions written at the start of every non-empty segment.
+    viewer_extensions: Vec<ViewerExtension>,
     /// Events silently dropped because the writer was finished/stopped.
     dropped_events: usize,
     /// Whether any real (non-metadata) events have been written to the current segment.
@@ -230,6 +301,7 @@ enum WriterState {
     /// Writer is open and events can be written
     Active {
         writer: RawEncoder<BufWriter<ActiveHandle>>,
+        need_extensions: bool,
         need_metadata: bool,
     },
 
@@ -307,6 +379,7 @@ impl SegmentWriter<Disk> {
             state,
             next_index,
             segment_metadata,
+            viewer_extensions: Vec::new(),
             dropped_events: 0,
             has_real_events: false,
             drain_interval,
@@ -369,6 +442,7 @@ impl SegmentWriter<Disk> {
             state,
             next_index: 1,
             segment_metadata: SegmentMetadata::default(),
+            viewer_extensions: Vec::new(),
             dropped_events: 0,
             has_real_events: false,
             drain_interval: DEFAULT_DRAIN_INTERVAL,
@@ -484,6 +558,7 @@ impl SegmentWriter<Memory> {
             state,
             next_index: 1,
             segment_metadata,
+            viewer_extensions: Vec::new(),
             dropped_events: 0,
             has_real_events: false,
             drain_interval,
@@ -521,28 +596,32 @@ impl<M: BufferMode> SegmentWriter<M> {
         &self.active_path
     }
 
-    /// Create an encoder, write the file header, segment metadata, and a
-    /// clock-sync anchor, then convert to a [`RawEncoder`] for the
-    /// remainder of the file's lifetime.
+    /// Write the file header, then convert to a [`RawEncoder`] for the
+    /// remainder of the file's lifetime. Header frames are deferred until the
+    /// first batch so the recorder builder can register viewer extensions.
     fn prepare_segment(writer: BufWriter<ActiveHandle>) -> std::io::Result<WriterState> {
-        let mut encoder = Encoder::new_to(writer)?;
-        let (mono, real) = clock_pair();
-        encoder.write(&ClockSyncEvent {
-            timestamp_ns: mono,
-            realtime_ns: real,
-        })?;
+        let encoder = Encoder::new_to(writer)?;
         Ok(WriterState::Active {
             writer: encoder.into_raw_encoder(),
+            need_extensions: true,
             need_metadata: true,
         })
     }
 
     fn write_metadata_if_needed(&mut self) -> std::io::Result<()> {
+        let viewer_extensions = &self.viewer_extensions;
         match &mut self.state {
             WriterState::Active {
                 writer,
+                need_extensions,
                 need_metadata,
             } => {
+                if *need_extensions {
+                    for extension in viewer_extensions {
+                        writer.write_viewer_extension(extension.name(), extension.wasm())?;
+                    }
+                    *need_extensions = false;
+                }
                 if *need_metadata {
                     Self::write_segment_metadata(writer, &self.segment_metadata.entries)?;
                 }
@@ -733,6 +812,20 @@ impl<M: BufferMode> SegmentWriter<M> {
         &self.segment_metadata.entries
     }
 
+    pub(crate) fn set_viewer_extensions(&mut self, extensions: Vec<ViewerExtension>) {
+        debug_assert!(
+            matches!(
+                &self.state,
+                WriterState::Active {
+                    need_extensions: true,
+                    ..
+                }
+            ),
+            "viewer extensions must be configured before the segment preamble is written"
+        );
+        self.viewer_extensions = extensions;
+    }
+
     /// Merge the segment metadata entries written into the next rotated segment.
     ///
     /// Accepts any iterator so callers can drain a reused buffer (retaining its
@@ -898,6 +991,40 @@ mod tests {
     use std::collections::HashMap;
     use std::io::Read;
     use tempfile::TempDir;
+
+    #[test]
+    fn viewer_extension_validates_name_and_module_boundaries() {
+        assert!(
+            ViewerExtension::new(
+                "a".repeat(MAX_VIEWER_EXTENSION_NAME_BYTES),
+                vec![0; MAX_VIEWER_EXTENSION_WASM_BYTES],
+            )
+            .is_ok()
+        );
+
+        let empty_name = ViewerExtension::new("", b"module".as_slice()).unwrap_err();
+        assert!(empty_name.to_string().contains("cannot be empty"));
+
+        let long_name = ViewerExtension::new(
+            "a".repeat(MAX_VIEWER_EXTENSION_NAME_BYTES + 1),
+            b"module".as_slice(),
+        )
+        .unwrap_err();
+        assert!(
+            long_name
+                .to_string()
+                .contains(&MAX_VIEWER_EXTENSION_NAME_BYTES.to_string())
+        );
+
+        let large_module =
+            ViewerExtension::new("large", vec![0; MAX_VIEWER_EXTENSION_WASM_BYTES + 1])
+                .unwrap_err();
+        assert!(
+            large_module
+                .to_string()
+                .contains(&MAX_VIEWER_EXTENSION_WASM_BYTES.to_string())
+        );
+    }
 
     /// A minimal data event for exercising the writer, distinct from the bus's
     /// own framing events (`ClockSyncEvent`/`SegmentMetadataEvent`) so the
@@ -1542,7 +1669,7 @@ mod tests {
             .unwrap();
         // Write an event — this fills segment 0 and triggers rotation to segment 1.
         writer.write_encoded_batch(&test_batch()).unwrap();
-        // Segment 0 is sealed, segment 1 is active with only header + metadata.
+        // Segment 0 is sealed, segment 1 is active with only its header.
         assert!(dir.path().join("trace.0.bin").exists());
         assert!(dir.path().join("trace.1.bin.active").exists());
 
@@ -1676,6 +1803,65 @@ mod tests {
                 _ => false,
             });
             assert!(has_metadata, "{}: expected SegmentMetadata", file.display());
+        }
+    }
+
+    #[test]
+    fn test_viewer_extensions_precede_clock_sync_in_every_rotated_file() {
+        use dial9_trace_format::decoder::DecodedFrameRef;
+
+        let dir = TempDir::new().unwrap();
+        let one_event = single_event_file_size();
+        let mut writer = DiskBuffer::builder()
+            .base_path(dir.path())
+            .max_file_size(one_event)
+            .max_total_size(100_000)
+            .build()
+            .unwrap();
+        writer.set_viewer_extensions(vec![
+            ViewerExtension::new("cpu", b"\0asm".as_slice()).unwrap(),
+        ]);
+
+        for _ in 0..5 {
+            writer.write_encoded_batch(&test_batch()).unwrap();
+        }
+        writer.finalize().unwrap();
+
+        let mut files: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|ext| ext == "bin"))
+            .collect();
+        files.sort();
+        assert!(files.len() >= 2, "expected at least 2 files from rotation");
+
+        for file in files {
+            let data = std::fs::read(&file).unwrap();
+            let mut decoder =
+                dial9_trace_format::decoder::Decoder::new(&data).expect("valid trace");
+            assert!(matches!(
+                decoder.next_frame_ref().unwrap(),
+                Some(DecodedFrameRef::ViewerExtension(extension))
+                    if extension.name == "cpu" && extension.wasm == b"\0asm"
+            ));
+
+            let mut saw_clock_sync = false;
+            while let Some(frame) = decoder.next_frame_ref().unwrap() {
+                let DecodedFrameRef::Event { type_id, .. } = frame else {
+                    continue;
+                };
+                if decoder.registry().get(type_id).map(|entry| entry.name())
+                    == Some("ClockSyncEvent")
+                {
+                    saw_clock_sync = true;
+                    break;
+                }
+            }
+            assert!(
+                saw_clock_sync,
+                "{}: expected ClockSyncEvent after viewer extension",
+                file.display()
+            );
         }
     }
 

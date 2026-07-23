@@ -12,7 +12,10 @@ import { html, render, nothing, type TemplateResult } from "lit-html";
 import type { ViewerStore } from "../../store/store.js";
 import type { StoreState } from "../../types/state.js";
 import { tracksTemplate, sizeTracks, type TracksViewModel } from "./tracks.js";
-import type { TrackId } from "../../lib/canvas/track-layout.js";
+import type {
+  TrackId,
+  TrackSpec,
+} from "../../lib/canvas/track-layout.js";
 import { deriveAxisInputs } from "./axis.js";
 import { deriveCpuInputs } from "./cpu.js";
 import { createSpansTrack, type SpansTrackController } from "./spans-track.js";
@@ -29,6 +32,12 @@ import {
   type TrackManageActions,
 } from "./track-management.js";
 import type { KeyBinding } from "../../lib/interact/keyboard.js";
+import {
+  createCustomViewTrack,
+  discoverCustomViewTracks,
+  type CustomViewTrackController,
+  type CustomViewTrackDefinition,
+} from "./custom-view-track.js";
 
 /** Callbacks the shell chrome needs from the page entry. */
 export interface ShellDeps extends ToolbarDeps {
@@ -59,7 +68,10 @@ const HINT_CHIPS: readonly string[] = [
 ];
 
 /** Build the view model for a render pass from the current store state. */
-function viewModel(state: StoreState): TracksViewModel {
+function viewModel(
+  state: StoreState,
+  customTracks: readonly TrackSpec[],
+): TracksViewModel {
   const trace = state.trace.trace;
   const hasTrace = trace !== null;
   const taskSelected = state.selection.selectedTaskId !== null;
@@ -87,6 +99,7 @@ function viewModel(state: StoreState): TracksViewModel {
     trackOrder: state.uiPrefs.trackOrder,
     collapsed: state.uiPrefs.collapsed,
     lanesViewportHeight: state.uiPrefs.lanesViewportHeight,
+    customTracks,
   };
 }
 
@@ -149,6 +162,7 @@ function shellTemplate(
   taskDetailTrack: TaskDetailTrackController,
   eventsTrack: EventsTrackController,
   queueTrack: QueueTrackController,
+  customViewTracks: ReadonlyMap<TrackId, CustomViewTrackController>,
 ): TemplateResult {
   return html`
     <header class="d9-toolbar" role="banner">
@@ -209,6 +223,7 @@ function shellTemplate(
               taskDetailTrack,
               eventsTrack,
               queueTrack,
+              customViewTracks,
             )
           : emptyStateTemplate()}
       </main>
@@ -292,10 +307,30 @@ export function mountShell(
   // track column bind to. Persistence (hydrate on boot + save on change) is
   // wired at the page entry (main.ts) so the store itself stays pure.
   const trackActions = createTrackManageActions(store);
+  let customTrace: StoreState["trace"]["trace"] | undefined;
+  let customDefinitions: readonly CustomViewTrackDefinition[] = [];
+  let customViewTracks = new Map<TrackId, CustomViewTrackController>();
+
+  function syncCustomViews(trace: StoreState["trace"]["trace"]): void {
+    if (trace === customTrace) return;
+    for (const controller of customViewTracks.values()) controller.dispose();
+    customTrace = trace;
+    customDefinitions = discoverCustomViewTracks(trace?.viewerExtensions);
+    customViewTracks = new Map(
+      customDefinitions.map((definition) => {
+        const controller = createCustomViewTrack(definition);
+        return [definition.track.id, controller] as const;
+      }),
+    );
+  }
 
   function renderPass(): void {
     const state = store.getState();
-    const vm = viewModel(state);
+    syncCustomViews(state.trace.trace);
+    const vm = viewModel(
+      state,
+      customDefinitions.map((definition) => definition.track),
+    );
     render(
       shellTemplate(
         vm,
@@ -308,12 +343,21 @@ export function mountShell(
         taskDetailTrack,
         eventsTrack,
         queueTrack,
+        customViewTracks,
       ),
       root,
     );
     const column = root.querySelector<HTMLElement>(".d9-track-column");
     if (column && vm.hasTrace) {
-      sizeTracks(column, vm, spansTrack, taskDetailTrack, eventsTrack, queueTrack);
+      sizeTracks(
+        column,
+        vm,
+        spansTrack,
+        taskDetailTrack,
+        eventsTrack,
+        queueTrack,
+        customViewTracks,
+      );
     }
   }
 
@@ -362,6 +406,10 @@ export function mountShell(
       queueTrack.dispose();
       taskDetailTrack.dispose();
       eventsTrack.dispose();
+      for (const controller of customViewTracks.values()) controller.dispose();
+      customViewTracks.clear();
+      customDefinitions = [];
+      customTrace = undefined;
       toolbar.dispose();
       rail.dispose();
     },

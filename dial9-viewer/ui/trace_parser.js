@@ -1461,6 +1461,10 @@
             throw new Error("Invalid trace header");
         }
 
+        if (dec.incompleteViewerExtension) {
+            throw new Error("Truncated viewer extension");
+        }
+
         // Stream ended. Any bytes still pending are a genuinely truncated tail
         // (the file ended mid-frame) — finalize with whatever we decoded, matching
         // the whole-buffer decoder's graceful EOF behavior.

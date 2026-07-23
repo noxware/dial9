@@ -37,7 +37,19 @@ import type {
   ParseOptions,
   ParsedTrace,
 } from "../../../trace_parser.js";
-import { streamTraceWithCapture } from "./stream.js";
+import { parseChunksWithCapture, streamTraceWithCapture } from "./stream.js";
+import type { ViewBundle } from "../custom-views/types.js";
+import {
+  VIEW_OUTPUT_LIMITS,
+  decodeViewerExtensionOutput,
+} from "./viewer-extension-output.js";
+import {
+  ViewerExtensionWorkerError,
+  createViewerExtensionByteSource,
+} from "./viewer-extension-worker/source.js";
+import type {
+  ViewerExtensionWorkerFactory,
+} from "./viewer-extension-worker/protocol.js";
 import type {
   TraceWorkerFactory,
   TraceWorkerLoadRequest,
@@ -222,6 +234,11 @@ export interface WorkerLoadOptions {
    * fake). Defaults to the Vite-built browser worker entry.
    */
   worker?: TraceWorkerFactory;
+  /**
+   * Byte-source worker seam for trace-bundled viewer extensions. Production
+   * creates the isolated browser worker automatically; tests may inject one.
+   */
+  extensionWorker?: ViewerExtensionWorkerFactory;
 }
 
 /** Result of a worker load: LoadedTrace plus the worker's timing record
@@ -402,6 +419,134 @@ export function loadTraceInWorker(
   };
 }
 
+interface LoadedViewerExtension {
+  readonly name: string;
+  readonly bundle: ViewBundle;
+}
+
+type TraceWithViewerExtensions = ParsedTrace & {
+  viewerExtensions?: readonly LoadedViewerExtension[];
+  viewerExtensionWarnings?: readonly string[];
+};
+
+function customViewRenderRows(bundle: ViewBundle): number {
+  let rows = 0;
+  for (const panel of bundle.panels) {
+    for (const component of panel.components) {
+      if (
+        component.kind !== "tooltip" &&
+        component.kind !== "legend" &&
+        component.kind !== "background"
+      ) {
+        rows += bundle.tables[component.input]?.length ?? 0;
+      }
+    }
+  }
+  return rows;
+}
+
+function customViewDisplayItems(bundle: ViewBundle): number {
+  let items = 0;
+  for (const panel of bundle.panels) {
+    for (const component of panel.components) {
+      if (component.kind === "tooltip") {
+        items += component.rows.length;
+      } else if (component.kind === "legend") {
+        items +=
+          (component.items?.length ?? 0) +
+          (component.atCursor?.length ?? 0);
+      }
+    }
+  }
+  return items;
+}
+
+async function streamTraceWithViewerExtensions(
+  urls: readonly string[],
+  headers: Readonly<Record<string, string>> | undefined,
+  parseOpts: ParseOptions,
+  signal: AbortSignal,
+  worker: ViewerExtensionWorkerFactory | undefined,
+): Promise<{ trace: ParsedTrace; buffer: ArrayBuffer }> {
+  const sourceOptions: {
+    headers?: Readonly<Record<string, string>>;
+    worker?: ViewerExtensionWorkerFactory;
+  } = {};
+  if (headers !== undefined) sourceOptions.headers = headers;
+  if (worker !== undefined) sourceOptions.worker = worker;
+  const source = createViewerExtensionByteSource(urls, sourceOptions);
+  const abort = (): void => source.abort();
+  signal.addEventListener("abort", abort, { once: true });
+  try {
+    const parsed = await parseChunksWithCapture(source.chunks, parseOpts);
+    const result = await source.result;
+    const warnings = [...result.warnings];
+    const extensions: LoadedViewerExtension[] = [];
+    let panelCount = 0;
+    let panelHeight = 0;
+    let renderRows = 0;
+    let displayItems = 0;
+    for (const output of result.outputs) {
+      try {
+        const bundle = decodeViewerExtensionOutput(output.buffer);
+        const nextPanelCount = panelCount + bundle.panels.length;
+        const nextPanelHeight =
+          panelHeight +
+          bundle.panels.reduce((sum, panel) => sum + panel.height, 0);
+        const nextRenderRows = renderRows + customViewRenderRows(bundle);
+        const nextDisplayItems =
+          displayItems + customViewDisplayItems(bundle);
+        if (nextPanelCount > VIEW_OUTPUT_LIMITS.panels) {
+          throw new Error(
+            `aggregate panel count exceeds ${VIEW_OUTPUT_LIMITS.panels}`,
+          );
+        }
+        if (nextPanelHeight > VIEW_OUTPUT_LIMITS.totalPanelHeight) {
+          throw new Error(
+            `aggregate panel height exceeds ` +
+              `${VIEW_OUTPUT_LIMITS.totalPanelHeight}px`,
+          );
+        }
+        if (nextRenderRows > VIEW_OUTPUT_LIMITS.renderRows) {
+          throw new Error(
+            `aggregate drawing work exceeds ` +
+              `${VIEW_OUTPUT_LIMITS.renderRows} source rows`,
+          );
+        }
+        if (nextDisplayItems > VIEW_OUTPUT_LIMITS.displayItems) {
+          throw new Error(
+            `aggregate tooltip and legend items exceed ` +
+              `${VIEW_OUTPUT_LIMITS.displayItems}`,
+          );
+        }
+        panelCount = nextPanelCount;
+        panelHeight = nextPanelHeight;
+        renderRows = nextRenderRows;
+        displayItems = nextDisplayItems;
+        extensions.push({
+          name: output.name,
+          bundle,
+        });
+      } catch (error) {
+        warnings.push(
+          `${output.name}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+    const trace = parsed.trace as TraceWithViewerExtensions;
+    trace.viewerExtensions = extensions;
+    trace.viewerExtensionWarnings = warnings;
+    for (const warning of warnings) {
+      console.warn(`[dial9 viewer extension] ${warning}`);
+    }
+    return parsed;
+  } finally {
+    signal.removeEventListener("abort", abort);
+  }
+}
+
 /**
  * Main-thread equivalent of loadTraceInWorker: fetch + gunzip + parse on the
  * CALLING thread and write the parsed trace into `store`'s `trace` slice,
@@ -518,21 +663,58 @@ export function loadTraceOnMainThread(
   // Columnar span-event store: SpanEnter/Exit/Close custom events (the ~2.3 GB
   // of fat span objects that stall a 13M-event parse) route into typed columns;
   // non-span custom events stay fat. buildSpanDataColumnar reads the columns.
-  const spanEventSink = new ColumnarSpanEvents();
-  const parseOpts: ParseOptions = {
-    onParseProgress,
-    eventSink: new ColumnarEvents(),
-    cpuSampleSink: new ColumnarCpuSamples(),
-    spanEventSink,
+  const freshParseState = (): {
+    parseOpts: ParseOptions;
+    spanEventSink: ColumnarSpanEvents;
+  } => {
+    const spanEventSink = new ColumnarSpanEvents();
+    const parseOpts: ParseOptions = {
+      onParseProgress,
+      eventSink: new ColumnarEvents(),
+      cpuSampleSink: new ColumnarCpuSamples(),
+      spanEventSink,
+    };
+    if (opts.maxEvents !== undefined) parseOpts.maxEvents = opts.maxEvents;
+    if (opts.startTime !== undefined) parseOpts.startTime = opts.startTime;
+    if (opts.endTime !== undefined) parseOpts.endTime = opts.endTime;
+    return { parseOpts, spanEventSink };
   };
-  if (opts.maxEvents !== undefined) parseOpts.maxEvents = opts.maxEvents;
-  if (opts.startTime !== undefined) parseOpts.startTime = opts.startTime;
-  if (opts.endTime !== undefined) parseOpts.endTime = opts.endTime;
+  let parseState = freshParseState();
 
   const run = async (): Promise<{ trace: ParsedTrace; buffer: ArrayBuffer }> => {
     if (mode === "stream") {
       emit("parsing", 0, null);
-      return streamTraceWithCapture(list, fetchOpts, parseOpts);
+      const canRunExtensions =
+        opts.extensionWorker !== undefined || typeof Worker !== "undefined";
+      if (canRunExtensions) {
+        try {
+          return await streamTraceWithViewerExtensions(
+            list,
+            opts.headers,
+            parseState.parseOpts,
+            controller.signal,
+            opts.extensionWorker,
+          );
+        } catch (error) {
+          if (
+            controller.signal.aborted ||
+            !(error instanceof ViewerExtensionWorkerError)
+          ) {
+            throw error;
+          }
+          // A killed/trapped worker cannot poison the base viewer. Re-fetch
+          // and parse without extensions; this slow path is reserved for a
+          // broken or malicious embedded module/worker.
+          console.warn(
+            `[dial9 viewer extension] isolated worker failed; loading base trace: ${
+              error.message
+            }`,
+          );
+          eventCount = 0;
+          parseState = freshParseState();
+        }
+      }
+      return streamTraceWithCapture(list, fetchOpts, parseState.parseOpts);
     }
     emit("fetching", 0, null);
     const buffer = await fetchTraces([...list], fetchOpts);
@@ -543,17 +725,22 @@ export function loadTraceOnMainThread(
     // parsing, so it is the only one that can size the columns to land in a
     // single allocation instead of doubling-and-copying all 12 of them up to
     // the final length.
-    parseOpts.eventSink = new ColumnarEvents(capacityForBytes(buffer.byteLength));
-    const trace = await parseTrace(buffer, parseOpts);
+    parseState.parseOpts.eventSink = new ColumnarEvents(
+      capacityForBytes(buffer.byteLength),
+    );
+    const trace = await parseTrace(buffer, parseState.parseOpts);
     return { trace, buffer };
   };
 
-  run()
+  const runPromise = controller.signal.aborted
+    ? Promise.reject(new DOMException("trace load aborted", "AbortError"))
+    : run();
+  runPromise
     .then(({ trace, buffer }) => {
       perf.mark("parse-done");
       // Attach the columnar span-event store; buildSpanDataColumnar reads it
       // instead of the (now non-span-only) fat customEvents array.
-      trace.spanEvents = spanEventSink;
+      trace.spanEvents = parseState.spanEventSink;
       settle(() => {
         store.update("trace", { trace });
         perf.mark("store-updated");

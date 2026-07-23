@@ -9,7 +9,11 @@
 // here for all.
 
 import { panelGeometry, LABEL_W } from "../../lib/canvas/layout.js";
-import type { PanelGeometry, PanelKind } from "../../types/state.js";
+import type {
+  PanelGeometry,
+  PanelGeometryKind,
+  PanelKind,
+} from "../../types/state.js";
 
 export { LABEL_W };
 
@@ -37,7 +41,13 @@ export function lanesScrollbarWidth(columnEl: HTMLElement): number {
  * "lanes" hosts the worker rows, so they carry their own ids while the analysis
  * tracks reuse the PanelKind vocabulary.
  */
-export type TrackId = "timeline" | "lanes" | PanelKind;
+export type BuiltinTrackId = "timeline" | "lanes" | PanelKind;
+export type CustomViewTrackId = `custom-view:${string}`;
+export type TrackId = BuiltinTrackId | CustomViewTrackId;
+
+export function isCustomViewTrackId(id: TrackId): id is CustomViewTrackId {
+  return id.startsWith("custom-view:");
+}
 
 export interface TrackSpec {
   id: TrackId;
@@ -104,7 +114,10 @@ export function trackGeometry(
   track: TrackSpec,
   opts: TrackGeometryOpts,
 ): PanelGeometry {
-  const kind: PanelKind = geometryKindFor(track.id);
+  const kind: PanelGeometryKind =
+    isCustomViewTrackId(track.id)
+      ? "custom-view"
+      : geometryKindFor(track.id);
   return panelGeometry({
     kind,
     pw: opts.pw,
@@ -122,7 +135,7 @@ export function trackGeometry(
  * drawW split, so they map onto an analysis kind purely to reuse panelGeometry
  * (the `kind` field is advisory - the x-mapping is identical across all kinds).
  */
-function geometryKindFor(id: TrackId): PanelKind {
+function geometryKindFor(id: BuiltinTrackId): PanelKind {
   switch (id) {
     case "timeline":
     case "lanes":

@@ -27,6 +27,7 @@ pub(crate) const TAG_STRING_POOL: u8 = 0x03;
 pub(crate) const TAG_STACK_POOL: u8 = 0x04;
 pub(crate) const TAG_TIMESTAMP_RESET: u8 = 0x05;
 pub(crate) const TAG_SCHEMA_ANNOTATIONS: u8 = 0x06;
+pub(crate) const TAG_VIEWER_EXTENSION: u8 = 0x07;
 
 /// Maximum nanosecond delta that fits in a u24 (3 bytes).
 pub(crate) const MAX_TIMESTAMP_DELTA_NS: u64 = 0xFF_FFFF; // 16,777,215
@@ -63,6 +64,15 @@ pub struct StackPoolEntry {
     pub frames: Vec<u64>,
 }
 
+/// An embedded viewer extension.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViewerExtension {
+    /// Extension name.
+    pub name: String,
+    /// WebAssembly module bytes.
+    pub wasm: Vec<u8>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Frame {
     Schema {
@@ -82,6 +92,7 @@ pub(crate) enum Frame {
         type_id: WireTypeId,
         annotations: Vec<FieldAnnotation>,
     },
+    ViewerExtension(ViewerExtension),
 }
 
 /// Zero-copy pool entry borrowing from the input buffer.
@@ -102,6 +113,16 @@ pub struct StackPoolEntryRef<'a> {
     pub pool_id: u32,
     /// Raw u64-LE bytes borrowed from the decode buffer.
     pub frames_le: &'a [u8],
+}
+
+/// Zero-copy viewer extension borrowing from the input buffer.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ViewerExtensionRef<'a> {
+    /// Extension name.
+    pub name: &'a str,
+    /// WebAssembly module bytes.
+    pub wasm: &'a [u8],
 }
 
 impl<'a> StackPoolEntryRef<'a> {
@@ -140,6 +161,7 @@ pub(crate) enum FrameRef<'a> {
         type_id: WireTypeId,
         annotations: Vec<FieldAnnotation>,
     },
+    ViewerExtension(ViewerExtensionRef<'a>),
 }
 
 /// Schema info needed by the decoder: raw field type tags + has_timestamp flag.
@@ -247,6 +269,31 @@ pub(crate) fn encode_schema_annotations(
     Ok(())
 }
 
+pub(crate) fn encode_viewer_extension(
+    name: &str,
+    wasm: &[u8],
+    w: &mut impl Write,
+) -> io::Result<()> {
+    let name_len: u16 = name.len().try_into().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "viewer extension name exceeds u16::MAX bytes",
+        )
+    })?;
+    let wasm_len: u32 = wasm.len().try_into().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "viewer extension module exceeds u32::MAX bytes",
+        )
+    })?;
+
+    w.write_all(&[TAG_VIEWER_EXTENSION])?;
+    w.write_all(&name_len.to_le_bytes())?;
+    w.write_all(&wasm_len.to_le_bytes())?;
+    w.write_all(name.as_bytes())?;
+    w.write_all(wasm)
+}
+
 // --- Decoding ---
 
 pub(crate) fn decode_header(data: &[u8]) -> Option<u8> {
@@ -274,8 +321,22 @@ pub(crate) fn decode_frame<'s>(
             Some((Frame::TimestampReset(ts), 9))
         }
         TAG_SCHEMA_ANNOTATIONS => decode_schema_annotations_frame(data),
+        TAG_VIEWER_EXTENSION => decode_viewer_extension_frame(data),
         _ => None,
     }
+}
+
+fn decode_viewer_extension_frame(data: &[u8]) -> Option<(Frame, usize)> {
+    let mut pos = 1;
+    let name_len = u16::from_le_bytes(data.get(pos..pos + 2)?.try_into().ok()?) as usize;
+    pos += 2;
+    let wasm_len = u32::from_le_bytes(data.get(pos..pos + 4)?.try_into().ok()?) as usize;
+    pos += 4;
+    let name = String::from_utf8(data.get(pos..pos + name_len)?.to_vec()).ok()?;
+    pos += name_len;
+    let wasm = data.get(pos..pos + wasm_len)?.to_vec();
+    pos += wasm_len;
+    Some((Frame::ViewerExtension(ViewerExtension { name, wasm }), pos))
 }
 
 fn decode_schema_frame(data: &[u8]) -> Option<(Frame, usize)> {
@@ -479,8 +540,25 @@ pub(crate) fn decode_frame_ref<'a, 's>(
                 _ => unreachable!(),
             }
         }
+        TAG_VIEWER_EXTENSION => decode_viewer_extension_frame_ref(data),
         _ => None,
     }
+}
+
+fn decode_viewer_extension_frame_ref(data: &[u8]) -> Option<(FrameRef<'_>, usize)> {
+    let mut pos = 1;
+    let name_len = u16::from_le_bytes(data.get(pos..pos + 2)?.try_into().ok()?) as usize;
+    pos += 2;
+    let wasm_len = u32::from_le_bytes(data.get(pos..pos + 4)?.try_into().ok()?) as usize;
+    pos += 4;
+    let name = std::str::from_utf8(data.get(pos..pos + name_len)?).ok()?;
+    pos += name_len;
+    let wasm = data.get(pos..pos + wasm_len)?;
+    pos += wasm_len;
+    Some((
+        FrameRef::ViewerExtension(ViewerExtensionRef { name, wasm }),
+        pos,
+    ))
 }
 
 fn decode_event_frame_ref<'a, 's>(
@@ -764,6 +842,58 @@ mod tests {
         encode_string_pool(&[], &mut buf).unwrap();
         let (frame, _) = decode_frame(&buf, |_| None, 0).unwrap();
         assert_eq!(frame, Frame::StringPool(vec![]));
+    }
+
+    #[test]
+    fn viewer_extension_frame_round_trip() {
+        let mut buf = Vec::new();
+        encode_viewer_extension("cpu", b"\0asm", &mut buf).unwrap();
+        assert_eq!(
+            buf,
+            [
+                TAG_VIEWER_EXTENSION,
+                3,
+                0,
+                4,
+                0,
+                0,
+                0,
+                b'c',
+                b'p',
+                b'u',
+                0,
+                b'a',
+                b's',
+                b'm',
+            ]
+        );
+
+        let (frame, consumed) = decode_frame(&buf, |_| None, 0).unwrap();
+        assert_eq!(consumed, buf.len());
+        assert_eq!(
+            frame,
+            Frame::ViewerExtension(ViewerExtension {
+                name: "cpu".into(),
+                wasm: b"\0asm".to_vec(),
+            })
+        );
+
+        let (frame, consumed) = decode_frame_ref(&buf, |_| None, 0).unwrap();
+        assert_eq!(consumed, buf.len());
+        assert_eq!(
+            frame,
+            FrameRef::ViewerExtension(ViewerExtensionRef {
+                name: "cpu",
+                wasm: b"\0asm",
+            })
+        );
+    }
+
+    #[test]
+    fn viewer_extension_rejects_truncated_payload() {
+        let data = [TAG_VIEWER_EXTENSION, 3, 0, 4, 0, 0, 0, b'c', b'p', b'u', 0];
+        assert!(decode_frame(&data, |_| None, 0).is_none());
+        assert!(decode_frame_ref(&data, |_| None, 0).is_none());
     }
 
     #[test]

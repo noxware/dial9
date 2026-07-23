@@ -12,12 +12,16 @@ export function initViewportFromTrace(store: ViewerStore): () => void {
     const trace = state.trace.trace;
     if (trace === null || trace === lastTrace) return;
     lastTrace = trace;
-    if (trace.minTs === null || trace.maxTs === null) return;
+    // minTs/maxTs intentionally retain the parser's historical Tokio-event
+    // semantics. Extension-only traces still have all-event record bounds.
+    const minTs = trace.minTs ?? trace.recordMinTs;
+    const maxTs = trace.maxTs ?? trace.recordMaxTs;
+    if (minTs === null || maxTs === null) return;
     store.update("viewport", {
-      viewStart: trace.minTs,
-      viewEnd: trace.maxTs,
-      minTs: trace.minTs,
-      maxTs: trace.maxTs,
+      viewStart: minTs,
+      viewEnd: maxTs,
+      minTs,
+      maxTs,
     });
   });
 }

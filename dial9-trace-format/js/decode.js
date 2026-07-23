@@ -8,6 +8,11 @@ const TAG_STRING_POOL = 0x03;
 const TAG_STACK_POOL = 0x04;
 const TAG_TIMESTAMP_RESET = 0x05;
 const TAG_SCHEMA_ANNOTATIONS = 0x06;
+const TAG_VIEWER_EXTENSION = 0x07;
+// Keep this aligned with the isolated extension worker's static policy. Unlike
+// legacy trace frames, an embedded executable must never make the main
+// streaming decoder retain an attacker-declared multi-gigabyte tail.
+const MAX_VIEWER_EXTENSION_MODULE_BYTES = 2 * 1024 * 1024;
 
 const FieldType = {
   I64: 1, F64: 2, Bool: 3, String: 4,
@@ -140,6 +145,9 @@ class TraceDecoder {
     // Set by `nextFrame()` (streaming mode only) when it returned null because
     // the trailing bytes are an incomplete frame rather than a real EOF.
     this.needMoreBytes = false;
+    // Narrower EOF signal used by parseTraceStream: legacy truncated tails stay
+    // lenient, but an incomplete embedded executable is rejected.
+    this.incompleteViewerExtension = false;
   }
 
   /**
@@ -205,9 +213,11 @@ class TraceDecoder {
 
   nextFrame() {
     this.needMoreBytes = false;
+    this.incompleteViewerExtension = false;
     if (this._pos >= this._view.byteLength) return null;
+    let tag = null;
     try {
-      const tag = this._view.getUint8(this._pos);
+      tag = this._view.getUint8(this._pos);
       // Mid-stream header = reset frame (concatenated thread-local batch)
       if (tag === MAGIC[0]) {
         if (this._pos + 5 > this._view.byteLength) {
@@ -239,6 +249,7 @@ class TraceDecoder {
         case TAG_STRING_POOL: return this._decodeStringPool();
         case TAG_STACK_POOL: return this._decodeStackPool();
         case TAG_SCHEMA_ANNOTATIONS: return this._decodeSchemaAnnotations();
+        case TAG_VIEWER_EXTENSION: return this._decodeViewerExtension();
         case TAG_TIMESTAMP_RESET: {
           const lo = this._view.getUint32(this._pos, true);
           const hi = this._view.getUint32(this._pos + 4, true);
@@ -255,7 +266,11 @@ class TraceDecoder {
           // Leave `_pos` untouched — the streaming caller rolls back via the
           // snapshot it took before this call — and ask for more data.
           this.needMoreBytes = true;
+          this.incompleteViewerExtension = tag === TAG_VIEWER_EXTENSION;
           return null;
+        }
+        if (tag === TAG_VIEWER_EXTENSION) {
+          throw new Error("Truncated viewer extension");
         }
         // Truncated frame at end of segment; stop gracefully.
         this._pos = this._view.byteLength;
@@ -361,6 +376,33 @@ class TraceDecoder {
       schema.units = units;
     }
     return { type: 'schema_annotations', typeId, annotations };
+  }
+
+  _decodeViewerExtension() {
+    const nameLen = this._view.getUint16(this._pos, true); this._pos += 2;
+    const wasmLen = this._view.getUint32(this._pos, true); this._pos += 4;
+    if (wasmLen > MAX_VIEWER_EXTENSION_MODULE_BYTES) {
+      throw new Error(
+        `Viewer extension module is ${wasmLen} bytes; limit is ` +
+        MAX_VIEWER_EXTENSION_MODULE_BYTES);
+    }
+    const name = new TextDecoder("utf-8", { fatal: true }).decode(
+      new Uint8Array(
+        this._view.buffer,
+        this._view.byteOffset + this._pos,
+        nameLen,
+      ),
+    );
+    this._pos += nameLen;
+    // The regular trace parser only needs to stay aligned. Extension
+    // discovery and validation happen in the isolated byte-source worker, so
+    // retaining another view of the module here would only extend its
+    // lifetime and increase peak memory.
+    if (this._pos + wasmLen > this._view.byteLength) {
+      throw new RangeError("truncated viewer extension");
+    }
+    this._pos += wasmLen;
+    return { type: 'viewer_extension', name, wasmLength: wasmLen };
   }
 
   /** Current byte offset into the buffer. */

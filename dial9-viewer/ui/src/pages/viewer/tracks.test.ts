@@ -18,6 +18,7 @@ function vm(over: Partial<TracksViewModel> = {}): TracksViewModel {
     collapsed: {},
     emptyTracks: new Set<TrackId>(),
     lanesViewportHeight: 130,
+    customTracks: [],
     ...over,
   };
 }
@@ -69,5 +70,20 @@ describe("visibleTracks", () => {
       }),
     );
     expect(shown).toEqual(["timeline", "lanes", "events", "spans", "cpu"]);
+  });
+
+  it("appends trace-provided tracks without adding them to persisted order", () => {
+    const custom = {
+      id: "custom-view:657874:70616e656c" as const,
+      label: "Extension panel",
+      height: 90,
+    };
+    const shown = visibleTracks(
+      vm({
+        trackOrder: ["events", "spans", "queue", "cpu"],
+        customTracks: [custom],
+      }),
+    );
+    expect(shown.at(-1)).toEqual(custom);
   });
 });

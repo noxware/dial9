@@ -17,7 +17,9 @@
 //! [`SharedState`](crate::shared_state::SharedState) with sources already
 //! registered. The Tokio integration reuses the same builder.
 
-use crate::buffer::{BufferMode, Disk, SegmentWriter};
+use crate::buffer::{
+    BufferMode, Disk, MAX_VIEWER_EXTENSIONS, SegmentWriter, ViewerExtension, ViewerExtensionError,
+};
 use crate::clock;
 use crate::handle::Dial9Handle;
 use crate::primitives::sync::Arc;
@@ -83,6 +85,7 @@ fn builder_with<M: BufferMode>(writer: Option<SegmentWriter<M>>) -> RecorderBuil
         sources: Vec::new(),
         recording_start_hooks: Vec::new(),
         segment_metadata: Vec::new(),
+        viewer_extensions: Vec::new(),
         metrics_sink: None,
         thread_init: noop_thread_hook(),
         #[cfg(feature = "pipeline")]
@@ -145,6 +148,7 @@ pub struct RecorderBuilder<M: BufferMode = Disk> {
     sources: Vec<Box<dyn Source>>,
     recording_start_hooks: Vec<RecordingStartHook>,
     segment_metadata: Vec<(String, String)>,
+    viewer_extensions: Vec<ViewerExtension>,
     metrics_sink: Option<metrique::writer::BoxEntrySink>,
     thread_init: RecordingThreadHook,
     /// The segment-processing pipeline. `Some` runs exactly these processors,
@@ -173,6 +177,7 @@ impl<M: BufferMode> std::fmt::Debug for RecorderBuilder<M> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RecorderBuilder")
             .field("sources", &self.sources.len())
+            .field("viewer_extensions", &self.viewer_extensions.len())
             .finish_non_exhaustive()
     }
 }
@@ -200,6 +205,30 @@ impl<M: BufferMode> RecorderBuilder<M> {
     pub fn segment_metadata(mut self, entries: impl IntoIterator<Item = (String, String)>) -> Self {
         merge_segment_metadata(&mut self.segment_metadata, entries);
         self
+    }
+
+    /// Embed a viewer extension in every trace segment.
+    pub fn viewer_extension(
+        mut self,
+        extension: ViewerExtension,
+    ) -> Result<Self, ViewerExtensionError> {
+        if self
+            .viewer_extensions
+            .iter()
+            .any(|existing| existing.name() == extension.name())
+        {
+            return Err(ViewerExtensionError::new(format!(
+                "duplicate viewer-extension name {:?}",
+                extension.name()
+            )));
+        }
+        if self.viewer_extensions.len() >= MAX_VIEWER_EXTENSIONS {
+            return Err(ViewerExtensionError::new(format!(
+                "viewer-extension count exceeds {MAX_VIEWER_EXTENSIONS}"
+            )));
+        }
+        self.viewer_extensions.push(extension);
+        Ok(self)
     }
 
     /// Metrics sink for the flush (and, with `pipeline`, worker) threads.
@@ -234,6 +263,8 @@ impl<M: BufferMode> RecorderBuilder<M> {
         let Some(mut writer) = self.writer else {
             return recorder_disabled();
         };
+
+        writer.set_viewer_extensions(self.viewer_extensions);
 
         let shared = Arc::new(SharedState::new(clock::clock_monotonic_ns()));
 
@@ -536,6 +567,69 @@ mod tests {
             decoded_test_values(&bytes).contains(&7),
             "the source's event should round-trip through the trace file"
         );
+    }
+
+    #[test]
+    fn recorder_builder_embeds_viewer_extension() {
+        use dial9_trace_format::decoder::DecodedFrameRef;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let writer = DiskBuffer::single_file(dir.path().join("trace.bin")).expect("writer");
+
+        let recorder = recorder(writer)
+            .viewer_extension(ViewerExtension::new("cpu", b"\0asm".as_slice()).unwrap())
+            .unwrap()
+            .source(OnceSource {
+                emitted: false,
+                value: 7,
+            })
+            .build();
+        recorder.graceful_shutdown(Duration::ZERO);
+
+        let bytes = std::fs::read(sealed_segment(dir.path())).expect("read segment");
+        let mut decoder = Decoder::new(&bytes).expect("valid trace");
+        assert!(matches!(
+            decoder.next_frame_ref().expect("decode frame"),
+            Some(DecodedFrameRef::ViewerExtension(extension))
+                if extension.name == "cpu" && extension.wasm == b"\0asm"
+        ));
+        assert_eq!(decoded_test_values(&bytes), vec![7]);
+    }
+
+    #[test]
+    fn recorder_builder_rejects_duplicate_viewer_extension_names() {
+        let writer = MemoryBuffer::new(1 << 20).expect("writer");
+        let builder = recorder(writer)
+            .viewer_extension(ViewerExtension::new("same", b"first".as_slice()).unwrap())
+            .unwrap();
+
+        let Err(error) =
+            builder.viewer_extension(ViewerExtension::new("same", b"second".as_slice()).unwrap())
+        else {
+            panic!("duplicate name should be rejected");
+        };
+        assert!(error.to_string().contains("duplicate"));
+    }
+
+    #[test]
+    fn recorder_builder_accepts_at_most_eight_viewer_extensions() {
+        let writer = MemoryBuffer::new(1 << 20).expect("writer");
+        let mut builder = recorder(writer);
+        for index in 0..MAX_VIEWER_EXTENSIONS {
+            builder = builder
+                .viewer_extension(
+                    ViewerExtension::new(format!("extension-{index}"), b"module".as_slice())
+                        .unwrap(),
+                )
+                .unwrap();
+        }
+
+        let Err(error) = builder
+            .viewer_extension(ViewerExtension::new("one-too-many", b"module".as_slice()).unwrap())
+        else {
+            panic!("ninth extension should be rejected");
+        };
+        assert!(error.to_string().contains('8'));
     }
 
     /// `build()` starts recording.
