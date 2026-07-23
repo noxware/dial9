@@ -1,3 +1,5 @@
+export const MAX_VIEWER_EXTENSION_COUNT = 8;
+
 export interface ViewerExtensionWorkerStart {
   readonly kind: "start";
   readonly urls: readonly string[];
@@ -8,9 +10,35 @@ export interface ViewerExtensionWorkerNext {
   readonly kind: "next";
 }
 
+export interface ViewerExtensionWorkerLocalModule {
+  readonly name: string;
+  readonly buffer: ArrayBuffer;
+}
+
+/** Start a disposable session over modules supplied by the local viewer UI. */
+export interface ViewerExtensionWorkerLocalStart {
+  readonly kind: "start-local";
+  readonly modules: readonly ViewerExtensionWorkerLocalModule[];
+}
+
+/** One bounded copy from the viewer's retained decompressed trace buffer. */
+export interface ViewerExtensionWorkerLocalChunk {
+  readonly kind: "local-chunk";
+  readonly buffer: ArrayBuffer;
+  readonly byteOffset: number;
+  readonly byteLength: number;
+}
+
+export interface ViewerExtensionWorkerLocalFinish {
+  readonly kind: "local-finish";
+}
+
 export type ViewerExtensionWorkerRequest =
   | ViewerExtensionWorkerStart
-  | ViewerExtensionWorkerNext;
+  | ViewerExtensionWorkerNext
+  | ViewerExtensionWorkerLocalStart
+  | ViewerExtensionWorkerLocalChunk
+  | ViewerExtensionWorkerLocalFinish;
 
 export interface ViewerExtensionWorkerReady {
   readonly kind: "ready";
@@ -79,7 +107,10 @@ export type ViewerExtensionWorkerPost = (
 ) => void;
 
 export interface ViewerExtensionWorkerPort {
-  postMessage(message: ViewerExtensionWorkerRequest): void;
+  postMessage(
+    message: ViewerExtensionWorkerRequest,
+    transfer?: readonly ArrayBuffer[],
+  ): void;
   onMessage(fn: (message: ViewerExtensionWorkerResponse) => void): void;
   onError(fn: (error: unknown) => void): void;
   terminate(): void;

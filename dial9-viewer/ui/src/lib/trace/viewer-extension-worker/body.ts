@@ -4,17 +4,18 @@ import {
   DEFAULT_EXTENSION_WASM_POLICY_LIMITS,
   validateExtensionWasm,
 } from "../extension-wasm-policy.ts";
-import type {
-  ViewerExtensionOutputBuffer,
-  ViewerExtensionWorkerPost,
-  ViewerExtensionWorkerRequest,
-  ViewerExtensionWorkerStart,
+import {
+  MAX_VIEWER_EXTENSION_COUNT,
+  type ViewerExtensionOutputBuffer,
+  type ViewerExtensionWorkerLocalStart,
+  type ViewerExtensionWorkerPost,
+  type ViewerExtensionWorkerRequest,
+  type ViewerExtensionWorkerStart,
 } from "./protocol.js";
 
 const TRACE_HEADER = [0x54, 0x52, 0x43, 0x00] as const;
 const TRACE_HEADER_BYTES = 5;
 const VIEWER_EXTENSION_TAG = 0x07;
-const MAX_EXTENSION_COUNT = 8;
 const MAX_EXTENSION_NAME_BYTES = 4096;
 const MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 const MAX_TOTAL_OUTPUT_BYTES = 32 * 1024 * 1024;
@@ -26,6 +27,8 @@ interface EmbeddedModule {
   readonly name: string;
   readonly bytes: Uint8Array;
 }
+
+type WorkerMode = "stream" | "local";
 
 interface RetainedModule extends EmbeddedModule {
   readonly nameBytes: Uint8Array;
@@ -139,6 +142,51 @@ interface StrippedPreamble {
 }
 
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
+const UTF8_ENCODER = new TextEncoder();
+
+function localModules(
+  request: ViewerExtensionWorkerLocalStart,
+): readonly EmbeddedModule[] {
+  if (request.modules.length === 0) {
+    throw new Error("viewer-extension worker needs at least one module");
+  }
+  if (request.modules.length > MAX_VIEWER_EXTENSION_COUNT) {
+    throw new Error(
+      `viewer-extension count exceeds ${MAX_VIEWER_EXTENSION_COUNT}`,
+    );
+  }
+  const names = new Set<string>();
+  return request.modules.map((module) => {
+    const nameBytes = UTF8_ENCODER.encode(module.name);
+    if (nameBytes.byteLength === 0) {
+      throw new Error("viewer-extension name is empty");
+    }
+    if (nameBytes.byteLength > MAX_EXTENSION_NAME_BYTES) {
+      throw new Error(
+        `viewer-extension name exceeds ${MAX_EXTENSION_NAME_BYTES} bytes`,
+      );
+    }
+    if (names.has(module.name)) {
+      throw new Error(
+        `duplicate viewer-extension name ${JSON.stringify(module.name)}`,
+      );
+    }
+    if (
+      module.buffer.byteLength >
+      DEFAULT_EXTENSION_WASM_POLICY_LIMITS.maxModuleBytes
+    ) {
+      throw new Error(
+        `viewer-extension module is ${module.buffer.byteLength} bytes; limit is ` +
+          `${DEFAULT_EXTENSION_WASM_POLICY_LIMITS.maxModuleBytes}`,
+      );
+    }
+    names.add(module.name);
+    return {
+      name: module.name,
+      bytes: new Uint8Array(module.buffer),
+    };
+  });
+}
 
 function bytesEqualAt(
   actual: Uint8Array,
@@ -196,9 +244,9 @@ async function consumeViewerExtensionPreamble(
     const tag = await cursor.peekByte();
     if (tag === null || tag !== VIEWER_EXTENSION_TAG) break;
     cursor.advanceByte();
-    if (moduleIndex >= MAX_EXTENSION_COUNT) {
+    if (moduleIndex >= MAX_VIEWER_EXTENSION_COUNT) {
       throw new Error(
-        `viewer-extension count exceeds ${MAX_EXTENSION_COUNT} in source ${sourceNumber}`,
+        `viewer-extension count exceeds ${MAX_VIEWER_EXTENSION_COUNT} in source ${sourceNumber}`,
       );
     }
 
@@ -485,6 +533,7 @@ export function createViewerExtensionWorkerBody(
   let sourceAtEof = false;
   let bundleModules: readonly RetainedModule[] = [];
   let extensions: ActiveExtension[] = [];
+  let mode: WorkerMode | null = null;
   let started = false;
   let ready = false;
   let pulling = false;
@@ -541,30 +590,13 @@ export function createViewerExtensionWorkerBody(
     queuePreamble(preamble, index === 0);
   };
 
-  const initialize = async (request: ViewerExtensionWorkerStart): Promise<void> => {
-    if (request.urls.length === 0) throw new Error("viewer-extension worker needs a URL");
-    const openStream = deps.openStream ?? defaultOpenStream;
-    streamPromises = request.urls.map((url) => {
-      const sourceRequest: ViewerExtensionWorkerStart = {
-        kind: "start",
-        urls: [url],
-        ...(request.headers === undefined ? {} : { headers: request.headers }),
-      };
-      const promise = openStream(sourceRequest, controller.signal);
-      // Later sources start fetching concurrently. Attach a handler now so a
-      // failure cannot become an unhandled rejection before its ordered turn.
-      promise.catch(() => {});
-      return promise;
-    });
-    await prepareSource(0);
-
-    // Fetch/decompression above is trusted I/O and remains abortable, but is not
-    // charged to the untrusted-code deadline. Everything after this message may
-    // compile, instantiate, or call the guest.
+  const initializeExtensions = async (
+    modules: readonly EmbeddedModule[],
+  ): Promise<void> => {
     post({ kind: "initializing" });
     const active: ActiveExtension[] = [];
     let totalMemoryPages = 0;
-    for (const module of bundleModules) {
+    for (const module of modules) {
       try {
         let extension: ActiveExtension;
         if (deps.instantiate !== undefined) {
@@ -614,6 +646,33 @@ export function createViewerExtensionWorkerBody(
     });
   };
 
+  const initialize = async (
+    request: ViewerExtensionWorkerStart,
+  ): Promise<void> => {
+    if (request.urls.length === 0) {
+      throw new Error("viewer-extension worker needs a URL");
+    }
+    const openStream = deps.openStream ?? defaultOpenStream;
+    streamPromises = request.urls.map((url) => {
+      const sourceRequest: ViewerExtensionWorkerStart = {
+        kind: "start",
+        urls: [url],
+        ...(request.headers === undefined ? {} : { headers: request.headers }),
+      };
+      const promise = openStream(sourceRequest, controller.signal);
+      // Later sources start fetching concurrently. Attach a handler now so a
+      // failure cannot become an unhandled rejection before its ordered turn.
+      promise.catch(() => {});
+      return promise;
+    });
+    await prepareSource(0);
+
+    // Fetch/decompression above is trusted I/O and remains abortable, but is not
+    // charged to the untrusted-code deadline. Everything after this message may
+    // compile, instantiate, or call the guest.
+    await initializeExtensions(bundleModules);
+  };
+
   const disable = (extension: ActiveExtension, error: unknown): void => {
     extension.disabled = true;
     warnings.push(
@@ -621,7 +680,12 @@ export function createViewerExtensionWorkerBody(
     );
   };
 
-  const pushChunk = (mainChunk: Uint8Array, guestChunk = mainChunk): void => {
+  const prepareGuestChunk = (
+    guestChunk: Uint8Array,
+  ): {
+    readonly lengths: ReadonlyMap<ActiveExtension, number>;
+    readonly executing: boolean;
+  } => {
     const lengths = new Map<ActiveExtension, number>();
     const executing = extensions.some((extension) => !extension.disabled);
     if (executing) post({ kind: "executing" });
@@ -633,6 +697,26 @@ export function createViewerExtensionWorkerBody(
         disable(extension, error);
       }
     }
+    return { lengths, executing };
+  };
+
+  const executePreparedChunk = (
+    lengths: ReadonlyMap<ActiveExtension, number>,
+  ): void => {
+    for (const [extension, length] of lengths) {
+      if (extension.disabled) continue;
+      try {
+        if (extension.exports.dial9_push(length) !== 0) {
+          disable(extension, extensionError(extension));
+        }
+      } catch (error) {
+        disable(extension, error);
+      }
+    }
+  };
+
+  const pushChunk = (mainChunk: Uint8Array, guestChunk = mainChunk): void => {
+    const prepared = prepareGuestChunk(guestChunk);
 
     // Transfer the main-facing chunk first. The parser can decode it while this
     // worker executes dial9_push against the stripped guest-facing bytes.
@@ -646,18 +730,8 @@ export function createViewerExtensionWorkerBody(
       },
       [outgoing.buffer],
     );
-
-    for (const [extension, length] of lengths) {
-      if (extension.disabled) continue;
-      try {
-        if (extension.exports.dial9_push(length) !== 0) {
-          disable(extension, extensionError(extension));
-        }
-      } catch (error) {
-        disable(extension, error);
-      }
-    }
-    if (executing) post({ kind: "guest-ready" });
+    executePreparedChunk(prepared.lengths);
+    if (prepared.executing) post({ kind: "guest-ready" });
   };
 
   const finish = (): void => {
@@ -737,14 +811,60 @@ export function createViewerExtensionWorkerBody(
           return;
         }
         started = true;
+        mode = "stream";
         initialize(message).catch(reportError);
         return;
       }
-      if (!started || finished) {
-        reportError(new Error("viewer-extension worker cannot pull now"));
+      if (message.kind === "start-local") {
+        if (started) {
+          reportError(new Error("viewer-extension worker already started"));
+          return;
+        }
+        started = true;
+        mode = "local";
+        Promise.resolve()
+          .then(() => initializeExtensions(localModules(message)))
+          .catch(reportError);
         return;
       }
-      pull().catch(reportError);
+      if (!started || finished) {
+        reportError(new Error("viewer-extension worker cannot accept input now"));
+        return;
+      }
+      if (!ready) {
+        reportError(new Error("viewer-extension worker is not ready"));
+        return;
+      }
+      if (message.kind === "next" && mode === "stream") {
+        pull().catch(reportError);
+        return;
+      }
+      if (message.kind === "local-chunk" && mode === "local") {
+        try {
+          const chunk = new Uint8Array(
+            message.buffer,
+            message.byteOffset,
+            message.byteLength,
+          );
+          const prepared = prepareGuestChunk(chunk);
+          executePreparedChunk(prepared.lengths);
+          // The local sender is pull-driven even when every supplied module was
+          // rejected, so every accepted chunk receives exactly one ack.
+          post({ kind: "guest-ready" });
+        } catch (error) {
+          reportError(error);
+        }
+        return;
+      }
+      if (message.kind === "local-finish" && mode === "local") {
+        finish();
+        return;
+      }
+      reportError(
+        new Error(
+          `viewer-extension worker received ${message.kind} in ${mode} mode`,
+        ),
+      );
     },
   };
 }

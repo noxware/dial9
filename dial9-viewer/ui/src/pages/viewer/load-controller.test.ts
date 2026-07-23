@@ -20,7 +20,7 @@ import type { TraceWorkerProgress } from "../../lib/trace/index.js";
 // ── A scripted load handle: the test plays the worker side ─────────────────
 
 interface FakeLoad extends LoadHandle {
-  resolve(): void;
+  resolve(value?: unknown): void;
   reject(err: unknown): void;
   emitProgress(p: TraceWorkerProgress): void;
   aborted: boolean;
@@ -29,9 +29,9 @@ interface FakeLoad extends LoadHandle {
 }
 
 function makeFakeLoad(urls: readonly string[], opts: StartLoadOptions): FakeLoad {
-  let resolveDone!: () => void;
+  let resolveDone!: (value?: unknown) => void;
   let rejectDone!: (err: unknown) => void;
-  const done = new Promise<void>((res, rej) => {
+  const done = new Promise<unknown>((res, rej) => {
     resolveDone = res;
     rejectDone = rej;
   });
@@ -45,7 +45,7 @@ function makeFakeLoad(urls: readonly string[], opts: StartLoadOptions): FakeLoad
       this.aborted = true;
       rejectDone(new DOMException("aborted", "AbortError"));
     },
-    resolve: () => resolveDone(),
+    resolve: (value) => resolveDone(value),
     reject: (err) => rejectDone(err),
     emitProgress: (p) => opts.onProgress(p),
   };
@@ -280,6 +280,61 @@ describe("file loads via object URL", () => {
     h.loads[0]?.resolve();
     await flush();
     expect(revoked).toEqual(["blob:0"]); // revoked only after the load settled
+  });
+});
+
+describe("dropped viewer extensions", () => {
+  it("runs against the retained trace without replacing the load section", async () => {
+    const traceBuffer = new ArrayBuffer(32);
+    let receivedBuffer: ArrayBuffer | null = null;
+    let resolveExtension!: (value: {
+      names: readonly string[];
+      warnings: readonly string[];
+    }) => void;
+    const extensionDone = new Promise<{
+      names: readonly string[];
+      warnings: readonly string[];
+    }>((resolve) => {
+      resolveExtension = resolve;
+    });
+    let extensionAborted = false;
+    const loaded: string[][] = [];
+    const h = makeHarness({
+      startViewerExtensions(files, buffer) {
+        expect(files.map(({ name }) => name)).toEqual(["demo.wasm"]);
+        receivedBuffer = buffer;
+        return {
+          done: extensionDone,
+          abort: () => {
+            extensionAborted = true;
+          },
+        };
+      },
+      onViewerExtensionsLoaded: ({ names }) => loaded.push([...names]),
+    });
+    h.ctrl.loadUrls(["/trace"], initialUrlLabel(1));
+    h.setHasTrace(true);
+    h.loads[0]!.resolve({ buffer: traceBuffer });
+    await flush();
+
+    h.ctrl.loadViewerExtensions([fakeFile("demo.wasm")]);
+    expect(h.ctrl.getState().section).toBe("closed");
+    expect(receivedBuffer).toBe(traceBuffer);
+    resolveExtension({ names: ["demo"], warnings: [] });
+    await flush();
+    expect(loaded).toEqual([["demo"]]);
+
+    h.ctrl.loadViewerExtensions([fakeFile("demo.wasm")]);
+    h.ctrl.loadUrls(["/replacement"], initialUrlLabel(1));
+    expect(extensionAborted).toBe(true);
+  });
+
+  it("rejects a module before a trace buffer has been retained", () => {
+    const h = makeHarness();
+    h.ctrl.loadViewerExtensions([fakeFile("demo.wasm")]);
+    expect(h.errors).toEqual([
+      "Could not load viewer extension: load a trace first",
+    ]);
   });
 });
 

@@ -358,6 +358,14 @@ function boot(): void {
     onError: (message) => {
       toasts.show({ id: "load-error", type: "error", message });
     },
+    onNotice: (message, type) => {
+      toasts.show({
+        id: `viewer-extension-${type}`,
+        type,
+        message,
+        autoHideMs: 5_000,
+      });
+    },
     ...(source.urls.length > 0
       ? { initialUrls: source.urls, initialLabel: source.label }
       : {}),

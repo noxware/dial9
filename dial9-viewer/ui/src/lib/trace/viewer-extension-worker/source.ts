@@ -42,8 +42,8 @@ export function defaultViewerExtensionWorkerFactory(): ViewerExtensionWorkerPort
     { type: "module" },
   );
   return {
-    postMessage(message): void {
-      worker.postMessage(message);
+    postMessage(message, transfer = []): void {
+      worker.postMessage(message, [...transfer]);
     },
     onMessage(fn): void {
       worker.onmessage = (event: MessageEvent<ViewerExtensionWorkerResponse>) =>

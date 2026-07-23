@@ -422,4 +422,53 @@ describe("viewer-extension worker body", () => {
     expect(suffix!.byteOffset).toBe(trace.byteLength - tail.byteLength);
     expect(guestLengths).toEqual([TRACE_HEADER.byteLength, tail.byteLength]);
   });
+
+  it("runs supplied local modules over pushed chunks without echoing trace bytes", async () => {
+    const messages: ViewerExtensionWorkerResponse[] = [];
+    const pushed: number[] = [];
+    const body = createViewerExtensionWorkerBody(
+      (message) => messages.push(message),
+      {
+        async instantiate(module) {
+          expect(module.name).toBe("local-demo");
+          expect([...module.bytes]).toEqual([0, 0x61, 0x73, 0x6d]);
+          return activeExtension(module.name, (bytes) => {
+            pushed.push(...bytes);
+          });
+        },
+      },
+    );
+    const moduleBuffer = Uint8Array.of(0, 0x61, 0x73, 0x6d).buffer;
+
+    body.handle({
+      kind: "start-local",
+      modules: [{ name: "local-demo", buffer: moduleBuffer }],
+    });
+    expect(await waitFor(messages, "ready")).toMatchObject({
+      extensions: ["local-demo"],
+      warnings: [],
+    });
+
+    for (const bytes of [TRACE_HEADER, resetFrame(9)]) {
+      body.handle({
+        kind: "local-chunk",
+        buffer: bytes.buffer.slice(
+          bytes.byteOffset,
+          bytes.byteOffset + bytes.byteLength,
+        ),
+        byteOffset: 0,
+        byteLength: bytes.byteLength,
+      });
+      expect(messages.at(-1)?.kind).toBe("guest-ready");
+    }
+    body.handle({ kind: "local-finish" });
+    const done = await waitFor(messages, "done");
+
+    expect(pushed).toEqual([...concat(TRACE_HEADER, resetFrame(9))]);
+    expect(messages.some(({ kind }) => kind === "chunk")).toBe(false);
+    expect(done).toMatchObject({
+      outputs: [{ name: "local-demo" }],
+      warnings: [],
+    });
+  });
 });

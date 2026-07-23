@@ -201,3 +201,13 @@ An extension runs once while its trace is loaded and emits immutable tables.
 Zoom, pan, tooltips, and cursor legends query those tables synchronously.
 Reactive guest callbacks are intentionally absent; a future ABI can add them
 without changing the materialized-table or component contracts.
+
+For development, one or more `.wasm` files may be dropped onto a viewer with a
+trace already loaded. The viewer streams its retained decompressed buffer to the
+same disposable worker in transferred 1 MiB chunks, so it neither refetches nor
+duplicates the complete trace. Local modules use the same policy, ABI, output
+validation, deadlines, and aggregate rendering limits as embedded modules.
+Their extension name is the filename without `.wasm`; dropping a successful
+rebuild with the same name replaces its previous panels, while a rejected
+rebuild leaves the last valid result visible. Local extensions last only for
+the current viewer session and do not modify the trace.

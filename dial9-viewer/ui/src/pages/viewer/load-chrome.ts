@@ -23,6 +23,10 @@ import type { ReparseRange } from "../../lib/trace/index.js";
 import type { ViewerStore } from "../../store/store.js";
 import type { EscCascade } from "./esc-cascade.js";
 import {
+  isViewerExtensionFile,
+  loadDroppedViewerExtensions,
+} from "./viewer-extension-drop.js";
+import {
   createLoadController,
   initialUrlLabel,
   type LoadChromeState,
@@ -37,6 +41,8 @@ export interface LoadChromeOptions {
   esc: EscCascade;
   /** Show a load failure to the user (wired to the toast channel). */
   onError(message: string): void;
+  /** Show non-fatal extension status (wired to the toast channel). */
+  onNotice?(message: string, type: "info" | "warn"): void;
   /** Boot `?trace=` components; when present the layer auto-loads them. */
   initialUrls?: readonly string[];
   /** Toolbar label for the boot source (shown once it loads). */
@@ -44,6 +50,7 @@ export interface LoadChromeOptions {
   /** Test seams. */
   document?: Document;
   startLoad?: LoadControllerDeps["startLoad"];
+  startViewerExtensions?: LoadControllerDeps["startViewerExtensions"];
   confirm?: (message: string) => boolean;
 }
 
@@ -118,8 +125,24 @@ export function mountLoadChrome(options: LoadChromeOptions): LoadChrome {
     startLoad:
       options.startLoad ??
       ((urls, opts) => loadTraceOnMainThread(store, urls, opts)),
+    startViewerExtensions:
+      options.startViewerExtensions ??
+      ((files, traceBuffer) =>
+        loadDroppedViewerExtensions(store, traceBuffer, files)),
     confirm: options.confirm ?? ((message) => window.confirm(message)),
     onError: options.onError,
+    onViewerExtensionsLoaded: ({ names, warnings }) => {
+      options.onNotice?.(
+        `Loaded viewer extension${names.length === 1 ? "" : "s"}: ${names.join(", ")}`,
+        "info",
+      );
+      if (warnings.length > 0) {
+        options.onNotice?.(
+          `${warnings.length} viewer-extension warning${warnings.length === 1 ? "" : "s"}; see the console`,
+          "warn",
+        );
+      }
+    },
     onChange: renderLayer,
     onLoaded: () => {
       committedLabel = pendingLabel;
@@ -165,11 +188,25 @@ export function mountLoadChrome(options: LoadChromeOptions): LoadChrome {
     if (!isFileDrag(e)) return;
     e.preventDefault();
     controller.endDrag();
-    const file = e.dataTransfer?.files[0];
-    if (file) {
-      pendingLabel = file.name;
-      controller.loadFile(file);
+    const files = [...(e.dataTransfer?.files ?? [])];
+    if (files.length === 0) return;
+    const wasmFiles = files.filter(isViewerExtensionFile);
+    if (wasmFiles.length > 0) {
+      if (wasmFiles.length !== files.length) {
+        options.onError(
+          "Drop trace files and viewer-extension .wasm files separately",
+        );
+        return;
+      }
+      controller.loadViewerExtensions(wasmFiles);
+      return;
     }
+    if (files.length > 1) {
+      options.onError("Drop one local trace file at a time");
+      return;
+    }
+    pendingLabel = files[0]!.name;
+    controller.loadFile(files[0]!);
   };
   doc.addEventListener("dragenter", onDragEnter);
   doc.addEventListener("dragover", onDragOver);
@@ -253,8 +290,8 @@ export function mountLoadChrome(options: LoadChromeOptions): LoadChrome {
     return html`
       <div class="d9-drag-overlay">
         <div class="d9-drag-overlay-msg">
-          Drop trace file to load
-          <small>Replaces the current trace</small>
+          Drop trace or viewer extension
+          <small><code>.bin</code> replaces the trace; <code>.wasm</code> adds panels</small>
         </div>
       </div>
     `;

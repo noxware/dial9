@@ -55,6 +55,20 @@ export interface LoadHandle {
   abort(): void;
 }
 
+export interface ViewerExtensionFile extends Blob {
+  readonly name: string;
+}
+
+export interface ViewerExtensionLoadResult {
+  readonly names: readonly string[];
+  readonly warnings: readonly string[];
+}
+
+export interface ViewerExtensionLoadHandle {
+  readonly done: Promise<ViewerExtensionLoadResult>;
+  abort(): void;
+}
+
 export interface StartLoadOptions {
   onProgress(progress: TraceWorkerProgress): void;
   /** Same-origin credential headers; omitted for local file loads. */
@@ -115,6 +129,13 @@ export interface LoadControllerDeps {
   /** Build a fetchable URL for a dropped/picked file; default createObjectURL. */
   createObjectUrl?(file: Blob): string;
   revokeObjectUrl?(url: string): void;
+  /** Execute dropped WASM modules over the retained decompressed trace. */
+  startViewerExtensions?(
+    files: readonly ViewerExtensionFile[],
+    traceBuffer: ArrayBuffer,
+  ): ViewerExtensionLoadHandle;
+  /** Report a successful extension load without changing trace-load chrome. */
+  onViewerExtensionsLoaded?(result: ViewerExtensionLoadResult): void;
   /** True when a creds module is present but has no credentials. */
   credsMissing?(): boolean;
   /** Same-origin credential headers for URL loads. */
@@ -180,6 +201,8 @@ export interface LoadController {
   dismiss(): void;
   /** Load a dropped/picked file via an object URL. */
   loadFile(file: Blob & { name?: string }): void;
+  /** Add or replace local viewer extensions while retaining the current trace. */
+  loadViewerExtensions(files: readonly ViewerExtensionFile[]): void;
   /** Load one or more URLs (boot `?trace=`). `label` is the initial label. */
   loadUrls(urls: readonly string[], label: string): void;
   /**
@@ -244,6 +267,8 @@ export function createLoadController(deps: LoadControllerDeps): LoadController {
   // The decompressed trace bytes from the last successful load, retained for
   // Set/Clear Range reparse. Null until the first load completes.
   let retainedBuffer: ArrayBuffer | null = null;
+  let extensionLoadToken = 0;
+  let currentExtensionHandle: ViewerExtensionLoadHandle | null = null;
 
   // Parse progress arrives on every ~256 KB drain, and each notification drives
   // a full lit-html render of the loading layer. The main-thread parser runs
@@ -302,6 +327,11 @@ export function createLoadController(deps: LoadControllerDeps): LoadController {
   ): void {
     // Supersede any in-flight load (its callbacks are already token-guarded).
     if (currentHandle !== null) currentHandle.abort();
+    extensionLoadToken += 1;
+    if (currentExtensionHandle !== null) {
+      currentExtensionHandle.abort();
+      currentExtensionHandle = null;
+    }
     loadToken += 1;
     const token = loadToken;
     section = "loading";
@@ -432,6 +462,54 @@ export function createLoadController(deps: LoadControllerDeps): LoadController {
         objectUrl,
       });
     },
+    loadViewerExtensions(files): void {
+      if (!deps.hasTrace() || retainedBuffer === null) {
+        deps.onError(
+          "Could not load viewer extension: load a trace first",
+        );
+        return;
+      }
+      if (section === "loading") {
+        deps.onError(
+          "Could not load viewer extension while a trace is loading",
+        );
+        return;
+      }
+      if (deps.startViewerExtensions === undefined) {
+        deps.onError("Could not load viewer extension: loader unavailable");
+        return;
+      }
+
+      extensionLoadToken += 1;
+      const token = extensionLoadToken;
+      currentExtensionHandle?.abort();
+      section = "closed";
+      dragCounter = 0;
+      notify();
+
+      let handle: ViewerExtensionLoadHandle;
+      try {
+        handle = deps.startViewerExtensions(files, retainedBuffer);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        deps.onError(`Could not load viewer extension: ${message}`);
+        return;
+      }
+      currentExtensionHandle = handle;
+      handle.done.then(
+        (result) => {
+          if (token !== extensionLoadToken) return;
+          currentExtensionHandle = null;
+          deps.onViewerExtensionsLoaded?.(result);
+        },
+        (error: unknown) => {
+          if (token !== extensionLoadToken || isAbortError(error)) return;
+          currentExtensionHandle = null;
+          const message = error instanceof Error ? error.message : String(error);
+          deps.onError(`Could not load viewer extension: ${message}`);
+        },
+      );
+    },
     loadUrls(urls, label): void {
       begin(urls, { label, withHeaders: true, objectUrl: null });
     },
@@ -487,9 +565,14 @@ export function createLoadController(deps: LoadControllerDeps): LoadController {
     },
     dispose(): void {
       loadToken += 1;
+      extensionLoadToken += 1;
       if (currentHandle !== null) {
         currentHandle.abort();
         currentHandle = null;
+      }
+      if (currentExtensionHandle !== null) {
+        currentExtensionHandle.abort();
+        currentExtensionHandle = null;
       }
       stopTimer();
     },

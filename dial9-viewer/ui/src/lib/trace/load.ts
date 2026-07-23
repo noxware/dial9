@@ -38,11 +38,8 @@ import type {
   ParsedTrace,
 } from "../../../trace_parser.js";
 import { parseChunksWithCapture, streamTraceWithCapture } from "./stream.js";
-import type { ViewBundle } from "../custom-views/types.js";
-import {
-  VIEW_OUTPUT_LIMITS,
-  decodeViewerExtensionOutput,
-} from "./viewer-extension-output.js";
+import type { ViewerExtension } from "../../types/trace.js";
+import { integrateViewerExtensionOutputs } from "./viewer-extension-results.js";
 import {
   ViewerExtensionWorkerError,
   createViewerExtensionByteSource,
@@ -419,47 +416,10 @@ export function loadTraceInWorker(
   };
 }
 
-interface LoadedViewerExtension {
-  readonly name: string;
-  readonly bundle: ViewBundle;
-}
-
 type TraceWithViewerExtensions = ParsedTrace & {
-  viewerExtensions?: readonly LoadedViewerExtension[];
+  viewerExtensions?: readonly ViewerExtension[];
   viewerExtensionWarnings?: readonly string[];
 };
-
-function customViewRenderRows(bundle: ViewBundle): number {
-  let rows = 0;
-  for (const panel of bundle.panels) {
-    for (const component of panel.components) {
-      if (
-        component.kind !== "tooltip" &&
-        component.kind !== "legend" &&
-        component.kind !== "background"
-      ) {
-        rows += bundle.tables[component.input]?.length ?? 0;
-      }
-    }
-  }
-  return rows;
-}
-
-function customViewDisplayItems(bundle: ViewBundle): number {
-  let items = 0;
-  for (const panel of bundle.panels) {
-    for (const component of panel.components) {
-      if (component.kind === "tooltip") {
-        items += component.rows.length;
-      } else if (component.kind === "legend") {
-        items +=
-          (component.items?.length ?? 0) +
-          (component.atCursor?.length ?? 0);
-      }
-    }
-  }
-  return items;
-}
 
 async function streamTraceWithViewerExtensions(
   urls: readonly string[],
@@ -480,65 +440,15 @@ async function streamTraceWithViewerExtensions(
   try {
     const parsed = await parseChunksWithCapture(source.chunks, parseOpts);
     const result = await source.result;
-    const warnings = [...result.warnings];
-    const extensions: LoadedViewerExtension[] = [];
-    let panelCount = 0;
-    let panelHeight = 0;
-    let renderRows = 0;
-    let displayItems = 0;
-    for (const output of result.outputs) {
-      try {
-        const bundle = decodeViewerExtensionOutput(output.buffer);
-        const nextPanelCount = panelCount + bundle.panels.length;
-        const nextPanelHeight =
-          panelHeight +
-          bundle.panels.reduce((sum, panel) => sum + panel.height, 0);
-        const nextRenderRows = renderRows + customViewRenderRows(bundle);
-        const nextDisplayItems =
-          displayItems + customViewDisplayItems(bundle);
-        if (nextPanelCount > VIEW_OUTPUT_LIMITS.panels) {
-          throw new Error(
-            `aggregate panel count exceeds ${VIEW_OUTPUT_LIMITS.panels}`,
-          );
-        }
-        if (nextPanelHeight > VIEW_OUTPUT_LIMITS.totalPanelHeight) {
-          throw new Error(
-            `aggregate panel height exceeds ` +
-              `${VIEW_OUTPUT_LIMITS.totalPanelHeight}px`,
-          );
-        }
-        if (nextRenderRows > VIEW_OUTPUT_LIMITS.renderRows) {
-          throw new Error(
-            `aggregate drawing work exceeds ` +
-              `${VIEW_OUTPUT_LIMITS.renderRows} source rows`,
-          );
-        }
-        if (nextDisplayItems > VIEW_OUTPUT_LIMITS.displayItems) {
-          throw new Error(
-            `aggregate tooltip and legend items exceed ` +
-              `${VIEW_OUTPUT_LIMITS.displayItems}`,
-          );
-        }
-        panelCount = nextPanelCount;
-        panelHeight = nextPanelHeight;
-        renderRows = nextRenderRows;
-        displayItems = nextDisplayItems;
-        extensions.push({
-          name: output.name,
-          bundle,
-        });
-      } catch (error) {
-        warnings.push(
-          `${output.name}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      }
-    }
+    const integrated = integrateViewerExtensionOutputs(
+      [],
+      result.outputs,
+      result.warnings,
+    );
     const trace = parsed.trace as TraceWithViewerExtensions;
-    trace.viewerExtensions = extensions;
-    trace.viewerExtensionWarnings = warnings;
-    for (const warning of warnings) {
+    trace.viewerExtensions = integrated.extensions;
+    trace.viewerExtensionWarnings = integrated.warnings;
+    for (const warning of integrated.warnings) {
       console.warn(`[dial9 viewer extension] ${warning}`);
     }
     return parsed;

@@ -57,6 +57,7 @@ export interface ViewerExtension {
  */
 export type ParsedTrace = CoreParsedTrace & {
   readonly viewerExtensions?: readonly ViewerExtension[];
+  readonly viewerExtensionWarnings?: readonly string[];
 };
 
 export type {
