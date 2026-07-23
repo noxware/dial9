@@ -70,6 +70,13 @@
     return new ListView(handle.rows.length, (index) => handle.rows[index]);
   }
 
+  function traceEnvironment(trace) {
+    return {
+      events: traceEventsView(trace),
+      metadata: readonlyMapView(trace && trace.segmentMetadata),
+    };
+  }
+
   function compileBundle(bundle, host) {
     const handles = new Map();
     for (const name of Object.keys(bundle.outputs || {})) handles.set(name, { name, rows: [] });
@@ -110,6 +117,7 @@
     const onDiagnostic = (diagnostic) => diagnostics.push(diagnostic);
     const traceProgram = compile(bundle.script, { functions, computed, onDiagnostic });
     const dynamicPrograms = new Map();
+    const failedDynamics = new Set();
     for (const definition of bundle.dynamic || []) {
       const program = compile(definition.script, { functions, computed, onDiagnostic });
       dynamicPrograms.set(definition.id, { ...definition, program });
@@ -123,22 +131,48 @@
       }
     }
 
+    function recordFailure(phase, error) {
+      const message = error && error.message ? error.message : String(error);
+      diagnostics.push({ severity: "error", message: `${phase}: ${message}` });
+    }
+
     return {
       id: bundle.id,
       bundle,
       diagnostics,
-      loadTrace(trace) {
-        events = traceEventsView(trace);
-        metadata = readonlyMapView(trace && trace.segmentMetadata);
+      loadTrace(trace, preparedEnvironment) {
         diagnostics.length = 0;
+        failedDynamics.clear();
+        events = new ListView(0, () => undefined);
+        metadata = readonlyMapView(new Map());
+        pointer = null;
         clearOutputs(Object.keys(bundle.outputs || {}));
-        traceProgram();
+        try {
+          const environment = preparedEnvironment || traceEnvironment(trace);
+          events = environment.events;
+          metadata = environment.metadata;
+          traceProgram();
+          return true;
+        } catch (error) {
+          clearOutputs(Object.keys(bundle.outputs || {}));
+          recordFailure("trace program failed", error);
+          return false;
+        }
       },
       runDynamic(id) {
         const definition = dynamicPrograms.get(id);
         if (!definition) throw new Error(`unknown dynamic program ${JSON.stringify(id)}`);
+        if (failedDynamics.has(id)) return false;
         clearOutputs(definition.outputs);
-        definition.program();
+        try {
+          definition.program();
+          return true;
+        } catch (error) {
+          clearOutputs(definition.outputs);
+          failedDynamics.add(id);
+          recordFailure(`dynamic program ${JSON.stringify(id)} failed`, error);
+          return false;
+        }
       },
       setPointer(value) {
         pointer = value == null ? null : readonlyMapView(value);
@@ -153,6 +187,7 @@
         metadata = readonlyMapView(new Map());
         pointer = null;
         diagnostics.length = 0;
+        failedDynamics.clear();
         clearOutputs([...handles.keys()]);
       },
     };
@@ -182,24 +217,45 @@
         },
       },
       outputs: {
-        cpu_intervals: {},
-        cpu_guides: {},
-        cpu_summary: {},
-        context_intervals: {},
+        cpu_intervals: { units: {
+          start: "ns", end: "ns", wall_delta: "ns", cpu_delta: "ns",
+          cores: "cores", utilization: "ratio",
+        } },
+        cpu_guides: { units: { value: "cores" } },
+        cpu_summary: { units: { avg: "cores", max: "cores", avg_utilization: "ratio" } },
+        context_intervals: { units: {
+          start: "ns", end: "ns",
+          voluntary_delta: "switches", involuntary_delta: "switches",
+          voluntary_rate: "switches/s", involuntary_rate: "switches/s",
+        } },
       },
       script: [
         set("has_previous", "bool.false"),
         set("metadata", "dial9.metadata"),
+        set("has_capacity", "bool.false"),
         [
           "case",
           ["map.has", get("metadata"), s(capacity)],
           [
-            "dial9.output.emit",
-            "cpu_guides",
-            record([
-              ["value", ["float.from", ["map.get", get("metadata"), s(capacity)]]],
-              ["label", s("available parallelism")],
-            ]),
+            set("capacity", ["float.from", ["map.get", get("metadata"), s(capacity)]]),
+            [
+              "case",
+              ["cmp.gt", get("capacity"), "float.zero"],
+              [
+                set("has_capacity", "bool.true"),
+                [
+                  "dial9.output.emit",
+                  "cpu_guides",
+                  record([
+                    ["value", get("capacity")],
+                    ["label", s("available parallelism")],
+                    ["legend", ["string.concat", ["string.from", get("capacity")], s(" core capacity")]],
+                    ["color", s("#ffcf99")],
+                  ]),
+                ],
+              ],
+              "bool.true", "null",
+            ],
           ],
           "bool.true",
           "null",
@@ -240,14 +296,30 @@
                     ["diagnostic.warn", s("CPU counter decreased or time did not advance")],
                     "bool.true",
                     [
-                      "dial9.output.emit", "cpu_intervals",
-                      record([
-                        ["start", get("previous_time")],
-                        ["end", get("current_time")],
-                        ["wall_delta", get("wall_delta")],
-                        ["cpu_delta", get("cpu_delta")],
-                        ["cores", ["float.divide", ["float.from", get("cpu_delta")], ["float.from", get("wall_delta")]]],
+                      set("cores", ["float.divide", ["float.from", get("cpu_delta")], ["float.from", get("wall_delta")]]),
+                      set("utilization", [
+                        "case", get("has_capacity"),
+                        ["float.clamp", ["float.divide", get("cores"), get("capacity")], "float.zero", f(1)],
+                        "bool.true", "null",
                       ]),
+                      set("cpu_color", [
+                        "case",
+                        ["bool.and", get("has_capacity"), ["cmp.gte", get("cores"), get("capacity")]],
+                        s("#ef5350"),
+                        "bool.true", s("#4fc3f7"),
+                      ]),
+                      [
+                        "dial9.output.emit", "cpu_intervals",
+                        record([
+                          ["start", get("previous_time")],
+                          ["end", get("current_time")],
+                          ["wall_delta", get("wall_delta")],
+                          ["cpu_delta", get("cpu_delta")],
+                          ["cores", get("cores")],
+                          ["utilization", get("utilization")],
+                          ["color", get("cpu_color")],
+                        ]),
+                      ],
                     ],
                   ],
                   [
@@ -314,6 +386,13 @@
             set("total_overlap", "integer.zero"),
             set("weighted_cores", "float.zero"),
             set("max_cores", "float.zero"),
+            set("metadata", "dial9.metadata"),
+            set("has_capacity", ["map.has", get("metadata"), s(capacity)]),
+            [
+              "case", get("has_capacity"),
+              set("capacity", ["float.from", ["map.get", get("metadata"), s(capacity)]]),
+              "bool.true", "null",
+            ],
             set("viewport", "dial9.viewport"),
             set("view_start", ["map.get", get("viewport"), s("start")]),
             set("view_end", ["map.get", get("viewport"), s("end")]),
@@ -347,6 +426,19 @@
                   "bool.true", "float.zero",
                 ]],
                 ["max", get("max_cores")],
+                ["avg_utilization", [
+                  "case", get("has_capacity"),
+                  [
+                    "case", ["cmp.gt", get("capacity"), "float.zero"],
+                    ["float.clamp", ["float.divide", [
+                        "case", ["cmp.gt", get("total_overlap"), "integer.zero"],
+                        ["float.divide", get("weighted_cores"), ["float.from", get("total_overlap")]],
+                        "bool.true", "float.zero",
+                      ], get("capacity")], "float.zero", f(1)],
+                    "bool.true", "null",
+                  ],
+                  "bool.true", "null",
+                ]],
               ]),
             ],
           ],
@@ -362,12 +454,14 @@
           dynamic: ["cpu-visible-summary"],
           legend: [
             { label: "CPU cores", color: "#4fc3f7" },
-            { label: "Capacity", color: "#ffcf99", data: "cpu_guides" },
+            { label: "At/over capacity", color: "#ef5350", data: "cpu_guides" },
+            { data: "cpu_guides", channels: { label: "legend", color: "color" } },
           ],
           summary: {
             data: "cpu_summary",
             fields: [
               { label: "avg", field: "avg", format: "cores" },
+              { label: "avg CPU", field: "avg_utilization", format: "percent", omitEmpty: true },
               { label: "max", field: "max", format: "cores" },
             ],
           },
@@ -375,18 +469,20 @@
             {
               renderer: "interval-area",
               data: "cpu_intervals",
-              channels: { start: "start", end: "end", y: "cores" },
+              hit: "x",
+              channels: { start: "start", end: "end", y: "cores", color: "color" },
               style: { color: "#4fc3f7", fillAlpha: 0.35 },
               tooltip: [
                 { label: "Window", field: "wall_delta", format: "duration" },
                 { label: "CPU time", field: "cpu_delta", format: "duration" },
                 { label: "Cores", field: "cores", format: "cores" },
+                { label: "Total CPU", field: "utilization", format: "percent", omitEmpty: true },
               ],
             },
             {
               renderer: "horizontal-rule",
               data: "cpu_guides",
-              channels: { y: "value", label: "label" },
+              channels: { y: "value", label: "label", color: "color" },
               style: { color: "#ffcf99", dash: [4, 3] },
             },
           ],
@@ -476,10 +572,32 @@
       id: "green-dinosaur",
       version: 1,
       computed_values: {},
-      outputs: { dino_points: {}, dino_labels: {} },
+      outputs: { dino_points: {}, dino_labels: {}, dino_hover: {} },
       script: [
         ...emits,
         ["dial9.output.emit", "dino_labels", record([["x", f(77)], ["y", f(72)], ["text", s("🔥🔥🔥")], ["tooltip", s("hot breath")]])],
+      ],
+      dynamic: [
+        {
+          id: "dino-hover",
+          outputs: ["dino_hover"],
+          script: [
+            set("pointer", "dial9.pointer"),
+            [
+              "dial9.output.emit", "dino_hover",
+              record([["text", [
+                "case", ["cmp.eq", get("pointer"), "null"],
+                s(""),
+                "bool.true", [
+                  "case",
+                  ["cmp.eq", ["map.get", get("pointer"), s("datum")], "null"],
+                  s(""),
+                  "bool.true", ["map.get", ["map.get", get("pointer"), s("datum")], s("tooltip")],
+                ],
+              ]]]),
+            ],
+          ],
+        },
       ],
       panels: [
         {
@@ -488,7 +606,12 @@
           height: 150,
           x: { type: "linear", domain: [0, 100] },
           y: { domain: [0, 100], includeZero: true },
+          pointerDynamic: ["dino-hover"],
           legend: [{ label: "Definitely production data", color: "#66bb6a" }],
+          summary: {
+            data: "dino_hover",
+            fields: [{ label: "", field: "text", format: "text", omitEmpty: true }],
+          },
           layers: [
             {
               renderer: "step-line", data: "dino_points",
@@ -511,6 +634,7 @@
   const api = {
     compileBundle,
     eventView,
+    traceEnvironment,
     traceEventsView,
     resourceBundle,
     dinoBundle,

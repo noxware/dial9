@@ -103,6 +103,7 @@ una instrucción; varias expresiones se agrupan directamente:
 |`dial9.viewport`|MapView con el rango visible|
 |`dial9.pointer`|MapView o `null`|
 |`dial9.output.emit`|Agrega un valor a un output|
+|`dial9.output.rows`|ListView read-only de un output materializado|
 
 Un computed value hereda el scope de su invocación, incluido el binding `event` de un `for_each`.
 
@@ -131,7 +132,8 @@ Un computed value hereda el scope de su invocación, incluido el binding `event`
 |Bytes|`Uint8Array`|
 
 `MapView` y `ListView` son shapes internos que implementan las operaciones básicas
-de Map y List sin exponer la representación física del valor.
+de Map y List sin exponer la representación física del valor. El lenguaje no
+expone `undefined`; un valor ausente se observa como `null`.
 
 ## Lowering
 
@@ -153,8 +155,8 @@ La ejecución sobre eventos no recorre el AST ni resuelve nombres de operaciones
 |Variables|`var.get`, `var.set`|
 |Control flow|`case`, `for_each`|
 |Conversion|`integer.from`, `float.from`, `string.from`, `type.of`|
-|Integer math|`integer.add`, `integer.subtract`, `integer.multiply`, `integer.divide`, `integer.pow`|
-|Float math|`float.add`, `float.subtract`, `float.multiply`, `float.divide`, `float.pow`|
+|Integer math|`integer.add`, `integer.subtract`, `integer.multiply`, `integer.divide`, `integer.modulo`, `integer.pow`, `integer.negate`, `integer.abs`, `integer.min`, `integer.max`, `integer.clamp`|
+|Float math|`float.add`, `float.subtract`, `float.multiply`, `float.divide`, `float.pow`, `float.negate`, `float.abs`, `float.min`, `float.max`, `float.clamp`, `float.sqrt`, `float.floor`, `float.ceil`, `float.round`, `float.truncate`|
 |Comparison|`cmp.eq`, `cmp.lt`, `cmp.lte`, `cmp.gt`, `cmp.gte`|
 |Boolean|`bool.not`, `bool.and`, `bool.or`|
 |Map|`map.new`, `map.get`, `map.has`, `map.set`, `map.remove`|
@@ -177,15 +179,20 @@ Con argumentos, `map.new` exige pares `key, value`.
 |`integer.pow`|Exige un exponente integer no negativo|
 |`*.divide`|División por cero es un error|
 |`float.*`|Un resultado `NaN` o infinito es un error|
+|`float.round`|Los empates redondean alejándose de cero|
+|`float.floor/ceil/round/truncate`|Devuelven Float; `integer.from` hace explícito el cambio de tipo|
 
 # Dial9 bundle
 
 ```rust
 struct Bundle {
+    id: String,
     version: u32,
     computed_values: BTreeMap<String, ComputedValue>,
     outputs: BTreeMap<String, Output>,
     script: SExpr,
+    dynamic: Vec<DynamicProgram>,
+    panels: Vec<Panel>,
 }
 
 struct ComputedValue {
@@ -207,6 +214,22 @@ struct Output {
 |Lifetime|Se materializa durante el script y queda inmutable al terminar|
 |Representación|Colección lógica; el backend decide su almacenamiento físico|
 |Rendering|El renderer consume valores semánticos y puede crear temporales por viewport|
+
+## Panel primitives
+
+|Renderer|Channels|
+|---|---|
+|`interval-area` / `interval-line`|`start`, `end`, `y`, optional `color`|
+|`line` / `step-line`|`x`, `y`, optional `color`|
+|`points`|`x`, `y`, optional `color`|
+|`horizontal-rule`|`y`, optional `label`, `color`|
+|`text`|`x`, `y`, `text`, optional `color`|
+
+|Presenter|Input|
+|---|---|
+|Layer tooltip|Fields del datum alcanzado por hit testing|
+|Legend|Entradas estáticas o rows con channels `label` y `color`|
+|Summary|Fields de una row, incluidos outputs dinámicos por viewport o pointer|
 
 # CPU usage
 

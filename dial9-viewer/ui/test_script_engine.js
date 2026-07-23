@@ -58,6 +58,19 @@ test("integer arithmetic is typed", () => {
   );
 });
 
+test("integer utility math preserves exact integer semantics", () => {
+  assert.strictEqual(compile(["integer.negate", int(7)])(), -7n);
+  assert.strictEqual(compile(["integer.abs", int(-7)])(), 7n);
+  assert.strictEqual(compile(["integer.modulo", int(-7), int(3)])(), -1n);
+  assert.strictEqual(compile(["integer.clamp", int(12), int(0), int(10)])(), 10n);
+  throws(ScriptRuntimeError, /division by zero/, () =>
+    compile(["integer.modulo", int(1), "integer.zero"])(),
+  );
+  throws(ScriptRuntimeError, /minimum exceeds maximum/, () =>
+    compile(["integer.clamp", int(1), int(2), int(0)])(),
+  );
+});
+
 test("integer division truncates toward zero", () => {
   assert.strictEqual(compile(["integer.divide", int(-7), int(3)])(), -2n);
   assert.strictEqual(compile(["integer.divide", int(7), int(-3)])(), -2n);
@@ -90,6 +103,23 @@ test("float arithmetic rejects non-finite results", () => {
   );
   throws(ScriptRuntimeError, /non-finite/, () =>
     compile(["float.pow", ["float.const", "1e308"], ["float.const", "2"]])(),
+  );
+});
+
+test("float utility math has explicit rounding semantics and remains Float", () => {
+  const f = (value) => ["float.const", String(value)];
+  assert.strictEqual(compile(["float.negate", f(1.5)])(), -1.5);
+  assert.strictEqual(compile(["float.abs", f(-1.5)])(), 1.5);
+  assert.strictEqual(compile(["float.floor", f(-1.2)])(), -2);
+  assert.strictEqual(compile(["float.ceil", f(-1.2)])(), -1);
+  assert.strictEqual(compile(["float.truncate", f(-1.8)])(), -1);
+  assert.strictEqual(compile(["float.round", f(-1.5)])(), -2, "ties round away from zero");
+  assert.strictEqual(compile(["float.sqrt", f(81)])(), 9);
+  assert.strictEqual(compile(["float.clamp", f(-2), f(0), f(1)])(), 0);
+  assert.strictEqual(compile(["type.of", ["float.floor", f(1.2)]])(), "float");
+  throws(ScriptRuntimeError, /non-finite/, () => compile(["float.sqrt", f(-1)])());
+  throws(ScriptRuntimeError, /minimum exceeds maximum/, () =>
+    compile(["float.clamp", f(1), f(2), f(0)])(),
   );
 });
 
@@ -233,6 +263,10 @@ test("external zero-argument functions use Atom form", () => {
   assert.strictEqual(compile("host.now", { functions: { "host.now": () => 9n } })(), 9n);
 });
 
+test("host undefined never leaks into the language", () => {
+  assert.strictEqual(compile("host.missing", { functions: { "host.missing": () => undefined } })(), null);
+});
+
 test("computed values run in the caller variable scope", () => {
   const event = new Map([["user", 7n], ["system", 5n]]);
   const program = compile([
@@ -267,6 +301,59 @@ test("map.new constructs and mutates an owned Map", () => {
   assert.deepStrictEqual([...program()], [["b", 3n]]);
 });
 
+test("maps and loops express partitioned aggregation and indexed joins", () => {
+  const input = [
+    new Map([["group", "a"], ["value", 2n]]),
+    new Map([["group", "b"], ["value", 5n]]),
+    new Map([["group", "a"], ["value", 3n]]),
+  ];
+  const labels = [
+    new Map([["group", "a"], ["label", "Alpha"]]),
+    new Map([["group", "b"], ["label", "Beta"]]),
+  ];
+  const result = compile([
+    set("totals", "map.new"),
+    [
+      "for_each", "row", "index", "input",
+      [
+        set("key", mapGet(get("row"), "group")),
+        set("value", mapGet(get("row"), "value")),
+        [
+          "case", ["map.has", get("totals"), get("key")],
+          ["map.set", get("totals"), get("key"), ["integer.add", ["map.get", get("totals"), get("key")], get("value")]],
+          "bool.true", ["map.set", get("totals"), get("key"), get("value")],
+        ],
+      ],
+    ],
+    set("label_by_group", "map.new"),
+    [
+      "for_each", "row", "index", "labels",
+      ["map.set", get("label_by_group"), mapGet(get("row"), "group"), mapGet(get("row"), "label")],
+    ],
+    set("joined", "list.new"),
+    [
+      "for_each", "row", "index", "input",
+      [
+        set("key", mapGet(get("row"), "group")),
+        [
+          "case", ["map.has", get("label_by_group"), get("key")],
+          ["list.push", get("joined"), ["map.new",
+            str("label"), ["map.get", get("label_by_group"), get("key")],
+            str("total"), ["map.get", get("totals"), get("key")],
+          ]],
+          "bool.true", "null",
+        ],
+      ],
+    ],
+    get("joined"),
+  ], { functions: { input: () => input, labels: () => labels } })();
+  assert.deepStrictEqual(result.map((value) => Object.fromEntries(value)), [
+    { label: "Alpha", total: 5n },
+    { label: "Beta", total: 5n },
+    { label: "Alpha", total: 5n },
+  ]);
+});
+
 test("map.new rejects an odd number of arguments", () => {
   throws(ScriptCompileError, /key\/value pairs/, () => compile(["map.new", str("a")]));
 });
@@ -280,6 +367,9 @@ test("MapView supports reads and rejects mutation", () => {
   assert.strictEqual(compile(["map.has", "view", str("answer")], {
     functions: { view: () => view },
   })(), true);
+  assert.strictEqual(compile(["map.get", "view", str("missing")], {
+    functions: { view: () => view },
+  })(), null);
   throws(ScriptRuntimeError, /mutable Map/, () =>
     compile(["map.set", "view", str("answer"), int(0)], {
       functions: { view: () => view },

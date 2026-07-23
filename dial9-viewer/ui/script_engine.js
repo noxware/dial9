@@ -80,6 +80,10 @@
     return value;
   }
 
+  function roundAwayFromZero(value) {
+    return Math.sign(value) * Math.round(Math.abs(value));
+  }
+
   function typeOf(value) {
     if (value === null) return "null";
     if (typeof value === "bigint") return "integer";
@@ -90,6 +94,10 @@
     if (Array.isArray(value) || value instanceof ListView) return "list";
     if (value instanceof Map || value instanceof MapView) return "map";
     return "host";
+  }
+
+  function normalize(value) {
+    return value === undefined ? null : value;
   }
 
   function listLength(value) {
@@ -109,7 +117,7 @@
     const i = indexNumber(index, "list.get");
     const length = listLength(value);
     if (i >= length) failRuntime(`list.get index ${i} is out of bounds`);
-    return value instanceof ListView ? value.get(i) : value[i];
+    return normalize(value instanceof ListView ? value.get(i) : value[i]);
   }
 
   function mutableList(value, operation) {
@@ -118,7 +126,9 @@
   }
 
   function mapGet(value, key) {
-    if (value instanceof Map || value instanceof MapView) return value.get(key);
+    if (value instanceof Map || value instanceof MapView) {
+      return value.has(key) ? normalize(value.get(key)) : null;
+    }
     failRuntime(`map.get expected Map, got ${typeOf(value)}`);
   }
 
@@ -177,7 +187,9 @@
     boolean,
     string,
     finiteResult,
+    roundAwayFromZero,
     typeOf,
+    normalize,
     listLength,
     listGet,
     mapGet,
@@ -259,7 +271,7 @@
     function emitExternal(operation, args) {
       const index = externalIndex.get(operation);
       if (index === undefined) return null;
-      return `__functions[${index}](${args.map(emitExpression).join(",")})`;
+      return `__rt.normalize(__functions[${index}](${args.map(emitExpression).join(",")}))`;
     }
 
     function emitComputed(operation, args) {
@@ -365,6 +377,20 @@
           return binary(operation, args, "__rt.integer", "-", "__rt.integer");
         case "integer.multiply":
           return binary(operation, args, "__rt.integer", "*", "__rt.integer");
+        case "integer.negate":
+          expectArity(operation, args, 1);
+          return `(-__rt.integer(${emitExpression(args[0])},\"integer.negate\"))`;
+        case "integer.abs": {
+          expectArity(operation, args, 1);
+          const value = temp("value");
+          return `(()=>{const ${value}=__rt.integer(${emitExpression(args[0])},\"integer.abs\");return ${value}<0n?-${value}:${value};})()`;
+        }
+        case "integer.modulo": {
+          expectArity(operation, args, 2);
+          const left = temp("left");
+          const right = temp("right");
+          return `(()=>{const ${left}=__rt.integer(${emitExpression(args[0])},\"integer.modulo\");const ${right}=__rt.integer(${emitExpression(args[1])},\"integer.modulo\");if(${right}===0n)throw new __RuntimeError(\"integer.modulo division by zero\");return ${left}%${right};})()`;
+        }
         case "integer.min":
         case "integer.max": {
           expectArity(operation, args, 2);
@@ -385,12 +411,39 @@
           const right = temp("right");
           return `(()=>{const ${left}=__rt.integer(${emitExpression(args[0])},\"integer.pow\");const ${right}=__rt.integer(${emitExpression(args[1])},\"integer.pow\");if(${right}<0n)throw new __RuntimeError(\"integer.pow requires a non-negative exponent\");return ${left}**${right};})()`;
         }
+        case "integer.clamp": {
+          expectArity(operation, args, 3);
+          const value = temp("value");
+          const minimum = temp("minimum");
+          const maximum = temp("maximum");
+          return `(()=>{const ${value}=__rt.integer(${emitExpression(args[0])},\"integer.clamp\");const ${minimum}=__rt.integer(${emitExpression(args[1])},\"integer.clamp\");const ${maximum}=__rt.integer(${emitExpression(args[2])},\"integer.clamp\");if(${minimum}>${maximum})throw new __RuntimeError(\"integer.clamp minimum exceeds maximum\");return ${value}<${minimum}?${minimum}:${value}>${maximum}?${maximum}:${value};})()`;
+        }
         case "float.add":
           return `__rt.finiteResult(${binary(operation, args, "__rt.float", "+", "__rt.float")},\"float.add\")`;
         case "float.subtract":
           return `__rt.finiteResult(${binary(operation, args, "__rt.float", "-", "__rt.float")},\"float.subtract\")`;
         case "float.multiply":
           return `__rt.finiteResult(${binary(operation, args, "__rt.float", "*", "__rt.float")},\"float.multiply\")`;
+        case "float.negate":
+          expectArity(operation, args, 1);
+          return `(-__rt.float(${emitExpression(args[0])},\"float.negate\"))`;
+        case "float.abs":
+          expectArity(operation, args, 1);
+          return `Math.abs(__rt.float(${emitExpression(args[0])},\"float.abs\"))`;
+        case "float.floor":
+        case "float.ceil":
+        case "float.truncate":
+        case "float.round": {
+          expectArity(operation, args, 1);
+          const method = { "float.floor": "floor", "float.ceil": "ceil", "float.truncate": "trunc" }[operation];
+          const value = `__rt.float(${emitExpression(args[0])},${JSON.stringify(operation)})`;
+          return operation === "float.round"
+            ? `__rt.roundAwayFromZero(${value})`
+            : `Math.${method}(${value})`;
+        }
+        case "float.sqrt":
+          expectArity(operation, args, 1);
+          return `__rt.finiteResult(Math.sqrt(__rt.float(${emitExpression(args[0])},\"float.sqrt\")),\"float.sqrt\")`;
         case "float.min":
         case "float.max": {
           expectArity(operation, args, 2);
@@ -408,6 +461,13 @@
         case "float.pow": {
           expectArity(operation, args, 2);
           return `__rt.finiteResult(Math.pow(__rt.float(${emitExpression(args[0])},\"float.pow\"),__rt.float(${emitExpression(args[1])},\"float.pow\")),\"float.pow\")`;
+        }
+        case "float.clamp": {
+          expectArity(operation, args, 3);
+          const value = temp("value");
+          const minimum = temp("minimum");
+          const maximum = temp("maximum");
+          return `(()=>{const ${value}=__rt.float(${emitExpression(args[0])},\"float.clamp\");const ${minimum}=__rt.float(${emitExpression(args[1])},\"float.clamp\");const ${maximum}=__rt.float(${emitExpression(args[2])},\"float.clamp\");if(${minimum}>${maximum})throw new __RuntimeError(\"float.clamp minimum exceeds maximum\");return ${value}<${minimum}?${minimum}:${value}>${maximum}?${maximum}:${value};})()`;
         }
         case "integer.from": {
           expectArity(operation, args, 1);
