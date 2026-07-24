@@ -67,12 +67,15 @@ pub trait Extension: Default {
 - `Event` y `Value` son vistas sin asignaciones sobre el decoder streaming D9TF.
   Exponen nombre, timestamp, fields, units, listas, mapas, strings, bytes y
   stacks.
-- `OutputSink::emit(RecordBatch)` puede emitir durante el parse o al finalizar.
-- `RecordBatch` recibe nombre de tabla, cantidad de rows, columnas tipadas y
-  validity bitmaps opcionales. Sus columnas pueden tomar prestados los slices
-  del usuario durante `emit`.
-- La API inicial es deliberadamente cruda: el usuario mantiene sus `Vec<T>`,
-  construye cada batch y conserva alineadas sus columnas y nullability.
+- `OutputSink::emit(table: TableId, columns: Vec<Column>)` puede emitir durante
+  el parse o al finalizar.
+- `TableId` es el índice `u32` de la tabla en el manifest. Las columnas viajan
+  en el orden declarado; no se transmiten nombres.
+- Cada `Column` contiene los `Vec<T>` construidos por el usuario y su validity
+  bitmap opcional; UTF-8 usa offsets + bytes. `emit` conserva esos buffers hasta
+  el ack del host, sin copiarlos dentro del guest.
+- El SDK deriva la cantidad de rows y valida que todas las columnas estén
+  alineadas con el schema.
 - Sólo habrá macros declarativas pequeñas para el manifest y los exports ABI;
   no proc macros, domain types generados ni serializers automáticos.
 - ABI numérico versionado: reserva/push/resume de input, finish, next/ack de
@@ -142,13 +145,12 @@ Ejemplo orientativo:
           "table": "cpu_intervals",
           "items": [
             { "label": "Start", "column": "start_ns", "unit": "ns" },
-            { "label": "Cores", "column": "cores", "unit": "cores" }
+            { "label": "Cores", "column": "cores" }
           ]
         },
         {
-          "name": "legend/v1",
+          "name": "readout/v1",
           "table": "cpu_intervals",
-          "side": "right",
           "items": [
             {
               "label": "avg",
@@ -188,12 +190,12 @@ Ejemplo orientativo:
 ### Output columnar
 
 - Stream binario liviano propio, no Arrow ni un output monolítico.
-- El manifest define el schema; cada batch identifica su tabla y debe coincidir
-  exactamente en columnas, tipos, longitudes y nullability.
+- El manifest define el schema; cada batch lleva el índice de tabla y debe
+  coincidir exactamente en columnas, tipos, longitudes y nullability.
 - Tipos iniciales: `f64`, `i64`, `u64`, `u32`, `u8` y UTF-8. UTF-8 se representa
   como offsets + bytes.
 - El worker copia una columna desde linear memory y transfiere su
-  `ArrayBuffer`; el guest puede liberar el batch antes de continuar.
+  `ArrayBuffer`; el guest libera sus `Vec` después del ack.
 - El viewer conserva columnas chunked y decodifica UTF-8 bajo demanda.
 - Los paneles se publican sólo cuando la extensión finaliza correctamente; un
   fallo descarta sus outputs parciales.
@@ -203,32 +205,36 @@ Ejemplo orientativo:
 Componentes iniciales:
 
 - Dibujo: `background/v1`, `interval-area/v1`, `interval-line/v1`, `line/v1`,
-  `step-line/v1`, `polyline/v1` y `horizontal-rule/v1`.
-- Presentación: `tooltip/v1` y `legend/v1`; pueden renderizar DOM, pero consumen
-  los mismos tables y hits que las capas gráficas.
+  `step-line/v1`, `polyline/v1` y `horizontal-line/v1`.
+- Presentación: `tooltip/v1`, `swatch/v1` y `readout/v1`; pueden renderizar DOM,
+  pero consumen las mismas tablas y hits.
 
 Contrato común:
 
 - El orden del array es el orden de dibujo. El hit test recorre las capas
   gráficas en orden inverso y gana el primer hit válido; cada renderer define
   contención o distancia dentro de su geometría.
-- Un hit conserva table, row y mappings de canales del componente. Tooltip y
-  legend hacen match por table y, opcionalmente, por mapping de canal; esto
-  permite tooltips independientes sin IDs de componentes.
+- Un hit conserva tabla, row y mappings de canales del componente. Tooltip y
+  readout hacen match por tabla y, opcionalmente, por mapping de canal; esto
+  permite presentaciones independientes sin IDs de componentes.
 - `background/v1` acepta un color literal o un scalar producido en una tabla.
 - `polyline/v1` preserva el orden de rows, incluidos valores X repetidos o hacia
   atrás.
 - Tooltip muestra items de la row alcanzada y omite valores null.
-- Legend admite items estáticos, sampling del hit/cursor y reducers sobre el
-  viewport: `min`, `max`, `sum`, `count`, `mean` y
-  `time_weighted_mean`. Puede ubicarse a izquierda o derecha.
+- Cada `swatch/v1` agrega junto al título un label y su muestra de línea, área o
+  referencia. Puede incluir un scalar formateado; varios swatches se componen
+  sin separadores.
+- `readout/v1` vive a la derecha y une sus items con `·`. Admite sampling del
+  hit/cursor y reducers sobre el viewport: `min`, `max`, `sum`, `count`, `mean`
+  y `time_weighted_mean`.
 - Paneles admiten ejes X temporales o lineales, múltiples escalas Y y dominios
   visibles o fijos que incluyan cero, constantes o scalars de otras tablas.
 - Colores pueden ser literales o ramps basados en una columna y una escala.
-  Guides y thresholds usan `horizontal-rule/v1`; sus swatches y labels viven
-  en `legend/v1`, no encima de la línea dentro del canvas.
+  Guides y thresholds usan `horizontal-line/v1`; sus labels viven en
+  `swatch/v1`, no encima de la línea dentro del canvas.
 - Títulos, labels y valores se insertan como texto, nunca como HTML.
-- Un nombre/version de componente desconocido deshabilita sólo su panel.
+- Un nombre/version desconocido deshabilita sólo su panel, pero mantiene su
+  shell visible con un error que identifica el componente faltante.
 
 ## Implementación
 
