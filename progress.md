@@ -32,3 +32,9 @@
   first-preamble activation, Worker lifecycle, rendering semantics, versioning,
   and acceptance fixtures explicit. Concurrent startup retains only the first
   preamble prefix long enough to discover Workers and replay it to them.
+- The TypeScript host normalizes manifests into fresh typed structures and
+  resolves every known table, column, scale, scalar, reducer, and channel
+  reference up front. Unknown versioned components remain as panel-local
+  errors. ABI output is copied only after schema, alignment, pointer, length,
+  validity, offset, and allocation-free UTF-8 validation; main keeps the
+  resulting buffers chunked and decodes individual strings lazily.

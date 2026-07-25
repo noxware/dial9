@@ -211,9 +211,11 @@ JSON whitespace outside strings and preserves string bytes and escapes.
 - `x_axis.type` is `time` or `linear`; linear axes may declare a fixed
   `[min, max]` domain.
 - Every graphical Y channel selects a named linear scale.
-- A scale domain is fixed (`[min, max]`) or derived from visible rows. A
-  visible domain may include constants such as zero. All graphical components
-  using the scale participate in its derived domain.
+- A scale domain is either
+  `{ "mode": "fixed", "min": value, "max": value }` or
+  `{ "mode": "visible", "include": [value, ...] }`. A value is a finite
+  number or a scalar reference. All graphical components using a visible scale
+  participate in its derived domain.
 - Panels and components are identified internally by array position. Public
   IDs are unnecessary.
 - Component array order is drawing Z-order.
@@ -239,6 +241,9 @@ Colors are either CSS color literals or numeric ramps:
 }
 ```
 
+The ramp column belongs to the component's table. Stops must be finite and
+strictly increasing.
+
 All component objects use a versioned `name`. Unknown names or versions disable
 only their panel. Its shell remains visible with an error naming the missing
 component.
@@ -261,6 +266,8 @@ Common optional styling is line width and dash pattern.
 
 - Time X columns are nanosecond `u64` values; linear X and all Y channels are
   numeric.
+- `interval-area/v1` accepts an optional numeric or scalar `baseline`; it
+  defaults to zero.
 - Intervals are `[start, end)`.
 - Null in a required geometric channel omits that interval or breaks that path,
   creating a gap.
@@ -290,6 +297,11 @@ Presentation components consume the same tables and hit records as drawings:
 This distinguishes overlaid series from the same table without component IDs.
 Null values are omitted.
 
+Channel mappings use an optional `match` object containing any of `x`, `start`,
+`end`, and `y`, each naming a column in the presentation component's table.
+Tooltip uses the winning graphical hit. A readout item without `reduce` samples
+the matching graphical series at the cursor.
+
 Display items contain `label`, `column`, and optional `unit`. Known units such
 as `ns` and `%` use viewer formatters. Unknown units are appended as suffixes.
 With no unit, the raw value is displayed without an added suffix. Labels and
@@ -302,9 +314,11 @@ render `Cores: … cores`.
 - `min`, `max`, `sum`, `count`, and `mean` over visible rows;
 - `time_weighted_mean` with explicit start and end columns.
 
-`swatch/v1` components compose independently beside the title without divider
-dots. Guide and threshold labels belong in swatches; `horizontal-rule/v1`
-draws only their lines, avoiding canvas-label overlap.
+`swatch/v1` declares `label`, `color`, and `sample` (`line`, `area`, or `rule`),
+plus optional line styling and an optional scalar `value` reference with a
+unit. Swatches compose independently beside the title without divider dots.
+Guide and threshold labels belong in swatches; `horizontal-rule/v1` draws only
+their lines, avoiding canvas-label overlap.
 
 ## Columnar guest ABI
 
@@ -350,6 +364,10 @@ Column kinds are:
 
 Flag bit `0` means a validity bitmap is present. Empty buffers use pointer and
 length zero.
+
+A validity buffer is accepted only for a nullable manifest column and has
+exactly `ceil(rows / 8)` bytes. Omitting it means every row is valid, including
+for a nullable column.
 
 `emit` moves the user's original `Vec`s into the runtime queue. The descriptor
 points directly at them; no monolithic guest payload is built. Worker JS:
