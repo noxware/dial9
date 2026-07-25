@@ -16,6 +16,13 @@ D9TF descomprimido ─┬─→ parser normal del viewer
                            paneles de componentes stackeables
 ```
 
+```text
+Main thread JS
+├─ Worker JS → WASM extension 1
+├─ Worker JS → WASM extension 2
+└─ Worker JS → WASM extension N
+```
+
 - Core WebAssembly sin imports, WASI, DOM, red ni objetos JavaScript.
 - Cómputo streaming sobre D9TF, sin materializar eventos como objetos JS.
 - Componentes TypeScript reutilizables; terceros no reciben acceso a Canvas.
@@ -95,10 +102,10 @@ output.emit(
 )?;
 ```
 
-- ABI numérico versionado: reserva/push/resume de input, finish, next/ack de
-  output, descriptors de columnas y error buffer.
-- Un `push` puede pausarse cuando haya output listo para que el host lo drene y
-  luego continuar.
+- ABI numérico versionado: reserva/push de input, finish, next/ack de output,
+  descriptors de columnas y error buffer.
+- Cada `push` procesa un chunk completo. Al volver, Worker JS drena y confirma
+  sus outputs antes de procesar el siguiente mensaje de su cola.
 - El módulo exporta memoria y las funciones ABI, y no importa capacidades del
   host.
 
@@ -268,8 +275,12 @@ Contrato común:
 - v1 garantiza aislamiento de capacidades, no cuotas de recursos. Límites de
   memoria, tiempo, cantidad de módulos y output se decidirán con mediciones
   reales.
-- Fanout de los chunks D9TF descomprimidos al parser normal y a cada Worker. Un
-  módulo decodifica una vez y puede producir múltiples tablas y paneles.
+- Main encola cada chunk D9TF descomprimido con `postMessage()` en todos los
+  Workers y continúa inmediatamente con su parser, sin esperarlos. Cada Worker
+  recibe su propia copia y procesa su cola en orden.
+- No hay créditos ni backpressure entre main y Workers en v1; sus colas pueden
+  crecer. Un módulo decodifica una vez y puede producir múltiples tablas y
+  paneles.
 - Convertir `viewer.html` en entrada Vite manteniendo sus scripts legacy y
   añadir un adaptador TypeScript fino para lifecycle, fanout, paneles,
   viewport, tooltip y la llamada desde `renderAll()`.
