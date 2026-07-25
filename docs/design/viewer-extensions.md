@@ -451,6 +451,22 @@ coordinates. Tail and head hits show 💩 and ❤️ only in the tooltip.
 - Rust, Vitest, Vite build, and browser integration suites, plus visual
   side-by-side review against the unchanged legacy panels.
 
+### Executable fixture
+
+`examples/viewer-extension-demo` is a real extension, not a host-side mock. It
+uses fixed manifest-order `TableId`s and raw `Vec<Column>` batches to provide:
+
+- CPU intervals and presentation matching the built-in panel;
+- independent nullable voluntary/involuntary context-switch rates;
+- the source-order dinosaur and graphical flame paths from the acceptance
+  fixture.
+
+Its optional `make_trace` binary embeds the compiled module in a synthetic
+D9TF trace. From `dial9-viewer/ui`, `npm run test:viewer-extension-demo`
+compiles the guest, generates that trace, feeds it through the production ABI
+at arbitrary chunk boundaries, and verifies its tables and presentation
+components.
+
 ## Versioning and deferred work
 
 - ABI and manifest top-level versions are independent numeric contracts.

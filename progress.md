@@ -65,3 +65,12 @@
   the initial examples: drawing `opacity` and display
   `max_fraction_digits`. Precision is independent from units, so custom units
   remain plain suffixes and the viewer does not special-case `cores`.
+- `examples/viewer-extension-demo` exercises the public contract without
+  ergonomic builders: fixed manifest-order `TableId`s and user-owned column
+  vectors produce CPU, independently nullable context-switch series, and the
+  source-order dinosaur/fire paths. Missing context fields do not suppress
+  otherwise valid CPU samples.
+- The opt-in `test:viewer-extension-demo` check compiles the real zero-import
+  guest, generates a temporary trace with its Wasm attachment, streams it
+  through the production ABI at irregular boundaries, and validates the
+  resulting tables, reducers, tooltips, and lazy UTF-8.

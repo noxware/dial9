@@ -11,6 +11,7 @@ members = [
     "dial9",
     "dial9-utils",
     "perf-self-profile",
+    "examples/viewer-extension-demo",
     "examples/metrics-service",
     "examples/simple-local",
     "examples/memory-local",
