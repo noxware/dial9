@@ -82,6 +82,19 @@ pub trait Extension: Default {
   no proc macros, domain types generados ni serializers automáticos.
 - Cualquier codegen futuro construirá los mismos `TableId` y `Vec<Column>` y
   delegará al mismo `emit`, sin una segunda ruta de transporte.
+
+```rust
+output.emit(
+    TableId::new(0),
+    vec![
+        Column::U64 { values: start_ns, validity: None },
+        Column::U64 { values: end_ns, validity: None },
+        Column::F64 { values: cores, validity: Some(cores_validity) },
+        Column::F64 { values: percent, validity: Some(percent_validity) },
+    ],
+)?;
+```
+
 - ABI numérico versionado: reserva/push/resume de input, finish, next/ack de
   output, descriptors de columnas y error buffer.
 - Un `push` puede pausarse cuando haya output listo para que el host lo drene y
