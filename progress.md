@@ -111,3 +111,16 @@
 - The SDK is a publishable crate, so it is now explicit in release-plz,
   top-level changelog aggregation, and the CI package check. This closes a
   release-path gap that workspace builds and runtime tests cannot detect.
+- The final capability-boundary audit found no remaining host escape: modules
+  have zero imports, execute in disposable Workers, and every manifest,
+  descriptor, pointer, length, UTF-8 buffer, and schema reference is validated.
+  Availability quotas remain the deliberate v1 exclusion documented in the
+  plan rather than an accidental security omission.
+- Final validation passed Rust formatting, strict Clippy, all 1,142 nextest
+  cases plus the 20-second stress run, TypeScript checking, all 1,878 passing
+  UI tests, the Vite production build, compiled-extension integration, the
+  legacy Chromium fixture, SDK packaging, and the production-path benchmark.
+- The checked-in legacy demo trace was intentionally left unchanged. Embedded
+  files are an optional backward-compatible preamble, the existing demo-based
+  suites still pass, and the generated extension fixture directly exercises
+  the new frame; regenerating the unrelated binary would add no coverage.
