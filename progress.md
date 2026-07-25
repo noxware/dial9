@@ -38,3 +38,9 @@
   errors. ABI output is copied only after schema, alignment, pointer, length,
   validity, offset, and allocation-free UTF-8 validation; main keeps the
   resulting buffers chunked and decodes individual strings lazily.
+- Module loading compiles inside the dedicated Worker, rejects every import,
+  requires exactly one manifest section, instantiates with an empty import
+  object, and verifies the numeric ABI. Worker messages are serialized through
+  one queue; each push drains and acknowledges guest output before transferring
+  validated column buffers to main, while abort or failure remains local to
+  that instance.
