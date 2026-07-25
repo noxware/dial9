@@ -51,3 +51,8 @@
   then fans out later chunks with one transferable copy per instance and no
   credits. Stores publish atomically only on `complete`; failures discard one
   instance without affecting modules with identical table names.
+- The component engine reads immutable chunked columns without rematerializing
+  rows, lazily decodes UTF-8, indexes ordered X channels, clips interval
+  reducers to the viewport, and preserves arbitrary source order only for
+  `polyline/v1`. Drawing, reverse-Z hit testing, tooltip, swatch, and readout
+  presentation all consume the same normalized manifest tables.

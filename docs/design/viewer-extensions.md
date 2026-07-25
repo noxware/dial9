@@ -273,6 +273,8 @@ Common optional styling is line width and dash pattern.
   creating a gap.
 - `line/v1` connects successive valid points directly.
 - `step-line/v1` holds the prior Y until the next X.
+- `line/v1` and `step-line/v1` require nondecreasing X values. The host builds
+  an index over valid X rows and rejects the panel if that invariant is broken.
 - `polyline/v1` follows every row in source order without sorting or
   coalescing. Repeated and decreasing X values are intentional.
 - Other line components may coalesce or min/max sample by pixel when doing so
