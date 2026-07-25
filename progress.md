@@ -82,3 +82,8 @@
   retaining null gaps. Hit testing narrows the original X index around the
   pointer, so sampling does not change tooltip rows; arbitrary-order
   `polyline/v1` remains lossless.
+- The real legacy-browser check preserves the built-in CPU and queue panels,
+  mounts all four extension panels, verifies CPU readout numeric parity and
+  canvas output, and exercises the dinosaur's 💩/❤️ hit regions. The custom
+  readout intentionally keeps the contract's explicit `cores` suffix on
+  `max`; the current built-in readout omits that suffix.

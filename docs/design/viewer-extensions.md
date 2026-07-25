@@ -468,7 +468,10 @@ Its optional `make_trace` binary embeds the compiled module in a synthetic
 D9TF trace. From `dial9-viewer/ui`, `npm run test:viewer-extension-demo`
 compiles the guest, generates that trace, feeds it through the production ABI
 at arbitrary chunk boundaries, and verifies its tables and presentation
-components.
+components. `npm run test:viewer-extension-browser` additionally loads the
+trace through the legacy page in Chromium, checks that built-in panels remain,
+compares CPU readout values, verifies every custom canvas, and exercises the
+dinosaur tail/head hit regions.
 
 ## Versioning and deferred work
 
