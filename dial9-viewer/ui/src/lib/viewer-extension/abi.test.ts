@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   copyOutputBatch,
   ExtensionAbiError,
+  readGuestError,
   validateExtensionExports,
 } from "./abi.js";
 import type { ExtensionManifest } from "./manifest.js";
@@ -176,5 +177,45 @@ describe("extension output ABI", () => {
     expect(() =>
       validateExtensionExports({ ...exports, dial9_finish: 1 }),
     ).toThrow(ExtensionAbiError);
+    expect(() =>
+      validateExtensionExports({
+        ...exports,
+        memory: new WebAssembly.Memory({
+          initial: 1,
+          maximum: 1,
+          shared: true,
+        }),
+      }),
+    ).toThrow("shared WebAssembly memory is unsupported");
+  });
+
+  it("validates the guest error buffer before decoding it", () => {
+    const memory = new WebAssembly.Memory({ initial: 1 });
+    const fn = () => 0;
+    const exports = {
+      memory,
+      dial9_abi_version: () => 1,
+      dial9_input_reserve: fn,
+      dial9_push: fn,
+      dial9_finish: fn,
+      dial9_output_next: fn,
+      dial9_output_descriptor_ptr: fn,
+      dial9_output_descriptor_len: fn,
+      dial9_output_ack: fn,
+      dial9_error_ptr: () => 65_535,
+      dial9_error_len: () => 2,
+    };
+    expect(() => readGuestError(exports)).toThrow(
+      "error range is outside WebAssembly memory",
+    );
+
+    new Uint8Array(memory.buffer)[32] = 0xff;
+    expect(() =>
+      readGuestError({
+        ...exports,
+        dial9_error_ptr: () => 32,
+        dial9_error_len: () => 1,
+      }),
+    ).toThrow("guest error buffer is not valid UTF-8");
   });
 });
