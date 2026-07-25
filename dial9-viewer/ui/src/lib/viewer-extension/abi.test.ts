@@ -175,7 +175,10 @@ describe("extension output ABI", () => {
       validateExtensionExports({ ...exports, dial9_abi_version: () => 2 }),
     ).toThrow("ABI version must be 1");
     expect(() =>
-      validateExtensionExports({ ...exports, dial9_finish: 1 }),
+      validateExtensionExports({
+        ...exports,
+        dial9_finish: 1,
+      } as unknown as WebAssembly.Exports),
     ).toThrow(ExtensionAbiError);
     expect(() =>
       validateExtensionExports({

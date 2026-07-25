@@ -88,7 +88,7 @@ interface IntervalRuntime {
   readonly start: ColumnReader;
   readonly end: ColumnReader;
   readonly y: ColumnReader;
-  readonly color?: ColumnReader;
+  readonly color: ColumnReader | undefined;
   readonly startIndex: SortedColumnIndex;
   readonly prefixMaxEnd: Float64Array;
   readonly channels: Readonly<Record<string, string>>;
@@ -100,8 +100,8 @@ interface PointRuntime {
   readonly table: TableReader;
   readonly x: ColumnReader;
   readonly y: ColumnReader;
-  readonly color?: ColumnReader;
-  readonly xIndex?: SortedColumnIndex;
+  readonly color: ColumnReader | undefined;
+  readonly xIndex: SortedColumnIndex | undefined;
   readonly channels: Readonly<Record<string, string>>;
 }
 
@@ -1079,13 +1079,14 @@ export class ExtensionPanel {
         : this.#sampleRow(drawing, pointerX);
     return component.items.flatMap((item) => {
       let value: Cell;
-      if (item.reduce === undefined) {
+      const reducer = item.reduce;
+      if (reducer === undefined) {
         value =
           sampledRow === undefined
             ? null
             : table.column(item.column).cell(sampledRow);
       } else {
-        value = this.#reduce(item, table, drawing, layout);
+        value = this.#reduce(item, reducer, table, drawing, layout);
       }
       return value === null
         ? []
@@ -1103,7 +1104,8 @@ export class ExtensionPanel {
   }
 
   #reduce(
-    item: ReadoutItem & { readonly reduce: NonNullable<ReadoutItem["reduce"]> },
+    item: ReadoutItem,
+    reducer: NonNullable<ReadoutItem["reduce"]>,
     table: TableReader,
     drawing: IntervalRuntime | PointRuntime | undefined,
     layout: Layout,
@@ -1113,9 +1115,9 @@ export class ExtensionPanel {
       drawing === undefined
         ? [0, table.rowCount]
         : this.#visibleRows(drawing, layout.xStart, layout.xEnd);
-    if (typeof item.reduce === "object") {
-      const starts = table.column(item.reduce.start);
-      const ends = table.column(item.reduce.end);
+    if (typeof reducer === "object") {
+      const starts = table.column(reducer.start);
+      const ends = table.column(reducer.end);
       let weighted = 0;
       let weight = 0;
       for (let row = start; row < end; row += 1) {
@@ -1140,7 +1142,7 @@ export class ExtensionPanel {
       if (!this.#rowIntersectsViewport(drawing, row, layout)) continue;
       const cell = column.cell(row);
       if (cell === null) continue;
-      if (item.reduce === "count") {
+      if (reducer === "count") {
         count += 1;
         continue;
       }
@@ -1151,7 +1153,7 @@ export class ExtensionPanel {
       minimum = Math.min(minimum, value);
       maximum = Math.max(maximum, value);
     }
-    switch (item.reduce) {
+    switch (reducer) {
       case "count":
         return count;
       case "sum":
@@ -1163,6 +1165,8 @@ export class ExtensionPanel {
       case "max":
         return count === 0 ? null : maximum;
     }
+    const exhaustive: never = reducer;
+    return exhaustive;
   }
 
   #rowIntersectsViewport(

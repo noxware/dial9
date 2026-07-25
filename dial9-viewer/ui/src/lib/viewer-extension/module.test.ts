@@ -43,7 +43,7 @@ function wasm(options: {
   negativeReservePointer?: boolean;
   reservePointer?: number;
   trapPush?: boolean;
-} = {}): Uint8Array {
+} = {}): Uint8Array<ArrayBuffer> {
   const header = [0, 0x61, 0x73, 0x6d, 1, 0, 0, 0];
   const types = section(1, [
     2,
