@@ -499,6 +499,149 @@ describe("extension panel components", () => {
     ]);
   });
 
+  it("expresses queue depth with layered scales, swatches, cursor values, and viewport reducers", () => {
+    const manifest = parseExtensionManifestJson(
+      JSON.stringify({
+        version: 1,
+        tables: [
+          {
+            name: "queue_depth",
+            columns: [
+              { name: "time_ns", type: "u64" },
+              { name: "end_ns", type: "u64" },
+              { name: "global", type: "u32" },
+              { name: "max_local", type: "u32" },
+              { name: "active_tasks", type: "u32" },
+            ],
+          },
+        ],
+        panels: [
+          {
+            title: "Queue Depth",
+            scales: [
+              {
+                name: "queue",
+                domain: { mode: "visible", include: [0] },
+              },
+              {
+                name: "tasks",
+                domain: { mode: "visible", include: [0] },
+              },
+            ],
+            components: [
+              {
+                name: "interval-area/v1",
+                table: "queue_depth",
+                start: "time_ns",
+                end: "end_ns",
+                y: "global",
+                scale: "queue",
+                color: "#4fc3f7",
+                opacity: 0.3,
+              },
+              {
+                name: "step-line/v1",
+                table: "queue_depth",
+                x: "time_ns",
+                y: "global",
+                scale: "queue",
+                color: "#4fc3f7",
+              },
+              {
+                name: "step-line/v1",
+                table: "queue_depth",
+                x: "time_ns",
+                y: "max_local",
+                scale: "queue",
+                color: "#ff8a65",
+              },
+              {
+                name: "step-line/v1",
+                table: "queue_depth",
+                x: "time_ns",
+                y: "active_tasks",
+                scale: "tasks",
+                color: "#81c784",
+              },
+              {
+                name: "swatch/v1",
+                label: "Global",
+                color: "#4fc3f7",
+                sample: "area",
+              },
+              {
+                name: "swatch/v1",
+                label: "Max local",
+                color: "#ff8a65",
+                sample: "line",
+              },
+              {
+                name: "swatch/v1",
+                label: "Active tasks",
+                color: "#81c784",
+                sample: "line",
+              },
+              {
+                name: "readout/v1",
+                table: "queue_depth",
+                match: { x: "time_ns", y: "global" },
+                items: [
+                  { label: "Global Q", column: "global" },
+                  { label: "Local max", column: "max_local" },
+                  { label: "Active tasks", column: "active_tasks" },
+                  {
+                    label: "visible max",
+                    column: "global",
+                    reduce: "max",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const store = new ExtensionStore(manifest);
+    store.append({
+      table_id: 0,
+      rows: 4,
+      columns: [
+        {
+          type: "u64",
+          values: new BigUint64Array([0n, 10n, 20n, 30n]).buffer,
+        },
+        {
+          type: "u64",
+          values: new BigUint64Array([10n, 20n, 30n, 40n]).buffer,
+        },
+        { type: "u32", values: new Uint32Array([1, 4, 2, 3]).buffer },
+        { type: "u32", values: new Uint32Array([2, 3, 5, 1]).buffer },
+        { type: "u32", values: new Uint32Array([8, 10, 9, 12]).buffer },
+      ],
+    });
+    const panel = new ExtensionPanel(
+      "queue",
+      manifest,
+      store,
+      manifest.panels[0]!,
+      0,
+    );
+
+    expect(panel.presentation(VIEWPORT, 18)).toEqual({
+      swatches: [
+        { label: "Global", color: "#4fc3f7", sample: "area" },
+        { label: "Max local", color: "#ff8a65", sample: "line" },
+        { label: "Active tasks", color: "#81c784", sample: "line" },
+      ],
+      readout: [
+        { label: "Global Q", value: "2" },
+        { label: "Local max", value: "5" },
+        { label: "Active tasks", value: "9" },
+        { label: "visible max", value: "4" },
+      ],
+    });
+  });
+
   it("surfaces an unknown component as a panel-local error", () => {
     const manifest = parseExtensionManifestJson(
       JSON.stringify({

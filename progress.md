@@ -74,3 +74,6 @@
   guest, generates a temporary trace with its Wasm attachment, streams it
   through the production ABI at irregular boundaries, and validates the
   resulting tables, reducers, tooltips, and lazy UTF-8.
+- A queue-depth contract fixture composes an interval area plus three step
+  series on two scales, three independent swatches, cursor-sampled values, and
+  a viewport reducer. It requires no queue-specific component behavior.
