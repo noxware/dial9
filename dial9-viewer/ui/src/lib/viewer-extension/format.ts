@@ -32,9 +32,32 @@ function formatBytes(value: number): string {
   return `${scaled.toFixed(2)} ${units[index]}`;
 }
 
-export function formatExtensionValue(value: Cell, unit?: string): string {
+function formatDecimal(value: Cell, maxFractionDigits?: number): string {
   if (value === null) return "";
-  if (unit === undefined || unit.length === 0) return String(value);
+  if (
+    maxFractionDigits === undefined ||
+    typeof value === "string" ||
+    typeof value === "bigint"
+  ) {
+    return String(value);
+  }
+  const numeric = Object.is(value, -0) ? 0 : value;
+  if (!Number.isFinite(numeric)) return String(value);
+  return numeric
+    .toFixed(maxFractionDigits)
+    .replace(/(\.\d*?)0+$/, "$1")
+    .replace(/\.$/, "");
+}
+
+export function formatExtensionValue(
+  value: Cell,
+  unit?: string,
+  maxFractionDigits?: number,
+): string {
+  if (value === null) return "";
+  if (unit === undefined || unit.length === 0) {
+    return formatDecimal(value, maxFractionDigits);
+  }
   const numeric = typeof value === "bigint" ? Number(value) : Number(value);
   switch (unit) {
     case "ns":
@@ -48,9 +71,15 @@ export function formatExtensionValue(value: Cell, unit?: string): string {
     case "bytes":
       return formatBytes(numeric);
     case "%":
-      return Number.isFinite(numeric) ? `${numeric.toFixed(1)}%` : "-";
+      return Number.isFinite(numeric)
+        ? `${
+            maxFractionDigits === undefined
+              ? numeric.toFixed(1)
+              : formatDecimal(numeric, maxFractionDigits)
+          }%`
+        : "-";
     default:
-      return `${String(value)} ${unit}`;
+      return `${formatDecimal(value, maxFractionDigits)} ${unit}`;
   }
 }
 

@@ -444,7 +444,11 @@ export class ExtensionPanel {
         if (value === null) continue;
         result.push({
           label: item.label,
-          value: formatExtensionValue(value, item.unit),
+          value: formatExtensionValue(
+            value,
+            item.unit,
+            item.max_fraction_digits,
+          ),
         });
       }
     }
@@ -747,11 +751,13 @@ export class ExtensionPanel {
       if (value === null) return;
       context.strokeStyle = drawing.spec.color;
       this.#stroke(context, drawing.spec);
+      context.globalAlpha = drawing.spec.opacity ?? 1;
       const y = this.#y(value, drawing.spec.scale, layout);
       context.beginPath();
       context.moveTo(layout.viewport.labelWidth, y);
       context.lineTo(layout.viewport.labelWidth + layout.drawWidth, y);
       context.stroke();
+      context.globalAlpha = 1;
       return;
     }
     if (drawing.kind === "interval") {
@@ -783,7 +789,7 @@ export class ExtensionPanel {
           if (baseline === null) continue;
           const baselineY = this.#y(baseline, drawing.spec.scale, layout);
           context.fillStyle = color;
-          context.globalAlpha = 0.38;
+          context.globalAlpha = drawing.spec.opacity ?? 0.38;
           context.fillRect(
             x1,
             Math.min(y, baselineY),
@@ -794,10 +800,12 @@ export class ExtensionPanel {
         } else {
           context.strokeStyle = color;
           this.#stroke(context, drawing.spec);
+          context.globalAlpha = drawing.spec.opacity ?? 1;
           context.beginPath();
           context.moveTo(x1, y);
           context.lineTo(x2, y);
           context.stroke();
+          context.globalAlpha = 1;
         }
       }
       return;
@@ -816,6 +824,9 @@ export class ExtensionPanel {
       layout.xEnd,
     );
     this.#stroke(context, drawing.spec);
+    context.globalAlpha = drawing.spec.opacity ?? 1;
+    context.lineJoin = "round";
+    context.lineCap = "round";
     const constantColor =
       typeof drawing.spec.color === "string"
         ? drawing.spec.color
@@ -869,6 +880,7 @@ export class ExtensionPanel {
       prior = current;
     }
     if (constantColor !== undefined && pathOpen) context.stroke();
+    context.globalAlpha = 1;
   }
 
   #hitDrawing(
@@ -1033,7 +1045,11 @@ export class ExtensionPanel {
         : [
             {
               label: item.label,
-              value: formatExtensionValue(value, item.unit),
+              value: formatExtensionValue(
+                value,
+                item.unit,
+                item.max_fraction_digits,
+              ),
             },
           ];
     });
@@ -1146,7 +1162,11 @@ export class ExtensionPanel {
         component.value.column,
       );
       if (value !== null) {
-        result.value = formatExtensionValue(value, component.value.unit);
+        result.value = formatExtensionValue(
+          value,
+          component.value.unit,
+          component.value.max_fraction_digits,
+        );
       }
     }
     return result;

@@ -61,3 +61,7 @@
   loads fan decompressed chunks out without awaiting Workers, while range
   reparses reuse published extension output. Dropped Wasm runs either against
   the retained current trace or as a pending module on the next load.
+- Exact CPU presentation required two reusable manifest controls omitted from
+  the initial examples: drawing `opacity` and display
+  `max_fraction_digits`. Precision is independent from units, so custom units
+  remain plain suffixes and the viewer does not special-case `cores`.

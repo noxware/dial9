@@ -70,6 +70,10 @@ export interface StrokeStyle {
   readonly dash?: readonly number[];
 }
 
+export interface DrawingStyle extends StrokeStyle {
+  readonly opacity?: number;
+}
+
 export interface BackgroundComponent {
   readonly name: "background/v1";
   readonly color: ColorValue;
@@ -84,9 +88,10 @@ export interface IntervalAreaComponent {
   readonly scale: string;
   readonly color: SeriesColor;
   readonly baseline: NumericValue;
+  readonly opacity?: number;
 }
 
-export interface IntervalLineComponent extends StrokeStyle {
+export interface IntervalLineComponent extends DrawingStyle {
   readonly name: "interval-line/v1";
   readonly table: string;
   readonly start: string;
@@ -96,7 +101,7 @@ export interface IntervalLineComponent extends StrokeStyle {
   readonly color: SeriesColor;
 }
 
-export interface PointLineComponent extends StrokeStyle {
+export interface PointLineComponent extends DrawingStyle {
   readonly name: "line/v1" | "step-line/v1" | "polyline/v1";
   readonly table: string;
   readonly x: string;
@@ -105,7 +110,7 @@ export interface PointLineComponent extends StrokeStyle {
   readonly color: SeriesColor;
 }
 
-export interface HorizontalRuleComponent extends StrokeStyle {
+export interface HorizontalRuleComponent extends DrawingStyle {
   readonly name: "horizontal-rule/v1";
   readonly y: NumericValue;
   readonly scale: string;
@@ -116,6 +121,7 @@ export interface DisplayItem {
   readonly label: string;
   readonly column: string;
   readonly unit?: string;
+  readonly max_fraction_digits?: number;
 }
 
 export interface TooltipComponent {
@@ -148,6 +154,7 @@ export interface ReadoutComponent {
 
 export interface SwatchValue extends ScalarReference {
   readonly unit?: string;
+  readonly max_fraction_digits?: number;
 }
 
 export interface SwatchComponent extends StrokeStyle {
@@ -263,6 +270,22 @@ function finite(value: unknown, path: string): number {
 function positive(value: unknown, path: string): number {
   const result = finite(value, path);
   if (result <= 0) fail(`${path} must be greater than zero`);
+  return result;
+}
+
+function opacity(value: unknown, path: string): number | undefined {
+  if (value === undefined) return undefined;
+  const result = finite(value, path);
+  if (result < 0 || result > 1) fail(`${path} must be between zero and one`);
+  return result;
+}
+
+function fractionDigits(value: unknown, path: string): number | undefined {
+  if (value === undefined) return undefined;
+  const result = finite(value, path);
+  if (!Number.isSafeInteger(result) || result < 0 || result > 100) {
+    fail(`${path} must be an integer between zero and 100`);
+  }
   return result;
 }
 
@@ -386,6 +409,20 @@ function strokeStyle(
   return result;
 }
 
+function drawingStyle(
+  source: JsonObject,
+  path: string,
+): DrawingStyle {
+  const result: {
+    line_width?: number;
+    dash?: readonly number[];
+    opacity?: number;
+  } = { ...strokeStyle(source, path) };
+  const layerOpacity = opacity(source["opacity"], `${path}.opacity`);
+  if (layerOpacity !== undefined) result.opacity = layerOpacity;
+  return result;
+}
+
 function match(
   value: unknown,
   table: TableSchema,
@@ -422,12 +459,18 @@ function displayItem(
     label: string;
     column: string;
     unit?: string;
+    max_fraction_digits?: number;
   } = {
     label: string(source["label"], `${path}.label`),
     column: columnByName(table, source["column"], `${path}.column`).name,
   };
   const unit = optionalString(source["unit"], `${path}.unit`);
   if (unit !== undefined) result.unit = unit;
+  const digits = fractionDigits(
+    source["max_fraction_digits"],
+    `${path}.max_fraction_digits`,
+  );
+  if (digits !== undefined) result.max_fraction_digits = digits;
   return result;
 }
 
@@ -455,7 +498,7 @@ function component(
       y: numericValue(source["y"], tables, `${path}.y`),
       scale,
       color: nonemptyString(source["color"], `${path}.color`),
-      ...strokeStyle(source, path),
+      ...drawingStyle(source, path),
     };
   }
 
@@ -488,8 +531,15 @@ function component(
         false,
       );
       const unit = optionalString(valueSource["unit"], `${path}.value.unit`);
-      result.value =
-        unit === undefined ? reference : { ...reference, unit };
+      const digits = fractionDigits(
+        valueSource["max_fraction_digits"],
+        `${path}.value.max_fraction_digits`,
+      );
+      result.value = {
+        ...reference,
+        ...(unit === undefined ? {} : { unit }),
+        ...(digits === undefined ? {} : { max_fraction_digits: digits }),
+      };
     }
     return result;
   }
@@ -591,9 +641,12 @@ function component(
           source["baseline"] === undefined
             ? 0
             : numericValue(source["baseline"], tables, `${path}.baseline`);
-        return { name, ...base, baseline };
+        const layerOpacity = opacity(source["opacity"], `${path}.opacity`);
+        return layerOpacity === undefined
+          ? { name, ...base, baseline }
+          : { name, ...base, baseline, opacity: layerOpacity };
       }
-      return { name, ...base, ...strokeStyle(source, path) };
+      return { name, ...base, ...drawingStyle(source, path) };
     }
 
     return {
@@ -603,7 +656,7 @@ function component(
       y: numericColumn(table, source["y"], `${path}.y`),
       scale,
       color,
-      ...strokeStyle(source, path),
+      ...drawingStyle(source, path),
     };
   }
 

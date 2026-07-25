@@ -52,6 +52,7 @@ const CPU_MANIFEST = {
               { at: 100, color: "#ef4444" },
             ],
           },
+          opacity: 0.42,
         },
         {
           name: "interval-line/v1",
@@ -78,6 +79,7 @@ const CPU_MANIFEST = {
           value: {
             table: "settings",
             column: "capacity",
+            max_fraction_digits: 0,
           },
         },
         {
@@ -90,7 +92,11 @@ const CPU_MANIFEST = {
           },
           items: [
             { label: "CPU time", column: "cpu_ns", unit: "ns" },
-            { label: "Cores", column: "cores" },
+            {
+              label: "Cores",
+              column: "cores",
+              max_fraction_digits: 2,
+            },
           ],
         },
         {
@@ -155,6 +161,21 @@ describe("extension manifest", () => {
       ],
     });
     expect(manifest.panels[0]?.components).toHaveLength(6);
+    expect(manifest.panels[0]?.components[0]).toMatchObject({
+      name: "interval-area/v1",
+      opacity: 0.42,
+    });
+    expect(manifest.panels[0]?.components[4]).toMatchObject({
+      name: "tooltip/v1",
+      items: [
+        { label: "CPU time", column: "cpu_ns", unit: "ns" },
+        {
+          label: "Cores",
+          column: "cores",
+          max_fraction_digits: 2,
+        },
+      ],
+    });
   });
 
   it("keeps unknown versioned components as panel-local errors", () => {

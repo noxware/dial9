@@ -262,7 +262,7 @@ Initial drawing components are:
 | `polyline/v1` | table, x, y, scale, color |
 | `horizontal-rule/v1` | literal/scalar y, scale, color |
 
-Common optional styling is line width and dash pattern.
+Common optional styling is line width, dash pattern, and opacity in `[0, 1]`.
 
 - Time X columns are nanosecond `u64` values; linear X and all Y channels are
   numeric.
@@ -304,10 +304,12 @@ Channel mappings use an optional `match` object containing any of `x`, `start`,
 Tooltip uses the winning graphical hit. A readout item without `reduce` samples
 the matching graphical series at the cursor.
 
-Display items contain `label`, `column`, and optional `unit`. Known units such
-as `ns` and `%` use viewer formatters. Unknown units are appended as suffixes.
-With no unit, the raw value is displayed without an added suffix. Labels and
-units are independent, so `{ "label": "Cores", "column": "cores" }` does not
+Display items contain `label`, `column`, and optional `unit` and
+`max_fraction_digits`. Known units such as `ns` and `%` use viewer formatters.
+Unknown units are appended as suffixes. With no unit, the raw value is
+displayed without an added suffix; `max_fraction_digits` can limit a numeric
+value independently. Labels and units are independent, so
+`{ "label": "Cores", "column": "cores", "max_fraction_digits": 2 }` does not
 render `Cores: … cores`.
 
 `readout/v1` joins items with `·` and supports:
