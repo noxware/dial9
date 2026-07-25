@@ -1,3 +1,4 @@
+use dial9_trace_format::EmbeddedFile;
 use dial9_trace_format::encoder::{Encoder, RawEncoder};
 
 use crate::clock::clock_pair;
@@ -195,6 +196,8 @@ pub struct SegmentWriter<Mode: BufferMode = Disk> {
     /// Metadata written at the start of each segment. Updated by the flush
     /// thread to include runtime names alongside any user-provided entries.
     segment_metadata: SegmentMetadata,
+    /// Opaque files repeated in the preamble of every physical segment.
+    embedded_files: Vec<EmbeddedFile>,
     /// Events silently dropped because the writer was finished/stopped.
     dropped_events: usize,
     /// Whether any real (non-metadata) events have been written to the current segment.
@@ -230,6 +233,7 @@ enum WriterState {
     /// Writer is open and events can be written
     Active {
         writer: RawEncoder<BufWriter<ActiveHandle>>,
+        need_embedded_files: bool,
         need_metadata: bool,
     },
 
@@ -307,6 +311,7 @@ impl SegmentWriter<Disk> {
             state,
             next_index,
             segment_metadata,
+            embedded_files: Vec::new(),
             dropped_events: 0,
             has_real_events: false,
             drain_interval,
@@ -369,6 +374,7 @@ impl SegmentWriter<Disk> {
             state,
             next_index: 1,
             segment_metadata: SegmentMetadata::default(),
+            embedded_files: Vec::new(),
             dropped_events: 0,
             has_real_events: false,
             drain_interval: DEFAULT_DRAIN_INTERVAL,
@@ -484,6 +490,7 @@ impl SegmentWriter<Memory> {
             state,
             next_index: 1,
             segment_metadata,
+            embedded_files: Vec::new(),
             dropped_events: 0,
             has_real_events: false,
             drain_interval,
@@ -521,28 +528,31 @@ impl<M: BufferMode> SegmentWriter<M> {
         &self.active_path
     }
 
-    /// Create an encoder, write the file header, segment metadata, and a
-    /// clock-sync anchor, then convert to a [`RawEncoder`] for the
-    /// remainder of the file's lifetime.
+    /// Write the file header and defer the preamble until recorder
+    /// configuration is complete.
     fn prepare_segment(writer: BufWriter<ActiveHandle>) -> std::io::Result<WriterState> {
-        let mut encoder = Encoder::new_to(writer)?;
-        let (mono, real) = clock_pair();
-        encoder.write(&ClockSyncEvent {
-            timestamp_ns: mono,
-            realtime_ns: real,
-        })?;
+        let encoder = Encoder::new_to(writer)?;
         Ok(WriterState::Active {
             writer: encoder.into_raw_encoder(),
+            need_embedded_files: true,
             need_metadata: true,
         })
     }
 
     fn write_metadata_if_needed(&mut self) -> std::io::Result<()> {
+        let embedded_files = &self.embedded_files;
         match &mut self.state {
             WriterState::Active {
                 writer,
+                need_embedded_files,
                 need_metadata,
             } => {
+                if *need_embedded_files {
+                    for file in embedded_files {
+                        writer.write_embedded_file(file)?;
+                    }
+                    *need_embedded_files = false;
+                }
                 if *need_metadata {
                     Self::write_segment_metadata(writer, &self.segment_metadata.entries)?;
                 }
@@ -731,6 +741,20 @@ impl<M: BufferMode> SegmentWriter<M> {
     #[cfg(test)]
     pub(crate) fn segment_metadata(&self) -> &[(String, String)] {
         &self.segment_metadata.entries
+    }
+
+    pub(crate) fn set_embedded_files(&mut self, files: Vec<EmbeddedFile>) {
+        debug_assert!(
+            matches!(
+                &self.state,
+                WriterState::Active {
+                    need_embedded_files: true,
+                    ..
+                }
+            ),
+            "embedded files must be configured before the segment preamble is written"
+        );
+        self.embedded_files = files;
     }
 
     /// Merge the segment metadata entries written into the next rotated segment.
@@ -1676,6 +1700,62 @@ mod tests {
                 _ => false,
             });
             assert!(has_metadata, "{}: expected SegmentMetadata", file.display());
+        }
+    }
+
+    #[test]
+    fn embedded_files_precede_clock_sync_in_every_rotated_file() {
+        use dial9_trace_format::decoder::{DecodedFrameRef, Decoder};
+
+        let dir = TempDir::new().unwrap();
+        let one_event = single_event_file_size();
+        let mut writer = DiskBuffer::builder()
+            .base_path(dir.path())
+            .max_file_size(one_event)
+            .max_total_size(100_000)
+            .build()
+            .unwrap();
+        writer.set_embedded_files(vec![EmbeddedFile::borrowed("cpu.wasm", b"\0asm").unwrap()]);
+
+        for _ in 0..5 {
+            writer.write_encoded_batch(&test_batch()).unwrap();
+        }
+        writer.finalize().unwrap();
+
+        let mut files: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| path.extension().is_some_and(|ext| ext == "bin"))
+            .collect();
+        files.sort();
+        assert!(files.len() >= 2, "expected at least two rotated files");
+
+        for file in files {
+            let data = std::fs::read(&file).unwrap();
+            let mut decoder = Decoder::new(&data).unwrap();
+            assert!(matches!(
+                decoder.next_frame_ref().unwrap(),
+                Some(DecodedFrameRef::EmbeddedFile(file))
+                    if file.name == "cpu.wasm" && file.data == b"\0asm"
+            ));
+
+            let mut saw_clock_sync = false;
+            while let Some(frame) = decoder.next_frame_ref().unwrap() {
+                let DecodedFrameRef::Event { type_id, .. } = frame else {
+                    continue;
+                };
+                if decoder.registry().get(type_id).map(|schema| schema.name())
+                    == Some("ClockSyncEvent")
+                {
+                    saw_clock_sync = true;
+                    break;
+                }
+            }
+            assert!(
+                saw_clock_sync,
+                "{}: expected ClockSyncEvent after embedded files",
+                file.display()
+            );
         }
     }
 

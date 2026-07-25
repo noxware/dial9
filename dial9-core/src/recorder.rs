@@ -24,6 +24,7 @@ use crate::primitives::sync::Arc;
 use crate::recording::{Recorder, RecordingStartHook};
 use crate::shared_state::SharedState;
 use crate::source::Source;
+use dial9_trace_format::EmbeddedFile;
 
 /// A reusable per-thread hook: run on each recording thread, returning a
 /// teardown closure. Reusable (`Fn`) because both the flush thread and the
@@ -83,6 +84,7 @@ fn builder_with<M: BufferMode>(writer: Option<SegmentWriter<M>>) -> RecorderBuil
         sources: Vec::new(),
         recording_start_hooks: Vec::new(),
         segment_metadata: Vec::new(),
+        embedded_files: Vec::new(),
         metrics_sink: None,
         thread_init: noop_thread_hook(),
         #[cfg(feature = "pipeline")]
@@ -145,6 +147,7 @@ pub struct RecorderBuilder<M: BufferMode = Disk> {
     sources: Vec<Box<dyn Source>>,
     recording_start_hooks: Vec<RecordingStartHook>,
     segment_metadata: Vec<(String, String)>,
+    embedded_files: Vec<EmbeddedFile>,
     metrics_sink: Option<metrique::writer::BoxEntrySink>,
     thread_init: RecordingThreadHook,
     /// The segment-processing pipeline. `Some` runs exactly these processors,
@@ -173,6 +176,7 @@ impl<M: BufferMode> std::fmt::Debug for RecorderBuilder<M> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RecorderBuilder")
             .field("sources", &self.sources.len())
+            .field("embedded_files", &self.embedded_files.len())
             .finish_non_exhaustive()
     }
 }
@@ -199,6 +203,12 @@ impl<M: BufferMode> RecorderBuilder<M> {
     /// calls (and across the tokio layer); on a key collision the later value wins.
     pub fn segment_metadata(mut self, entries: impl IntoIterator<Item = (String, String)>) -> Self {
         merge_segment_metadata(&mut self.segment_metadata, entries);
+        self
+    }
+
+    /// Embed an opaque file in every physical trace segment.
+    pub fn embedded_file(mut self, file: EmbeddedFile) -> Self {
+        self.embedded_files.push(file);
         self
     }
 
@@ -234,6 +244,8 @@ impl<M: BufferMode> RecorderBuilder<M> {
         let Some(mut writer) = self.writer else {
             return recorder_disabled();
         };
+
+        writer.set_embedded_files(self.embedded_files);
 
         let shared = Arc::new(SharedState::new(clock::clock_monotonic_ns()));
 
@@ -457,8 +469,8 @@ mod tests {
     use super::*;
     use crate::buffer::{DiskBuffer, MemoryBuffer};
     use crate::source::FlushContext;
-    use dial9_trace_format::TraceEvent;
     use dial9_trace_format::decoder::Decoder;
+    use dial9_trace_format::{EmbeddedFile, TraceEvent};
     use std::path::{Path, PathBuf};
     use std::time::Duration;
 
@@ -536,6 +548,32 @@ mod tests {
             decoded_test_values(&bytes).contains(&7),
             "the source's event should round-trip through the trace file"
         );
+    }
+
+    #[test]
+    fn recorder_builder_embeds_file() {
+        use dial9_trace_format::decoder::DecodedFrameRef;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let writer = DiskBuffer::single_file(dir.path().join("trace.bin")).expect("writer");
+
+        let recorder = recorder(writer)
+            .embedded_file(EmbeddedFile::borrowed("cpu.wasm", b"\0asm").unwrap())
+            .source(OnceSource {
+                emitted: false,
+                value: 7,
+            })
+            .build();
+        recorder.graceful_shutdown(Duration::ZERO);
+
+        let bytes = std::fs::read(sealed_segment(dir.path())).expect("read segment");
+        let mut decoder = Decoder::new(&bytes).expect("valid trace");
+        assert!(matches!(
+            decoder.next_frame_ref().expect("decode frame"),
+            Some(DecodedFrameRef::EmbeddedFile(file))
+                if file.name == "cpu.wasm" && file.data == b"\0asm"
+        ));
+        assert_eq!(decoded_test_values(&bytes), vec![7]);
     }
 
     /// `build()` starts recording.

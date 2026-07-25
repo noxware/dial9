@@ -7,6 +7,7 @@ pub use dial9_core::recorder::{
     RecorderBuilder, RecorderSourceExt, recorder, recorder_disabled, recorder_or_disabled,
 };
 pub use dial9_core::recording::Recorder;
+pub use dial9_core::{EmbeddedFile, EmbeddedFileError};
 
 /// Building blocks for extending dial9: implement a [`Source`](crate::core::Source),
 /// write custom encoders, author custom segment processors, reach the raw
