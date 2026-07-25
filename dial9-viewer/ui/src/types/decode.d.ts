@@ -138,6 +138,7 @@ declare module "*/decode.js" {
     pos: number;
     timestampBaseNs: bigint;
     embeddedFilePreambleOpen: boolean;
+    headerIndex: number;
   }
 
   /**
@@ -167,6 +168,8 @@ declare module "*/decode.js" {
     get position(): number;
     /** Total byte length of the buffer. */
     get byteLength(): number;
+    /** Zero-based ordinal of the most recently consumed trace header. */
+    get headerIndex(): number;
 
     /** Decode the 5-byte `TRC\0` header. False if the magic doesn't match. */
     decodeHeader(): boolean;

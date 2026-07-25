@@ -132,6 +132,7 @@ class TraceDecoder {
     this.version = 0;
     this._timestampBaseNs = 0n;
     this._embeddedFilePreambleOpen = true;
+    this._headerIndex = -1;
     // Streaming mode. When false (default, whole-buffer decode), a frame that
     // runs off the end of the buffer is a truncated tail: `nextFrame()` stops
     // gracefully at EOF. When true, the same condition means "the buffer holds
@@ -180,6 +181,7 @@ class TraceDecoder {
       pos: this._pos,
       timestampBaseNs: this._timestampBaseNs,
       embeddedFilePreambleOpen: this._embeddedFilePreambleOpen,
+      headerIndex: this._headerIndex,
     };
   }
 
@@ -188,6 +190,7 @@ class TraceDecoder {
     this._pos = snap.pos;
     this._timestampBaseNs = snap.timestampBaseNs;
     this._embeddedFilePreambleOpen = snap.embeddedFilePreambleOpen;
+    this._headerIndex = snap.headerIndex;
   }
 
   /**
@@ -208,6 +211,7 @@ class TraceDecoder {
     this.version = this._view.getUint8(this._pos + 4);
     this._pos += 5;
     this._embeddedFilePreambleOpen = true;
+    this._headerIndex = 0;
     return true;
   }
 
@@ -237,6 +241,7 @@ class TraceDecoder {
           this.stackPool = new Map();
           this._timestampBaseNs = 0n;
           this._embeddedFilePreambleOpen = true;
+          this._headerIndex += 1;
           this._pos += 5; // skip header
           return this.nextFrame();
         }
@@ -405,6 +410,9 @@ class TraceDecoder {
 
   /** Total byte length of the buffer. */
   get byteLength() { return this._view.byteLength; }
+
+  /** Zero-based ordinal of the most recently consumed trace header. */
+  get headerIndex() { return this._headerIndex; }
 
   _decodeStringPool() {
     const count = this._view.getUint32(this._pos, true); this._pos += 4;

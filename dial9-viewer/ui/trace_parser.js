@@ -400,6 +400,7 @@
      *   threadNames: Map<number, string>,
      *   runtimeWorkers: Map<string, number[]>,
      *   segmentMetadata: Map<string, string>,
+     *   embeddedFiles: {name: string, data: Uint8Array}[],
      * }} ParsedTrace
      */
 
@@ -689,6 +690,7 @@
             tidToWorker: new Map(), // tid → workerId (stable mapping from park/unpark events)
             runtimeWorkers: new Map(), // runtime name → [workerId, ...]
             segmentMetadata: new Map(), // latest segment metadata key → value
+            embeddedFiles: [], // files from the first D9TF header's preamble
             taskDumps: new Map(), // taskId → [{timestamp, callchain}] sorted by timestamp
             customEvents: [], // unrecognized event types: {name, timestamp, fields}
             // Optional columnar sink for SPAN custom events (SpanEnter/Exit/Close):
@@ -716,6 +718,19 @@
      */
     function processFrame(frame, state, dec) {
         const { startTime, endTime } = state;
+        if (frame.type === "embedded_file") {
+            // Every physical segment repeats its preamble, and thread-local
+            // batches introduce more D9TF headers. Only the first header in a
+            // logical load activates files. Copy because streaming decode drops
+            // the consumed input prefix immediately after this callback.
+            if (dec.headerIndex === 0) {
+                state.embeddedFiles.push({
+                    name: frame.name,
+                    data: new Uint8Array(frame.data),
+                });
+            }
+            return;
+        }
         if (frame.type !== "event") return;
         const v = frame.values;
         const ts = num(frame.timestamp_ns);
@@ -1088,6 +1103,7 @@
             tidToWorker,
             runtimeWorkers,
             segmentMetadata,
+            embeddedFiles,
             taskDumps,
             customEvents,
             clockSyncAnchors,
@@ -1197,6 +1213,7 @@
             taskTerminateTimes,
             runtimeWorkers,
             segmentMetadata,
+            embeddedFiles,
             customEvents,
             taskDumps,
             clockSyncAnchors,

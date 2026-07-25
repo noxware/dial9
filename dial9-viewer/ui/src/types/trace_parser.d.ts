@@ -152,6 +152,12 @@ declare module "*/trace_parser.js" {
     realtimeNs: number;
   }
 
+  /** An opaque file copied from the first D9TF header's preamble. */
+  export interface EmbeddedTraceFile {
+    name: string;
+    data: Uint8Array;
+  }
+
   /**
    * A detected block-in-place handoff interval. Worker attribution inside
    * [startNs, endNs) is unknowable: samples in the gap have workerId
@@ -202,6 +208,8 @@ declare module "*/trace_parser.js" {
     runtimeWorkers: Map<string, number[]>;
     /** Latest segment-metadata key -> value. */
     segmentMetadata: Map<string, string>;
+    /** Files from only the first segment/header of this logical load. */
+    embeddedFiles: EmbeddedTraceFile[];
     customEvents: CustomTraceEvent[];
     /**
      * Columnar SPAN custom events (SpanEnter/Exit/Close), present only on the

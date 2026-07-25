@@ -127,12 +127,13 @@ export function probeDecode(buffer: Uint8Array): EventSchema | undefined {
       for (const e of frame.entries) void e.addrs.join(";");
     } else if (frame.type === "schema_annotations") {
       for (const a of frame.annotations) void (a.fieldIndex + a.key + a.value);
-    } else {
-      // "schema"
+    } else if (frame.type === "schema") {
       const optional = frame.fields.some(
         (f) => (f.fieldType & 0x80) !== 0 || f.fieldType === FieldType.I64
       );
       void optional;
+    } else {
+      void (frame.name + frame.data.byteLength);
     }
   }
   const all: DecodedFrame[] = dec.decodeAll();

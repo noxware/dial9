@@ -57,6 +57,7 @@ export type {
   BlockInPlaceGap,
   CallframeSymbols,
   ClockSyncAnchor,
+  EmbeddedTraceFile,
   CpuSample,
   CustomTraceEvent,
   DecodedFieldValue,
