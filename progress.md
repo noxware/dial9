@@ -104,3 +104,7 @@
   module: a post-trace drop replays immediately, while a pre-trace drop remains
   pending and runs alongside the embedded copy. Both publish independently
   despite identical table names.
+- The existing UI CI job now installs the core Wasm target, compiles and runs
+  the real extension fixture, and installs Chromium for the browser check.
+  Ordinary Vitest remains fast by keeping the compiled integration opt-in; the
+  reproducible benchmark is intentionally observational rather than a CI gate.
