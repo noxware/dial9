@@ -56,3 +56,8 @@
   reducers to the viewport, and preserves arbitrary source order only for
   `polyline/v1`. Drawing, reverse-Z hit testing, tooltip, swatch, and readout
   presentation all consume the same normalized manifest tables.
+- `viewer.html` is now a Vite entry only to load a thin TypeScript adapter; its
+  classic parser and panels remain in place. Buffered, gzip, and URL-streaming
+  loads fan decompressed chunks out without awaiting Workers, while range
+  reparses reuse published extension output. Dropped Wasm runs either against
+  the retained current trace or as a pending module on the next load.

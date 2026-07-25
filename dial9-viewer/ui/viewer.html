@@ -628,6 +628,107 @@
                 height: 100%;
                 display: block;
             }
+            #viewer-extension-panels {
+                display: contents;
+            }
+            .dial9-extension-panel {
+                height: 96px;
+                background: #111b2e;
+                border-top: 1px solid #333;
+                flex-shrink: 0;
+                position: relative;
+                overflow: hidden;
+            }
+            .dial9-extension-panel .chart-label {
+                position: absolute;
+                top: 4px;
+                left: 8px;
+                right: 8px;
+                display: flex;
+                align-items: center;
+                min-width: 0;
+                font-size: 0.75em;
+                color: #888;
+                z-index: 2;
+            }
+            .dial9-extension-title {
+                color: #aaa;
+                font-weight: 600;
+                white-space: nowrap;
+            }
+            .dial9-extension-swatches {
+                display: inline-flex;
+                align-items: center;
+                gap: 10px;
+                margin-left: 10px;
+                min-width: 0;
+            }
+            .dial9-extension-swatch {
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+                white-space: nowrap;
+                font-weight: 400;
+            }
+            .dial9-extension-swatch-sample {
+                --dial9-extension-line-width: 2px;
+                display: inline-block;
+                flex-shrink: 0;
+                width: 14px;
+            }
+            .dial9-extension-swatch-sample.is-line,
+            .dial9-extension-swatch-sample.is-rule {
+                height: 0;
+                border-top: var(--dial9-extension-line-width) solid
+                    var(--dial9-extension-color);
+            }
+            .dial9-extension-swatch-sample.is-rule,
+            .dial9-extension-swatch-sample.is-dashed {
+                border-top-style: dashed;
+            }
+            .dial9-extension-swatch-sample.is-area {
+                height: 8px;
+                box-sizing: border-box;
+                border: 1px solid var(--dial9-extension-color);
+                background: color-mix(
+                    in srgb,
+                    var(--dial9-extension-color) 38%,
+                    transparent
+                );
+            }
+            .dial9-extension-readout {
+                position: absolute;
+                top: 4px;
+                right: 12px;
+                z-index: 3;
+                padding-left: 8px;
+                color: #aaa;
+                font-size: 0.75em;
+                white-space: nowrap;
+                background: #111b2e;
+            }
+            .dial9-extension-value {
+                color: #ccc;
+                font-weight: 600;
+            }
+            .dial9-extension-panel canvas {
+                width: 100%;
+                height: 100%;
+                display: block;
+            }
+            .dial9-extension-panel-error {
+                position: absolute;
+                top: 28px;
+                left: 12px;
+                right: 12px;
+                color: #ff8a65;
+                font: 12px monospace;
+                white-space: normal;
+                overflow-wrap: anywhere;
+            }
+            .dial9-extension-error-panel {
+                height: 58px;
+            }
             #task-detail .chart-label {
                 position: absolute;
                 top: 4px;
@@ -840,7 +941,7 @@
                     <a href="#" id="load-demo" style="color: #6c63ff; font-size: 0.9em">or load demo trace</a>
                 </div>
             </div>
-            <input type="file" id="file-input" accept=".bin,.gz" />
+            <input type="file" id="file-input" accept=".bin,.gz,.wasm" />
         </div>
 
         <div id="viewer">
@@ -939,6 +1040,7 @@
                     <span id="cpu-panel-info" style="position:absolute;top:4px;right:12px;font-size:0.75em;color:#aaa;z-index:2;pointer-events:none"></span>
                     <canvas id="cpu-panel-canvas"></canvas>
                 </div>
+                <div id="viewer-extension-panels"></div>
                 <div id="task-detail">
                     <span class="chart-label" id="task-detail-label">Task Detail</span>
                     <span id="task-detail-status" style="position:absolute;top:4px;right:12px;font-size:0.75em;color:#aaa;z-index:2"></span>
@@ -1005,6 +1107,20 @@
         </div>
         <div id="aria-live" aria-live="polite" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden"></div>
 
+        <script>
+            window.Dial9ViewerExtensionsReady = new Promise((resolve) => {
+                window.__resolveDial9ViewerExtensions = resolve;
+                window.setTimeout(
+                    () => resolve(window.Dial9ViewerExtensions || null),
+                    10_000,
+                );
+            });
+        </script>
+        <script
+            type="module"
+            src="/src/pages/legacy-viewer/extensions.ts"
+            onerror="window.__resolveDial9ViewerExtensions?.(null)"
+        ></script>
         <script src="decode.js"></script>
         <script src="trace_parser.js"></script>
         <script src="creds.js"></script>
@@ -1017,6 +1133,12 @@
         <script>
             const { EVENT_TYPES: ET, parseTrace, formatFrame, symbolizeChain, deduplicateSamples } = TraceParser;
             const { buildWorkerSpans, attachCpuSamples, buildActiveTaskTimeline, computeSchedulingDelays, filterPointsOfInterest, buildSpanData, collectDescendants, selectSpanRenderSet, enclosingSpans, computeSpanLayout, getTraceTimeRange, hasCpuProfileSamples, buildProcessCpuUsageSeries, computeRuntimeGroups } = TraceAnalysis;
+
+            async function viewerExtensions() {
+                return window.Dial9ViewerExtensions
+                    || await window.Dial9ViewerExtensionsReady
+                    || null;
+            }
 
             function esc(s) {
                 return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -1550,6 +1672,7 @@
             });
             document.getElementById("btn-reset").addEventListener("click", () => {
                 resetTraceState({ clearUrlRange: true });
+                window.Dial9ViewerExtensions?.reset();
                 currentTraceBuffer = null;
                 currentTraceName = null;
                 viewer.style.display = "none";
@@ -1624,7 +1747,7 @@
                 await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
                 if (!processTrace()) {
                     resetDropZone();
-                    return;
+                    return false;
                 }
                 // Trace is rendering: freeze the wall-clock timer. Log the final
                 // elapsed time for easy copy/paste measurement.
@@ -1675,17 +1798,34 @@
                 if (trace.events.length === 0 && hasCpuProfileSamples(trace.cpuSamples)) {
                     requestAnimationFrame(() => showFlamegraph(minTs, maxTs));
                 }
+                return true;
             }
 
             /** Parse an already-fetched buffer and show the viewer. */
-            async function parseAndShowTrace(buffer, name, opts = {}) {
+            async function parseAndShowTrace(buffer, name, opts = {}, { runExtensions = true } = {}) {
+                let extensionLoad = null;
                 try {
+                    if (runExtensions) {
+                        const extensions = await viewerExtensions();
+                        extensionLoad = extensions?.beginTrace() || null;
+                        if (extensionLoad) {
+                            buffer = await extensions.normalizeAndFeed(buffer, extensionLoad);
+                        }
+                    }
                     const fullOpts = { ...opts, onParseProgress: makeParseProgress() };
                     updateLoadProgress("Decompressing…");
                     const parsed = await parseTrace(buffer, fullOpts);
                     if (loadPerf) loadPerf.parseDoneMs = performance.now();
-                    await showParsedTrace(parsed, buffer, name);
+                    const shown = await showParsedTrace(parsed, buffer, name);
+                    if (!shown) {
+                        extensionLoad?.abort();
+                        return;
+                    }
+                    extensionLoad?.finish(buffer).catch((error) => {
+                        console.error("Viewer extension finalization failed", error);
+                    });
                 } catch (err) {
+                    extensionLoad?.abort();
                     if (err.name === "AbortError") return;
                     alert("Error: " + err.message);
                     resetDropZone();
@@ -1704,7 +1844,10 @@
              */
             async function streamAndShowTrace(urls, name, opts = {}) {
                 const list = Array.isArray(urls) ? urls : [urls];
+                let extensionLoad = null;
                 try {
+                    const extensions = await viewerExtensions();
+                    extensionLoad = extensions?.beginTrace() || null;
                     const credHeaders = window.Dial9Creds ? Dial9Creds.headers() : {};
                     const stream = list.length === 1
                         ? await TraceParser.fetchTraceStream(list[0], {
@@ -1720,6 +1863,7 @@
                         async *[Symbol.asyncIterator]() {
                             for await (const chunk of stream) {
                                 captured.push(chunk);
+                                extensionLoad?.feed(chunk);
                                 yield chunk;
                             }
                         },
@@ -1737,19 +1881,47 @@
                     const buffer = new Uint8Array(total);
                     let off = 0;
                     for (const c of captured) { buffer.set(c, off); off += c.length; }
-                    await showParsedTrace(parsed, buffer.buffer, name);
+                    const shown = await showParsedTrace(parsed, buffer.buffer, name);
+                    if (!shown) {
+                        extensionLoad?.abort();
+                        return;
+                    }
+                    extensionLoad?.finish(buffer.buffer).catch((error) => {
+                        console.error("Viewer extension finalization failed", error);
+                    });
                 } catch (err) {
+                    extensionLoad?.abort();
                     if (err.name === "AbortError") return;
                     throw err;
                 }
             }
 
-            function loadFile(file) {
+            async function loadFile(file) {
+                if (/\.wasm$/i.test(file.name)) {
+                    try {
+                        const extensions = await viewerExtensions();
+                        if (!extensions) {
+                            throw new Error("Viewer extension support failed to load");
+                        }
+                        const status = await extensions.loadWasm(file);
+                        const message = status === "pending"
+                            ? `${file.name} will run with the next trace`
+                            : `${file.name} loaded`;
+                        showToast("viewer-extension-loaded", message, "info", 4000);
+                    } catch (error) {
+                        alert("Error loading viewer extension: " + error.message);
+                    } finally {
+                        fileInput.value = "";
+                    }
+                    return;
+                }
                 resetTraceState();
                 enterLoadingView(`Loading ${file.name}…`);
                 const reader = new FileReader();
-                reader.onload = (e) =>
-                    parseAndShowTrace(e.target.result, file.name, getParseOptions());
+                reader.onload = async (e) => {
+                    await parseAndShowTrace(e.target.result, file.name, getParseOptions());
+                    fileInput.value = "";
+                };
                 reader.readAsArrayBuffer(file);
             }
 
@@ -1859,8 +2031,8 @@
                 dropZone.innerHTML = `
                     <div>
                         <div style="font-size: 2em; margin-bottom: 12px">📊</div>
-                        <div>Drop a <code>.bin</code> or <code>.bin.gz</code> trace file here or click to open</div>
-                        <div style="font-size: 0.8em; margin-top: 8px; color: #666">Expects D9TF binary format</div>
+                        <div>Drop a <code>.bin</code>, <code>.bin.gz</code>, or viewer <code>.wasm</code> here or click to open</div>
+                        <div style="font-size: 0.8em; margin-top: 8px; color: #666">A standalone extension runs with the next trace</div>
                         <div style="margin-top: 12px">
                             <a href="#" id="load-demo" style="color: #6c63ff; font-size: 0.9em">or load demo trace</a>
                         </div>
@@ -1934,7 +2106,12 @@
                 const opts = {};
                 if (startNs != null) opts.startTime = startNs;
                 if (endNs != null) opts.endTime = endNs;
-                await parseAndShowTrace(currentTraceBuffer, currentTraceName, opts);
+                await parseAndShowTrace(
+                    currentTraceBuffer,
+                    currentTraceName,
+                    opts,
+                    { runExtensions: false },
+                );
 
                 clearRangeBtn.style.display = (startNs != null || endNs != null) ? "" : "none";
             }
@@ -2960,6 +3137,12 @@
                 if (prof) _t = _profMark(prof, `spanPanel(allSpans=${allSpans.length})`, _t);
                 renderCustomEventsPanel(scrollbarW);
                 renderProcessCpuPanel(scrollbarW);
+                window.Dial9ViewerExtensions?.render({
+                    start: viewStart,
+                    end: viewEnd,
+                    labelWidth: LABEL_W,
+                    scrollbarWidth: scrollbarW,
+                });
                 if (prof) _t = _profMark(prof, `customEvents(${genericCustomEvents.length})`, _t);
                 renderTaskDetail(scrollbarW);
                 if (prof) _t = _profMark(prof, "taskDetail", _t);
@@ -3007,6 +3190,16 @@
                     renderAll();
                 });
             }
+
+            window.Dial9ViewerExtensionsReady.then((extensions) => {
+                extensions?.configure({
+                    requestRender: scheduleRenderAll,
+                    setPointerTime(timestamp) {
+                        mouseNs = timestamp;
+                        scheduleCrosshairRedraw();
+                    },
+                });
+            });
 
             function nsToX(ns, drawW) {
                 return ((ns - viewStart) / (viewEnd - viewStart)) * drawW;
@@ -6547,6 +6740,13 @@
                     if (dragging) {
                         tooltip.style.display = "none";
                         mouseNs = null;
+                        return;
+                    }
+                    // Extension panels own their hit testing and tooltip. Their
+                    // adapter also forwards time-axis pointer movement to the
+                    // shared crosshair.
+                    if (e.target.closest && e.target.closest(".dial9-extension-panel")) {
+                        lanesContainer.style.cursor = "";
                         return;
                     }
                     // Over the span panel: it owns its own tooltip, but we

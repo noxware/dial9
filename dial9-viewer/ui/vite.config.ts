@@ -120,11 +120,9 @@ function frozenCoreDevInterop(): Plugin {
 // Scaffolding config (docs/ui-inventory/02-architecture.md section 2.1,
 // docs/adr/0004-viewer-ui-migration.md section 3).
 //
-// No page has migrated yet: the four legacy HTML pages and every file they
-// reference via <script src> ship into dist/ VERBATIM through the static-copy
-// list below, so the served pages stay byte-identical to serving ui/ from
-// disk. As pages convert to real Vite entries (the viewer
-// slices), their lines are removed from this list until it is empty.
+// Legacy pages in this list and every classic script they reference ship into
+// dist/ verbatim. viewer.html is now a Vite HTML entry so it can load the thin
+// TypeScript extension adapter while retaining all of its classic scripts.
 //
 // The frozen core files (decode.js, trace_parser.js, ... - see AGENTS.md)
 // stay at the ui/ root in their browser-global + CommonJS-guard form; they
@@ -138,7 +136,6 @@ function frozenCoreDevInterop(): Plugin {
 // Vite-entry ticket in chunk 1 but must keep being served).
 const legacyPages = [
   "index.html",
-  "viewer.html",
   "flamegraph.html",
   "tokio_stats.html",
 ];
@@ -255,6 +252,9 @@ export default defineConfig({
       // placeholder inputs: the dev-probe module was retired when
       // the first real entry landed, as its header said it would be).
       input: {
+        // The legacy viewer remains at /viewer.html, but is a Vite entry so its
+        // extension adapter and dedicated Worker are compiled TypeScript.
+        "legacy-viewer": "viewer.html",
         // The migrated flamegraph page, served at /new/flamegraph.html
         // (HTML inputs keep their project-root-relative path in dist/).
         flamegraph: "new/flamegraph.html",
