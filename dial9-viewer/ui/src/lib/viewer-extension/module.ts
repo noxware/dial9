@@ -2,6 +2,7 @@ import {
   copyOutputBatch,
   readGuestError,
   validateExtensionExports,
+  wasmU32Result,
   type ExtensionAbiExports,
 } from "./abi.js";
 import type { ColumnarBatch } from "./columnar.js";
@@ -77,7 +78,7 @@ class WasmExtensionGuest implements ExtensionGuest {
   push(chunk: Uint8Array): ColumnarBatch[] {
     if (this.#finished) return fail("cannot push after finish");
     const length = u32(chunk.byteLength, "input length");
-    const pointer = u32(
+    const pointer = wasmU32Result(
       this.#exports.dial9_input_reserve(length),
       "input pointer",
     );
@@ -110,8 +111,14 @@ class WasmExtensionGuest implements ExtensionGuest {
       if (status === -1) return guestFailure(this.#exports, "output");
       if (status !== 1) return fail(`dial9_output_next returned ${status}`);
 
-      const pointer = this.#exports.dial9_output_descriptor_ptr();
-      const length = this.#exports.dial9_output_descriptor_len();
+      const pointer = wasmU32Result(
+        this.#exports.dial9_output_descriptor_ptr(),
+        "output descriptor pointer",
+      );
+      const length = wasmU32Result(
+        this.#exports.dial9_output_descriptor_len(),
+        "output descriptor length",
+      );
       const batch = copyOutputBatch(
         this.#exports.memory,
         pointer,

@@ -40,7 +40,9 @@ function customSection(name: string, payload: string): number[] {
 function wasm(options: {
   manifests?: readonly string[];
   importFunction?: boolean;
+  negativeReservePointer?: boolean;
   reservePointer?: number;
+  trapPush?: boolean;
 } = {}): Uint8Array {
   const header = [0, 0x61, 0x73, 0x6d, 1, 0, 0, 0];
   const types = section(1, [
@@ -98,8 +100,13 @@ function wasm(options: {
     0,
     0,
   ];
-  const bodies = returns.flatMap((value) => {
-    const instructions = [0, 0x41, ...u32(value), 0x0b];
+  const bodies = returns.flatMap((value, index) => {
+    let instructions = [0, 0x41, ...u32(value), 0x0b];
+    if (options.trapPush === true && index === 2) {
+      instructions = [0, 0x00, 0x0b];
+    } else if (options.negativeReservePointer === true && index === 1) {
+      instructions = [0, 0x41, 0x7f, 0x0b];
+    }
     return [...u32(instructions.length), ...instructions];
   });
   const code = section(10, [returns.length, ...bodies]);
@@ -157,6 +164,20 @@ describe("extension WebAssembly module", () => {
     );
     expect(() => guest.push(new Uint8Array([1, 2]))).toThrow(
       "input range is outside WebAssembly memory",
+    );
+
+    const highPointer = await loadExtensionModule(
+      wasm({ negativeReservePointer: true }),
+    );
+    expect(() => highPointer.push(new Uint8Array([1]))).toThrow(
+      "input range is outside WebAssembly memory",
+    );
+  });
+
+  it("contains a guest execution trap inside its instance", async () => {
+    const guest = await loadExtensionModule(wasm({ trapPush: true }));
+    expect(() => guest.push(new Uint8Array())).toThrow(
+      WebAssembly.RuntimeError,
     );
   });
 

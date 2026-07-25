@@ -66,6 +66,17 @@ function checkedU32(value: number, name: string): number {
   return value;
 }
 
+export function wasmU32Result(value: number, name: string): number {
+  if (
+    !Number.isSafeInteger(value) ||
+    value < -0x8000_0000 ||
+    value > 0x7fff_ffff
+  ) {
+    fail(`${name} is not a WebAssembly i32`);
+  }
+  return value >>> 0;
+}
+
 function checkedProduct(left: number, right: number, name: string): number {
   const result = left * right;
   if (!Number.isSafeInteger(result)) fail(`${name} overflows`);
@@ -469,8 +480,8 @@ export function validateExtensionExports(
 }
 
 export function readGuestError(exports: ExtensionAbiExports): string {
-  const pointer = checkedU32(exports.dial9_error_ptr(), "error pointer");
-  const length = checkedU32(exports.dial9_error_len(), "error length");
+  const pointer = wasmU32Result(exports.dial9_error_ptr(), "error pointer");
+  const length = wasmU32Result(exports.dial9_error_len(), "error length");
   const buffer = hostBuffer(exports.memory);
   const source = range(buffer, pointer, length, "error");
   try {

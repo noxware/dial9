@@ -105,6 +105,7 @@ describe("extension worker body", () => {
     const output = recorder();
     const body = createExtensionWorkerBody(output.post, async () => ({
       manifest: MANIFEST,
+      linearMemoryByteLength: 65_536,
       push() {
         throw new TypeError("bad guest");
       },

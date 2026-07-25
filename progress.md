@@ -94,3 +94,9 @@
   no policy threshold. On the validation machine it processed 250,000 events
   in 61.766 ms (4.05M events/s), with 50,003,968 guest bytes and 26,156,716
   host column bytes; these observations are measurements, not contracts.
+- A final ABI-boundary audit found that WebAssembly exposes `i32` results to
+  JavaScript as signed numbers even when their bits represent `u32` pointers.
+  Pointer and length exports now normalize those bits before bounds checks, so
+  valid addresses above 2 GiB are not rejected as negative; status results
+  remain signed. A real trapping module verifies that guest execution failure
+  stays observable and terminal to that guest.

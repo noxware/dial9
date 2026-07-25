@@ -344,6 +344,9 @@ their lines, avoiding canvas-label overlap.
 | `dial9_error_ptr/len() -> u32` | UTF-8 terminal error |
 
 Status `0` from `push`, `finish`, and `ack` means success.
+JavaScript interprets the bit pattern of pointer and length `i32` results as
+unsigned `u32`; addresses at or above 2 GiB are not mistaken for negative
+status values.
 
 The output descriptor is little-endian `u32` words:
 
