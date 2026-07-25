@@ -35,6 +35,7 @@ changelog_include = [
     "dial9-perf-self-profile",
     "dial9-trace-format",
     "dial9-trace-format-derive",
+    "dial9-viewer-extension",
     "dial9-viewer",
     "dial9",
 ]
@@ -64,6 +65,10 @@ version_group = "trace-format"
 name = "dial9-trace-format-derive"
 changelog_update = false
 version_group = "trace-format"
+
+[[package]]
+name = "dial9-viewer-extension"
+changelog_update = false
 
 [[package]]
 name = "dial9-viewer"

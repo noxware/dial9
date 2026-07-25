@@ -359,6 +359,7 @@ jobs:
           cargo package \
             -p dial9-trace-format-derive \
             -p dial9-trace-format \
+            -p dial9-viewer-extension \
             -p dial9-core \
             -p dial9-utils \
             -p dial9-perf-self-profile \

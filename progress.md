@@ -108,3 +108,6 @@
   the real extension fixture, and installs Chromium for the browser check.
   Ordinary Vitest remains fast by keeping the compiled integration opt-in; the
   reproducible benchmark is intentionally observational rather than a CI gate.
+- The SDK is a publishable crate, so it is now explicit in release-plz,
+  top-level changelog aggregation, and the CI package check. This closes a
+  release-path gap that workspace builds and runtime tests cannot detect.
