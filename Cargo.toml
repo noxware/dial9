@@ -5,6 +5,7 @@ members = [
     "dial9-tokio-telemetry",
     "dial9-trace-format",
     "dial9-trace-format-derive",
+    "dial9-viewer-extension",
     "dial9-macro",
     "dial9-viewer",
     "dial9",
@@ -30,6 +31,7 @@ dial9-utils = { version = "0.5.0-rc0", path = "dial9-utils" }
 dial9-perf-self-profile = { version = "0.5.0-rc0", path = "perf-self-profile" }
 dial9-trace-format = { version = "0.5.0-rc0", path = "dial9-trace-format" }
 dial9-trace-format-derive = { version = "0.5.0-rc0", path = "dial9-trace-format-derive" }
+dial9-viewer-extension = { version = "0.5.0-rc0", path = "dial9-viewer-extension" }
 dial9-macro = { version = "0.5.0-rc0", path = "dial9-macro" }
 assert2 = "0.4"
 

@@ -1,0 +1,10 @@
+[package]
+name = "dial9-viewer-extension"
+version = "0.5.0-rc0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Rust SDK for sandboxed dial9 viewer extensions"
+
+[dependencies]
+dial9-trace-format = { workspace = true }

@@ -19,3 +19,11 @@
   from arbitrary chunks while retaining only an incomplete frame suffix. It
   consumes repeated attachment preambles internally and enforces the same
   placement rules as the slice decoder.
+- The extension SDK moves user-owned column `Vec`s into an output queue and
+  exposes their buffers through fixed numeric descriptors until host `ack`;
+  it does not build a second guest-side payload. The SDK validates rectangular
+  batches, validity bitmaps, and UTF-8, while the host is responsible for
+  matching table IDs and column types/nullability against the static manifest.
+- `manifest!` emits exactly one compacted `dial9.viewer.manifest` custom section
+  without JSON dependencies. A compiled smoke module had zero imports, the
+  expected ABI exports, and preserved whitespace and escapes inside strings.
