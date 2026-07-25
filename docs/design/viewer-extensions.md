@@ -474,7 +474,9 @@ at arbitrary chunk boundaries, and verifies its tables and presentation
 components. `npm run test:viewer-extension-browser` additionally loads the
 trace through the legacy page in Chromium, checks that built-in panels remain,
 compares CPU readout values, verifies every custom canvas, and exercises the
-dinosaur tail/head hit regions.
+dinosaur tail/head hit regions. It also loads the same module before and after
+the trace, verifying pending replay, immediate replay, and instance-scoped
+duplicate table names.
 
 ### Performance fixture
 

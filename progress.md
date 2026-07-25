@@ -100,3 +100,7 @@
   valid addresses above 2 GiB are not rejected as negative; status results
   remain signed. A real trapping module verifies that guest execution failure
   stays observable and terminal to that guest.
+- The browser fixture now exercises both drag-and-drop lifecycles with the real
+  module: a post-trace drop replays immediately, while a pre-trace drop remains
+  pending and runs alongside the embedded copy. Both publish independently
+  despite identical table names.

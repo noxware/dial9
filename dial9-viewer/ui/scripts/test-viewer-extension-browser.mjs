@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import {
   existsSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -37,6 +38,28 @@ function browserExecutable() {
   throw new Error(
     "No Chromium executable found. Run `npx playwright install chromium` " +
       "or set DIAL9_CHROMIUM_EXECUTABLE.",
+  );
+}
+
+async function dropFile(page, path, name) {
+  const base64 = readFileSync(path).toString("base64");
+  await page.evaluate(
+    ({ contents, fileName }) => {
+      const binary = atob(contents);
+      const bytes = Uint8Array.from(binary, (byte) => byte.charCodeAt(0));
+      const transfer = new DataTransfer();
+      transfer.items.add(
+        new File([bytes], fileName, { type: "application/wasm" }),
+      );
+      document.dispatchEvent(
+        new DragEvent("drop", {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer: transfer,
+        }),
+      );
+    },
+    { contents: base64, fileName: name },
   );
 }
 
@@ -84,7 +107,7 @@ function buildFixture(directory) {
     ],
     { cwd: REPOSITORY, stdio: "inherit" },
   );
-  return trace;
+  return { trace, wasm };
 }
 
 async function main() {
@@ -94,7 +117,7 @@ async function main() {
   let browser;
   let server;
   try {
-    const trace = buildFixture(temporaryDirectory);
+    const { trace, wasm } = buildFixture(temporaryDirectory);
     server = await createServer({
       root: UI_ROOT,
       logLevel: "error",
@@ -199,6 +222,38 @@ async function main() {
       () => document.querySelector("#tooltip")?.textContent?.includes("❤️"),
     );
     await page.mouse.move(10, 10);
+
+    await dropFile(page, wasm, "dropped-after-trace.wasm");
+    await page.waitForFunction(
+      () => document.querySelectorAll(".dial9-extension-panel").length === 8,
+    );
+    assert(
+      (await page.locator(".dial9-extension-error-panel").count()) === 0,
+      "a module dropped after the trace failed",
+    );
+
+    const pendingPage = await browser.newPage({
+      viewport: { width: 1440, height: 1000 },
+    });
+    await pendingPage.goto(
+      `http://127.0.0.1:${address.port}/viewer.html?ui=legacy`,
+    );
+    await pendingPage.locator("#file-input").setInputFiles(wasm);
+    await pendingPage.waitForFunction(
+      () =>
+        document
+          .querySelector("#toast-container")
+          ?.textContent?.includes("will run with the next trace") === true,
+    );
+    await pendingPage.locator("#file-input").setInputFiles(trace);
+    await pendingPage.waitForFunction(
+      () => document.querySelectorAll(".dial9-extension-panel").length === 8,
+    );
+    assert(
+      (await pendingPage.locator(".dial9-extension-error-panel").count()) === 0,
+      "a module dropped before the trace failed",
+    );
+    await pendingPage.close();
 
     const screenshot = process.env["DIAL9_VIEWER_EXTENSION_SCREENSHOT"];
     if (screenshot !== undefined) {
