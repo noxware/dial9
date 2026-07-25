@@ -76,8 +76,12 @@ pub trait Extension: Default {
   el ack del host, sin copiarlos dentro del guest.
 - El SDK deriva la cantidad de rows y valida que todas las columnas estén
   alineadas con el schema.
+- `TableId` y `Column` son API Rust del guest; el ABI transmite descriptores
+  numéricos explícitos, nunca su layout Rust.
 - Sólo habrá macros declarativas pequeñas para el manifest y los exports ABI;
   no proc macros, domain types generados ni serializers automáticos.
+- Cualquier codegen futuro construirá los mismos `TableId` y `Vec<Column>` y
+  delegará al mismo `emit`, sin una segunda ruta de transporte.
 - ABI numérico versionado: reserva/push/resume de input, finish, next/ack de
   output, descriptors de columnas y error buffer.
 - Un `push` puede pausarse cuando haya output listo para que el host lo drene y
@@ -205,7 +209,7 @@ Ejemplo orientativo:
 Componentes iniciales:
 
 - Dibujo: `background/v1`, `interval-area/v1`, `interval-line/v1`, `line/v1`,
-  `step-line/v1`, `polyline/v1` y `horizontal-line/v1`.
+  `step-line/v1`, `polyline/v1` y `horizontal-rule/v1`.
 - Presentación: `tooltip/v1`, `swatch/v1` y `readout/v1`; pueden renderizar DOM,
   pero consumen las mismas tablas y hits.
 
@@ -230,7 +234,7 @@ Contrato común:
 - Paneles admiten ejes X temporales o lineales, múltiples escalas Y y dominios
   visibles o fijos que incluyan cero, constantes o scalars de otras tablas.
 - Colores pueden ser literales o ramps basados en una columna y una escala.
-  Guides y thresholds usan `horizontal-line/v1`; sus labels viven en
+  Guides y thresholds usan `horizontal-rule/v1`; sus labels viven en
   `swatch/v1`, no encima de la línea dentro del canvas.
 - Títulos, labels y valores se insertan como texto, nunca como HTML.
 - Un nombre/version desconocido deshabilita sólo su panel, pero mantiene su
