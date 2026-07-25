@@ -44,3 +44,10 @@
   one queue; each push drains and acknowledges guest output before transferring
   validated column buffers to main, while abort or failure remains local to
   that instance.
+- A segmented first-preamble scanner handles every chunk boundary without
+  repeatedly concatenating a growing Wasm file. The coordinator sends chunks
+  immediately to already-known Workers, retains only the discovery prefix,
+  starts embedded `.wasm` instances at preamble close, replays that prefix once,
+  then fans out later chunks with one transferable copy per instance and no
+  credits. Stores publish atomically only on `complete`; failures discard one
+  instance without affecting modules with identical table names.
