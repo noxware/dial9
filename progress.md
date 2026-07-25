@@ -87,3 +87,10 @@
   canvas output, and exercises the dinosaur's 💩/❤️ hit regions. The custom
   readout intentionally keeps the contract's explicit `cores` suffix on
   `max`; the current built-in readout omits that suffix.
+- The production-path benchmark generates the same 250k resource-usage
+  workload through the real D9TF encoder and measures module load,
+  decode/computation/guest-host copies, transferable handoff, store append,
+  WebAssembly linear memory, and exact host column bytes independently. It has
+  no policy threshold. On the validation machine it processed 250,000 events
+  in 61.766 ms (4.05M events/s), with 50,003,968 guest bytes and 26,156,716
+  host column bytes; these observations are measurements, not contracts.

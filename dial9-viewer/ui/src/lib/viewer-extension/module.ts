@@ -55,6 +55,7 @@ function u32(value: number, name: string): number {
 
 export interface ExtensionGuest {
   readonly manifest: ExtensionManifest;
+  readonly linearMemoryByteLength: number;
   push(chunk: Uint8Array): ColumnarBatch[];
   finish(): ColumnarBatch[];
 }
@@ -67,6 +68,10 @@ class WasmExtensionGuest implements ExtensionGuest {
   constructor(manifest: ExtensionManifest, exports: ExtensionAbiExports) {
     this.manifest = manifest;
     this.#exports = exports;
+  }
+
+  get linearMemoryByteLength(): number {
+    return wasmMemoryBuffer(this.#exports.memory).byteLength;
   }
 
   push(chunk: Uint8Array): ColumnarBatch[] {

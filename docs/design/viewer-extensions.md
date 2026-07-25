@@ -473,6 +473,20 @@ trace through the legacy page in Chromium, checks that built-in panels remain,
 compares CPU readout values, verifies every custom canvas, and exercises the
 dinosaur tail/head hit regions.
 
+### Performance fixture
+
+From `dial9-viewer/ui`, `npm run bench:viewer-extension` generates 250,000
+resource-usage events and reports one machine-readable
+`VIEWER_EXTENSION_BENCHMARK` record. It measures module compilation,
+manifest validation and instantiation separately from D9TF decoding,
+computation, guest-to-host column copies, transferable ownership handoff, and
+store append. It also reports exact trace/module/output byte counts and initial
+and peak WebAssembly linear-memory sizes.
+
+`DIAL9_VIEWER_EXTENSION_BENCH_SAMPLES` selects a larger generated workload.
+Build and fixture generation are outside measured phases. The check validates
+all resulting row counts but deliberately has no performance threshold.
+
 ## Versioning and deferred work
 
 - ABI and manifest top-level versions are independent numeric contracts.

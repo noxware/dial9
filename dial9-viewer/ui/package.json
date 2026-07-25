@@ -4,6 +4,7 @@
   "version": "0.0.0",
   "scripts": {
     "build": "vite build",
+    "bench:viewer-extension": "DIAL9_RUN_VIEWER_EXTENSION_BENCHMARK=1 vitest run src/lib/viewer-extension/benchmark.integration.test.ts --reporter=verbose",
     "check:boundary": "node scripts/check-core-imports.mjs",
     "check:types": "tsc -p tsconfig.types.json --noEmit",
     "dev": "vite",

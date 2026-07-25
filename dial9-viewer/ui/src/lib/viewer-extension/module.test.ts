@@ -124,6 +124,7 @@ describe("extension WebAssembly module", () => {
       tables: [],
       panels: [],
     });
+    expect(guest.linearMemoryByteLength).toBe(65_536);
     expect(guest.push(new Uint8Array([1, 2, 3]))).toEqual([]);
     expect(guest.finish()).toEqual([]);
     expect(() => guest.finish()).toThrow("finish may only be called once");

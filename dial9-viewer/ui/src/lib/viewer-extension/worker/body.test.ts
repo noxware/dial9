@@ -51,6 +51,7 @@ describe("extension worker body", () => {
     const calls: string[] = [];
     const guest: ExtensionGuest = {
       manifest: MANIFEST,
+      linearMemoryByteLength: 65_536,
       push(chunk) {
         calls.push(`push:${[...chunk].join(",")}`);
         return [batch(chunk[0]!)];
@@ -142,6 +143,7 @@ describe("extension worker body", () => {
     const body = createExtensionWorkerBody(output.post, () => loaded);
     const guest: ExtensionGuest = {
       manifest: MANIFEST,
+      linearMemoryByteLength: 65_536,
       push: vi.fn(() => []),
       finish: vi.fn(() => []),
     };
