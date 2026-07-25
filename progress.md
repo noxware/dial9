@@ -27,3 +27,8 @@
 - `manifest!` emits exactly one compacted `dial9.viewer.manifest` custom section
   without JSON dependencies. A compiled smoke module had zero imports, the
   expected ABI exports, and preserved whitespace and escapes inside strings.
+- `docs/design/viewer-extensions.md` is the maintained public contract. It
+  makes the ABI descriptor, manifest/component model, trust boundary,
+  first-preamble activation, Worker lifecycle, rendering semantics, versioning,
+  and acceptance fixtures explicit. Concurrent startup retains only the first
+  preamble prefix long enough to discover Workers and replay it to them.
