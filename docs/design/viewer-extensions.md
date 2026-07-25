@@ -277,9 +277,12 @@ Common optional styling is line width, dash pattern, and opacity in `[0, 1]`.
   an index over valid X rows and rejects the panel if that invariant is broken.
 - `polyline/v1` follows every row in source order without sorting or
   coalescing. Repeated and decreasing X values are intentional.
-- Other line components may coalesce or min/max sample by pixel when doing so
-  preserves their required geometry.
+- Dense ordered interval, line, and step-line inputs retain their first, last,
+  minimum, and maximum rows per horizontal pixel in source order. Null runs
+  remain path gaps. `polyline/v1` is never sampled.
 - Renderers index time columns and draw only rows intersecting the viewport.
+- Hit testing searches the original indexed rows around the pointer, not the
+  sampled drawing representatives, so tooltips still resolve exact data.
 
 Hit testing visits graphical components in reverse drawing order. Each
 renderer defines containment or nearest-distance behavior. A hit carries the

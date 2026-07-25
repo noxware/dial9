@@ -398,6 +398,76 @@ describe("extension panel components", () => {
     expect(panel.error).toContain("use polyline/v1");
   });
 
+  it("bounds dense sorted Canvas paths by horizontal pixels", () => {
+    const rows = 10_000;
+    const manifest = parseExtensionManifestJson(
+      JSON.stringify({
+        version: 1,
+        tables: [
+          {
+            name: "dense",
+            columns: [
+              { name: "x", type: "f64" },
+              { name: "y", type: "f64" },
+            ],
+          },
+        ],
+        panels: [
+          {
+            title: "Dense",
+            x_axis: { type: "linear" },
+            scales: [
+              { name: "y", domain: { mode: "visible", include: [0] } },
+            ],
+            components: [
+              {
+                name: "line/v1",
+                table: "dense",
+                x: "x",
+                y: "y",
+                scale: "y",
+                color: "#4fc3f7",
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const store = new ExtensionStore(manifest);
+    store.append({
+      table_id: 0,
+      rows,
+      columns: [
+        {
+          type: "f64",
+          values: Float64Array.from({ length: rows }, (_, row) => row).buffer,
+        },
+        {
+          type: "f64",
+          values: Float64Array.from(
+            { length: rows },
+            (_, row) => Math.sin(row / 10),
+          ).buffer,
+        },
+      ],
+    });
+    const panel = new ExtensionPanel(
+      "dense",
+      manifest,
+      store,
+      manifest.panels[0]!,
+      0,
+    );
+    const context = new FakeContext();
+    panel.render(
+      context as unknown as CanvasRenderingContext2D,
+      { ...VIEWPORT, width: 140 },
+    );
+
+    // 40 drawable pixels × at most four representatives, plus path metadata.
+    expect(context.strokes.at(-1)!.length).toBeLessThanOrEqual(162);
+  });
+
   it("hit-tests overlaid line and step layers in reverse Z order", () => {
     const labels = utf8(["line", "line", "line"]);
     const stepLabels = utf8(["step", "step", "step"]);

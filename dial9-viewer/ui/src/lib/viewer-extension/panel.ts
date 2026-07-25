@@ -21,6 +21,10 @@ import type {
   SwatchComponent,
   TooltipComponent,
 } from "./manifest.js";
+import {
+  minMaxRowsByPixel,
+  SAMPLE_GAP,
+} from "./sampling.js";
 
 export interface PanelViewport {
   readonly start: number;
@@ -121,6 +125,18 @@ interface Layout {
   readonly chartTop: number;
   readonly chartHeight: number;
   readonly domains: ReadonlyMap<string, readonly [number, number]>;
+}
+
+function* drawingRows(
+  start: number,
+  end: number,
+  sampled: readonly number[] | null,
+): Generator<number> {
+  if (sampled !== null) {
+    yield* sampled;
+    return;
+  }
+  for (let row = start; row < end; row += 1) yield row;
 }
 
 function makeSortedIndex(column: ColumnReader): SortedColumnIndex {
@@ -766,7 +782,17 @@ export class ExtensionPanel {
         layout.xStart,
         layout.xEnd,
       );
-      for (let row = start; row < end; row += 1) {
+      const sampled = minMaxRowsByPixel(
+        start,
+        end,
+        layout.drawWidth,
+        layout.xStart,
+        layout.xEnd,
+        (row) => drawing.start.number(row),
+        (row) => drawing.y.number(row),
+      );
+      for (const row of drawingRows(start, end, sampled)) {
+        if (row === SAMPLE_GAP) continue;
         const xStart = drawing.start.number(row);
         const xEnd = drawing.end.number(row);
         const value = drawing.y.number(row);
@@ -823,6 +849,18 @@ export class ExtensionPanel {
       layout.xStart,
       layout.xEnd,
     );
+    const sampled =
+      drawing.spec.name === "polyline/v1"
+        ? null
+        : minMaxRowsByPixel(
+            start,
+            end,
+            layout.drawWidth,
+            layout.xStart,
+            layout.xEnd,
+            (row) => drawing.x.number(row),
+            (row) => drawing.y.number(row),
+          );
     this.#stroke(context, drawing.spec);
     context.globalAlpha = drawing.spec.opacity ?? 1;
     context.lineJoin = "round";
@@ -839,9 +877,9 @@ export class ExtensionPanel {
     let prior:
       | { readonly row: number; readonly x: number; readonly y: number }
       | undefined;
-    for (let row = start; row < end; row += 1) {
-      const xValue = drawing.x.number(row);
-      const yValue = drawing.y.number(row);
+    for (const row of drawingRows(start, end, sampled)) {
+      const xValue = row === SAMPLE_GAP ? null : drawing.x.number(row);
+      const yValue = row === SAMPLE_GAP ? null : drawing.y.number(row);
       if (xValue === null || yValue === null) {
         if (constantColor !== undefined && pathOpen) {
           context.stroke();
@@ -927,11 +965,20 @@ export class ExtensionPanel {
       return undefined;
     }
 
-    const [start, end] = this.#visibleRows(
-      drawing,
-      layout.xStart,
-      layout.xEnd,
-    );
+    const xValue =
+      layout.xStart +
+      ((x - layout.viewport.labelWidth) / layout.drawWidth) *
+        (layout.xEnd - layout.xStart);
+    const tolerance =
+      (Math.abs(layout.xEnd - layout.xStart) * 6) / layout.drawWidth;
+    const [start, end] =
+      drawing.spec.name === "polyline/v1"
+        ? this.#visibleRows(drawing, layout.xStart, layout.xEnd)
+        : this.#visibleRows(
+            drawing,
+            xValue - tolerance,
+            xValue + tolerance,
+          );
     let prior: { readonly x: number; readonly y: number } | undefined;
     let best: { readonly row: number; readonly distance: number } | undefined;
     for (let row = start; row < end; row += 1) {

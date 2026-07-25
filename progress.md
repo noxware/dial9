@@ -77,3 +77,8 @@
 - A queue-depth contract fixture composes an interval area plus three step
   series on two scales, three independent swatches, cursor-sampled values, and
   a viewport reducer. It requires no queue-specific component behavior.
+- Dense ordered interval/line renderers now bound Canvas geometry with
+  source-ordered first/min/max/last representatives per horizontal pixel while
+  retaining null gaps. Hit testing narrows the original X index around the
+  pointer, so sampling does not change tooltip rows; arbitrary-order
+  `polyline/v1` remains lossless.
