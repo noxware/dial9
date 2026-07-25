@@ -8,6 +8,7 @@ const TAG_STRING_POOL = 0x03;
 const TAG_STACK_POOL = 0x04;
 const TAG_TIMESTAMP_RESET = 0x05;
 const TAG_SCHEMA_ANNOTATIONS = 0x06;
+const TAG_EMBEDDED_FILE = 0x07;
 
 const FieldType = {
   I64: 1, F64: 2, Bool: 3, String: 4,
@@ -130,6 +131,7 @@ class TraceDecoder {
     this.stackPool = new Map();
     this.version = 0;
     this._timestampBaseNs = 0n;
+    this._embeddedFilePreambleOpen = true;
     // Streaming mode. When false (default, whole-buffer decode), a frame that
     // runs off the end of the buffer is a truncated tail: `nextFrame()` stops
     // gracefully at EOF. When true, the same condition means "the buffer holds
@@ -174,13 +176,18 @@ class TraceDecoder {
    * rollback would double-apply the delta. See `_decodeEvent`.
    */
   snapshot() {
-    return { pos: this._pos, timestampBaseNs: this._timestampBaseNs };
+    return {
+      pos: this._pos,
+      timestampBaseNs: this._timestampBaseNs,
+      embeddedFilePreambleOpen: this._embeddedFilePreambleOpen,
+    };
   }
 
   /** Restore a snapshot produced by `snapshot()`. */
   restore(snap) {
     this._pos = snap.pos;
     this._timestampBaseNs = snap.timestampBaseNs;
+    this._embeddedFilePreambleOpen = snap.embeddedFilePreambleOpen;
   }
 
   /**
@@ -200,6 +207,7 @@ class TraceDecoder {
     }
     this.version = this._view.getUint8(this._pos + 4);
     this._pos += 5;
+    this._embeddedFilePreambleOpen = true;
     return true;
   }
 
@@ -228,9 +236,17 @@ class TraceDecoder {
           this.stringPool = new Map();
           this.stackPool = new Map();
           this._timestampBaseNs = 0n;
+          this._embeddedFilePreambleOpen = true;
           this._pos += 5; // skip header
           return this.nextFrame();
         }
+      }
+      if (tag === TAG_EMBEDDED_FILE) {
+        if (!this._embeddedFilePreambleOpen) {
+          throw new Error("Embedded file appears outside the trace preamble");
+        }
+      } else {
+        this._embeddedFilePreambleOpen = false;
       }
       this._pos++;
       switch (tag) {
@@ -239,6 +255,7 @@ class TraceDecoder {
         case TAG_STRING_POOL: return this._decodeStringPool();
         case TAG_STACK_POOL: return this._decodeStackPool();
         case TAG_SCHEMA_ANNOTATIONS: return this._decodeSchemaAnnotations();
+        case TAG_EMBEDDED_FILE: return this._decodeEmbeddedFile();
         case TAG_TIMESTAMP_RESET: {
           const lo = this._view.getUint32(this._pos, true);
           const hi = this._view.getUint32(this._pos + 4, true);
@@ -361,6 +378,26 @@ class TraceDecoder {
       schema.units = units;
     }
     return { type: 'schema_annotations', typeId, annotations };
+  }
+
+  _decodeEmbeddedFile() {
+    const nameLen = this._view.getUint16(this._pos, true); this._pos += 2;
+    const dataLen = this._view.getUint32(this._pos, true); this._pos += 4;
+    const nameBytes = new Uint8Array(
+      this._view.buffer,
+      this._view.byteOffset + this._pos,
+      nameLen,
+    );
+    const name = new TextDecoder("utf-8", { fatal: true }).decode(nameBytes);
+    this._pos += nameLen;
+    if (name.length === 0) throw new Error("Embedded file name cannot be empty");
+    const data = new Uint8Array(
+      this._view.buffer,
+      this._view.byteOffset + this._pos,
+      dataLen,
+    );
+    this._pos += dataLen;
+    return { type: 'embedded_file', name, data };
   }
 
   /** Current byte offset into the buffer. */

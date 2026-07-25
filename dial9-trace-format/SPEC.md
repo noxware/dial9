@@ -39,6 +39,7 @@ Every frame begins with a 1-byte tag:
 | `0x04` | Stack Pool         |
 | `0x05` | Timestamp Reset    |
 | `0x06` | Schema Annotations |
+| `0x07` | Embedded File      |
 
 Unknown tags **must** cause the decoder to stop (the stream cannot be advanced without knowing the frame size).
 
@@ -176,6 +177,23 @@ Multiple annotation frames for the same `type_id` are permitted; the decoder acc
 A decoder that encounters an annotation frame referencing an unknown `type_id` may skip it leniently (the annotations have nowhere to attach).
 
 Annotation keys and values are free-form at the wire level. By convention, the `unit` key carries a field's unit; the values the viewer recognizes for human-friendly rendering are `ns`, `us`, `ms`, `s`, and `bytes` (the same set the `#[traceevent(unit = "...")]` derive attribute accepts at compile time). Unrecognized values render as the raw number.
+
+### Embedded File Frame (`0x07`)
+
+Stores an opaque named file. D9TF assigns no meaning or identity semantics to
+the name or contents.
+
+| Field    | Type            | Description                  |
+| -------- | --------------- | ---------------------------- |
+| tag      | u8              | `0x07`                       |
+| name_len | u16             | Length of the name in bytes  |
+| data_len | u32             | Length of the contents       |
+| name     | [u8; name_len]  | Non-empty UTF-8 file label   |
+| data     | [u8; data_len]  | Opaque file contents         |
+
+Embedded file frames form a contiguous preamble immediately after a trace
+header and before any other frame. Multiple files are allowed and their order
+is preserved. Every header in a concatenated stream begins a new preamble.
 
 ## Field Types
 

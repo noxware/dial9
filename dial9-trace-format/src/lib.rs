@@ -25,6 +25,7 @@ pub(crate) mod leb128;
 pub mod schema;
 pub mod types;
 
+pub use codec::{EmbeddedFile, EmbeddedFileError, EmbeddedFileRef};
 #[cfg(feature = "serde-deserialize")]
 pub use de::DeserError;
 pub use dial9_trace_format_derive::TraceEvent;

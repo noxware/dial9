@@ -7,8 +7,8 @@
 //! allocation-free processing.
 
 use crate::codec::{
-    self, Frame, FrameRef, HEADER_SIZE, PoolEntry, PoolEntryRef, SchemaInfo, StackPoolEntry,
-    StackPoolEntryRef, WireTypeId,
+    self, EmbeddedFile, EmbeddedFileRef, Frame, FrameRef, HEADER_SIZE, PoolEntry, PoolEntryRef,
+    SchemaInfo, StackPoolEntry, StackPoolEntryRef, WireTypeId,
 };
 use crate::schema::{SchemaEntry, SchemaRegistry};
 use crate::types::{FieldType, FieldValueRef, InternedStackFrames, InternedString, StackFrames};
@@ -176,6 +176,7 @@ pub enum DecodedFrame {
         type_id: WireTypeId,
         annotations: Vec<crate::schema::FieldAnnotation>,
     },
+    EmbeddedFile(EmbeddedFile),
 }
 
 /// Zero-copy decoded frame that borrows from the input buffer.
@@ -193,6 +194,7 @@ pub enum DecodedFrameRef<'a> {
         type_id: WireTypeId,
         annotations: Vec<crate::schema::FieldAnnotation>,
     },
+    EmbeddedFile(EmbeddedFileRef<'a>),
 }
 
 struct SchemaCache {
@@ -214,6 +216,7 @@ pub struct Decoder<'a> {
     stack_pool: StackPool,
     version: u8,
     timestamp_base_ns: u64,
+    embedded_file_preamble_open: bool,
 }
 
 impl<'a> Decoder<'a> {
@@ -228,6 +231,7 @@ impl<'a> Decoder<'a> {
             stack_pool: StackPool::new(),
             version,
             timestamp_base_ns: 0,
+            embedded_file_preamble_open: true,
         })
     }
 
@@ -270,6 +274,7 @@ impl<'a> Decoder<'a> {
         self.string_pool = StringPool::new();
         self.stack_pool = StackPool::new();
         self.timestamp_base_ns = 0;
+        self.embedded_file_preamble_open = true;
     }
 
     /// If the current position starts with a valid header, reset state and
@@ -339,8 +344,24 @@ impl<'a> Decoder<'a> {
         let (frame, consumed) =
             match codec::decode_frame(remaining, |type_id| self.schema_info(type_id), base) {
                 Some(r) => r,
+                None if remaining.first() == Some(&codec::TAG_EMBEDDED_FILE) => {
+                    return Err(DecodeError {
+                        pos: self.pos,
+                        message: "truncated or malformed embedded file frame".into(),
+                    });
+                }
                 None => return Ok(None),
             };
+        let is_embedded_file = matches!(&frame, Frame::EmbeddedFile(_));
+        if is_embedded_file && !self.embedded_file_preamble_open {
+            return Err(DecodeError {
+                pos: self.pos,
+                message: "embedded file appears outside the trace preamble".into(),
+            });
+        }
+        if !is_embedded_file {
+            self.embedded_file_preamble_open = false;
+        }
         self.pos += consumed;
         match frame {
             Frame::Schema { type_id, entry } => {
@@ -405,6 +426,7 @@ impl<'a> Decoder<'a> {
                     annotations,
                 }))
             }
+            Frame::EmbeddedFile(file) => Ok(Some(DecodedFrame::EmbeddedFile(file))),
         }
     }
 
@@ -431,8 +453,24 @@ impl<'a> Decoder<'a> {
         let (frame, consumed) =
             match codec::decode_frame_ref(remaining, |type_id| self.schema_info(type_id), base) {
                 Some(r) => r,
+                None if remaining.first() == Some(&codec::TAG_EMBEDDED_FILE) => {
+                    return Err(DecodeError {
+                        pos: self.pos,
+                        message: "truncated or malformed embedded file frame".into(),
+                    });
+                }
                 None => return Ok(None),
             };
+        let is_embedded_file = matches!(&frame, FrameRef::EmbeddedFile(_));
+        if is_embedded_file && !self.embedded_file_preamble_open {
+            return Err(DecodeError {
+                pos: self.pos,
+                message: "embedded file appears outside the trace preamble".into(),
+            });
+        }
+        if !is_embedded_file {
+            self.embedded_file_preamble_open = false;
+        }
         self.pos += consumed;
         match frame {
             FrameRef::Schema { type_id, entry } => {
@@ -497,6 +535,7 @@ impl<'a> Decoder<'a> {
                     annotations,
                 }))
             }
+            FrameRef::EmbeddedFile(file) => Ok(Some(DecodedFrameRef::EmbeddedFile(file))),
         }
     }
 
@@ -546,6 +585,7 @@ impl<'a> Decoder<'a> {
             };
             match tag {
                 codec::TAG_EVENT => {
+                    self.embedded_file_preamble_open = false;
                     let mut pos = 1;
                     let type_id = match remaining.get(pos..pos + 2) {
                         Some(b) => {
@@ -673,6 +713,7 @@ impl<'a> Decoder<'a> {
                     .map_err(TryForEachError::User)?;
                 }
                 codec::TAG_TIMESTAMP_RESET => {
+                    self.embedded_file_preamble_open = false;
                     let ts = match self.data.get(self.pos + 1..self.pos + 9) {
                         Some(b) => u64::from_le_bytes(b.try_into().unwrap()),
                         None => {
@@ -963,5 +1004,93 @@ mod tests {
         // Get just the first event — schema is consumed internally
         let first = dec.events().next().unwrap().unwrap();
         assert!(matches!(first, DecodedFrameRef::Event { .. }));
+    }
+
+    #[test]
+    fn decodes_embedded_files_and_skips_them_in_event_iteration() {
+        let file = crate::EmbeddedFile::borrowed("cpu.wasm", b"\0asm").unwrap();
+        let mut encoder = Encoder::new();
+        encoder.write_embedded_file(&file).unwrap();
+        let schema = encoder
+            .register_schema(
+                "Ev",
+                vec![FieldDef {
+                    name: "v".into(),
+                    field_type: FieldType::Varint,
+                }],
+            )
+            .unwrap();
+        encoder
+            .write_event(
+                &schema,
+                &[FieldValue::Varint(1_000), FieldValue::Varint(42)],
+            )
+            .unwrap();
+        let data = encoder.finish();
+
+        let mut decoder = Decoder::new(&data).unwrap();
+        assert!(matches!(
+            decoder.next_frame_ref().unwrap(),
+            Some(DecodedFrameRef::EmbeddedFile(EmbeddedFileRef {
+                name: "cpu.wasm",
+                data: b"\0asm",
+            }))
+        ));
+
+        let mut decoder = Decoder::new(&data).unwrap();
+        assert_eq!(
+            decoder
+                .events()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn rejects_embedded_file_after_the_preamble() {
+        let mut encoder = Encoder::new();
+        encoder
+            .register_schema(
+                "Ev",
+                vec![FieldDef {
+                    name: "v".into(),
+                    field_type: FieldType::Varint,
+                }],
+            )
+            .unwrap();
+        let mut data = encoder.finish();
+        let file = crate::EmbeddedFile::borrowed("late.wasm", b"\0asm").unwrap();
+        codec::encode_embedded_file(&file, &mut data).unwrap();
+
+        let mut decoder = Decoder::new(&data).unwrap();
+        assert!(matches!(
+            decoder.next_frame_ref().unwrap(),
+            Some(DecodedFrameRef::Schema(_))
+        ));
+        let error = decoder.next_frame_ref().unwrap_err();
+        assert!(error.message.contains("outside the trace preamble"));
+    }
+
+    #[test]
+    fn rejects_malformed_embedded_file() {
+        let mut data = Encoder::new().finish();
+        data.extend_from_slice(&[
+            codec::TAG_EMBEDDED_FILE,
+            1,
+            0, // name_len
+            4,
+            0,
+            0,
+            0, // data_len
+            b'x',
+            1,
+            2, // truncated contents
+        ]);
+
+        let mut decoder = Decoder::new(&data).unwrap();
+        let error = decoder.next_frame_ref().unwrap_err();
+        assert!(error.message.contains("malformed embedded file"));
     }
 }

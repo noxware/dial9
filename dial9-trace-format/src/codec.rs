@@ -7,6 +7,8 @@
 
 use crate::schema::{FieldAnnotation, FieldDef, SchemaEntry};
 use crate::types::{FieldType, FieldValue, FieldValueRef};
+use std::borrow::Cow;
+use std::fmt;
 use std::io::{self, Write};
 
 /// Type ID as it appears on the wire (u16 in schema/event frame headers).
@@ -27,6 +29,7 @@ pub(crate) const TAG_STRING_POOL: u8 = 0x03;
 pub(crate) const TAG_STACK_POOL: u8 = 0x04;
 pub(crate) const TAG_TIMESTAMP_RESET: u8 = 0x05;
 pub(crate) const TAG_SCHEMA_ANNOTATIONS: u8 = 0x06;
+pub(crate) const TAG_EMBEDDED_FILE: u8 = 0x07;
 
 /// Maximum nanosecond delta that fits in a u24 (3 bytes).
 pub(crate) const MAX_TIMESTAMP_DELTA_NS: u64 = 0xFF_FFFF; // 16,777,215
@@ -63,6 +66,81 @@ pub struct StackPoolEntry {
     pub frames: Vec<u64>,
 }
 
+/// An opaque named file stored in a trace preamble.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbeddedFile {
+    name: String,
+    data: Cow<'static, [u8]>,
+}
+
+impl EmbeddedFile {
+    /// Store bytes with static lifetime without copying them.
+    pub fn borrowed(
+        name: impl Into<String>,
+        data: &'static [u8],
+    ) -> Result<Self, EmbeddedFileError> {
+        Self::new(name.into(), Cow::Borrowed(data))
+    }
+
+    /// Store owned bytes.
+    pub fn owned(name: impl Into<String>, data: Vec<u8>) -> Result<Self, EmbeddedFileError> {
+        Self::new(name.into(), Cow::Owned(data))
+    }
+
+    fn new(name: String, data: Cow<'static, [u8]>) -> Result<Self, EmbeddedFileError> {
+        if name.is_empty() {
+            return Err(EmbeddedFileError::new("embedded file name cannot be empty"));
+        }
+        u16::try_from(name.len()).map_err(|_| {
+            EmbeddedFileError::new(format!(
+                "embedded file name is {} bytes; the D9TF limit is {}",
+                name.len(),
+                u16::MAX
+            ))
+        })?;
+        u32::try_from(data.len()).map_err(|_| {
+            EmbeddedFileError::new(format!(
+                "embedded file is {} bytes; the D9TF limit is {}",
+                data.len(),
+                u32::MAX
+            ))
+        })?;
+        Ok(Self { name, data })
+    }
+
+    /// Opaque file label stored in the trace.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// File contents.
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
+}
+
+/// Invalid [`EmbeddedFile`] input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbeddedFileError {
+    message: String,
+}
+
+impl EmbeddedFileError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for EmbeddedFileError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for EmbeddedFileError {}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Frame {
     Schema {
@@ -82,6 +160,7 @@ pub(crate) enum Frame {
         type_id: WireTypeId,
         annotations: Vec<FieldAnnotation>,
     },
+    EmbeddedFile(EmbeddedFile),
 }
 
 /// Zero-copy pool entry borrowing from the input buffer.
@@ -121,6 +200,16 @@ impl<'a> StackPoolEntryRef<'a> {
     }
 }
 
+/// Zero-copy view of an embedded file.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EmbeddedFileRef<'a> {
+    /// Opaque file label.
+    pub name: &'a str,
+    /// File contents borrowed from the decode buffer.
+    pub data: &'a [u8],
+}
+
 /// Zero-copy frame that borrows from the input buffer.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum FrameRef<'a> {
@@ -140,6 +229,7 @@ pub(crate) enum FrameRef<'a> {
         type_id: WireTypeId,
         annotations: Vec<FieldAnnotation>,
     },
+    EmbeddedFile(EmbeddedFileRef<'a>),
 }
 
 /// Schema info needed by the decoder: raw field type tags + has_timestamp flag.
@@ -247,6 +337,27 @@ pub(crate) fn encode_schema_annotations(
     Ok(())
 }
 
+pub(crate) fn encode_embedded_file(file: &EmbeddedFile, w: &mut impl Write) -> io::Result<()> {
+    let name = file.name().as_bytes();
+    let name_len = u16::try_from(name.len()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "embedded file name exceeds u16::MAX bytes",
+        )
+    })?;
+    let data_len = u32::try_from(file.data().len()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "embedded file contents exceed u32::MAX bytes",
+        )
+    })?;
+    w.write_all(&[TAG_EMBEDDED_FILE])?;
+    w.write_all(&name_len.to_le_bytes())?;
+    w.write_all(&data_len.to_le_bytes())?;
+    w.write_all(name)?;
+    w.write_all(file.data())
+}
+
 // --- Decoding ---
 
 pub(crate) fn decode_header(data: &[u8]) -> Option<u8> {
@@ -274,6 +385,7 @@ pub(crate) fn decode_frame<'s>(
             Some((Frame::TimestampReset(ts), 9))
         }
         TAG_SCHEMA_ANNOTATIONS => decode_schema_annotations_frame(data),
+        TAG_EMBEDDED_FILE => decode_embedded_file_frame(data),
         _ => None,
     }
 }
@@ -437,6 +549,15 @@ fn decode_schema_annotations_frame(data: &[u8]) -> Option<(Frame, usize)> {
     ))
 }
 
+fn decode_embedded_file_frame(data: &[u8]) -> Option<(Frame, usize)> {
+    let file = decode_embedded_file_frame_ref(data)?;
+    let (FrameRef::EmbeddedFile(EmbeddedFileRef { name, data }), consumed) = file else {
+        unreachable!()
+    };
+    let file = EmbeddedFile::owned(name.to_owned(), data.to_vec()).ok()?;
+    Some((Frame::EmbeddedFile(file), consumed))
+}
+
 // --- Zero-copy decoding ---
 
 /// Decode a single frame without allocating owned data for field values.
@@ -479,6 +600,7 @@ pub(crate) fn decode_frame_ref<'a, 's>(
                 _ => unreachable!(),
             }
         }
+        TAG_EMBEDDED_FILE => decode_embedded_file_frame_ref(data),
         _ => None,
     }
 }
@@ -565,6 +687,28 @@ fn decode_stack_pool_frame_ref<'a>(data: &'a [u8]) -> Option<(FrameRef<'a>, usiz
     Some((FrameRef::StackPool(entries), pos))
 }
 
+fn decode_embedded_file_frame_ref(data: &[u8]) -> Option<(FrameRef<'_>, usize)> {
+    let mut pos = 1;
+    let name_len = u16::from_le_bytes(data.get(pos..pos + 2)?.try_into().ok()?) as usize;
+    pos += 2;
+    let data_len = u32::from_le_bytes(data.get(pos..pos + 4)?.try_into().ok()?) as usize;
+    pos += 4;
+    let name = std::str::from_utf8(data.get(pos..pos + name_len)?).ok()?;
+    pos += name_len;
+    if name.is_empty() {
+        return None;
+    }
+    let contents = data.get(pos..pos.checked_add(data_len)?)?;
+    pos += data_len;
+    Some((
+        FrameRef::EmbeddedFile(EmbeddedFileRef {
+            name,
+            data: contents,
+        }),
+        pos,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -587,6 +731,38 @@ mod tests {
     #[test]
     fn header_too_short() {
         assert_eq!(decode_header(&[0x54, 0x52]), None);
+    }
+
+    #[test]
+    fn embedded_file_frame_round_trip() {
+        let file = EmbeddedFile::owned("extensión.wasm", vec![0, 1, 2, 255]).unwrap();
+        let mut buf = Vec::new();
+        encode_embedded_file(&file, &mut buf).unwrap();
+
+        let (owned, consumed) = decode_frame(&buf, |_| None, 0).unwrap();
+        assert_eq!(consumed, buf.len());
+        assert_eq!(owned, Frame::EmbeddedFile(file));
+
+        let (borrowed, consumed) = decode_frame_ref(&buf, |_| None, 0).unwrap();
+        assert_eq!(consumed, buf.len());
+        assert!(matches!(
+            borrowed,
+            FrameRef::EmbeddedFile(EmbeddedFileRef {
+                name: "extensión.wasm",
+                data: [0, 1, 2, 255],
+            })
+        ));
+    }
+
+    #[test]
+    fn embedded_file_rejects_invalid_names() {
+        assert_eq!(
+            EmbeddedFile::borrowed("", b"file").unwrap_err().to_string(),
+            "embedded file name cannot be empty"
+        );
+        let error =
+            EmbeddedFile::owned("x".repeat(usize::from(u16::MAX) + 1), Vec::new()).unwrap_err();
+        assert!(error.to_string().contains("65535"));
     }
 
     // --- Schema frame tests ---

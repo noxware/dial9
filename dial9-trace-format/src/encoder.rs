@@ -5,7 +5,7 @@
 //! point for producing trace data.
 
 use crate::TraceEvent;
-use crate::codec::{self, PoolEntry, StackPoolEntry, WireTypeId};
+use crate::codec::{self, EmbeddedFile, PoolEntry, StackPoolEntry, WireTypeId};
 use crate::schema::{SchemaEntry, SchemaRegistry};
 use crate::types::{
     CountingWriter, EncodeState, EventEncoder, InternedStackFrames, InternedString,
@@ -175,6 +175,8 @@ pub struct Encoder<W: Write = Vec<u8>> {
     /// slots) have had their schema frame emitted on this encoder. 256 bits =
     /// 32 bytes inline.
     registered_ids: [u64; (crate::STATIC_WIRE_ID_LIMIT as usize) / 64],
+    /// Embedded files are valid only in the contiguous preamble after a header.
+    embedded_file_preamble_open: bool,
 }
 
 impl Default for Encoder<Vec<u8>> {
@@ -197,6 +199,7 @@ impl Encoder<Vec<u8>> {
             schema_ids: FxHashMap::default(),
             slot_cache: Vec::new(),
             registered_ids: [0; (crate::STATIC_WIRE_ID_LIMIT as usize) / 64],
+            embedded_file_preamble_open: true,
         }
     }
 
@@ -221,6 +224,7 @@ impl<W: Write> Encoder<W> {
             schema_ids: FxHashMap::default(),
             slot_cache: Vec::new(),
             registered_ids: [0; (crate::STATIC_WIRE_ID_LIMIT as usize) / 64],
+            embedded_file_preamble_open: true,
         })
     }
 
@@ -270,6 +274,7 @@ impl<W: Write> Encoder<W> {
             schema_ids,
             slot_cache: Vec::new(),
             registered_ids: [0; (crate::STATIC_WIRE_ID_LIMIT as usize) / 64],
+            embedded_file_preamble_open: false,
         }
     }
 
@@ -300,6 +305,7 @@ impl<W: Write> Encoder<W> {
         self.schema_ids.clear();
         self.slot_cache.fill(0);
         self.registered_ids.fill(0);
+        self.embedded_file_preamble_open = true;
         // creating a new EncodeState resets the timestamp delta
         let old_state = std::mem::replace(&mut self.state, EncodeState::new(new_writer));
         Ok(old_state.writer.into_inner())
@@ -311,6 +317,7 @@ impl<W: Write> Encoder<W> {
     /// Idempotent if the schema matches. Errors if a different schema was
     /// already registered under the same name.
     fn ensure_registered(&mut self, schema: &Schema) -> io::Result<WireTypeId> {
+        self.embedded_file_preamble_open = false;
         let key = SchemaKey::Name(Arc::clone(&schema.name_key));
         if let Some(&wire_id) = self.schema_ids.get(&key) {
             // TODO: unify registry and schema_ids to avoid this error case
@@ -388,6 +395,7 @@ impl<W: Write> Encoder<W> {
     ) -> io::Result<()> {
         use crate::types::FieldValue;
 
+        self.embedded_file_preamble_open = false;
         let type_id = self.ensure_registered(schema)?;
         let expected_fields = schema.entry.fields.len();
 
@@ -428,6 +436,7 @@ impl<W: Write> Encoder<W> {
     /// Write a derived TraceEvent. Auto-registers the schema on first call for this type.
     /// Handles timestamp encoding: emits TimestampReset if needed, packs u24 delta in header.
     pub fn write<T: TraceEvent + 'static>(&mut self, event: &T) -> io::Result<()> {
+        self.embedded_file_preamble_open = false;
         let slot = T::type_slot();
         let tid = if slot != 0 && slot < crate::STATIC_WIRE_ID_LIMIT {
             let word = (slot >> 6) as usize;
@@ -506,6 +515,7 @@ impl<W: Write> Encoder<W> {
         if let Some(&id) = self.string_pool.get(s) {
             return Ok(InternedString(id));
         }
+        self.embedded_file_preamble_open = false;
         let id = self.next_pool_id;
         self.next_pool_id += 1;
         self.string_pool.insert(s.to_string(), id);
@@ -520,6 +530,7 @@ impl<W: Write> Encoder<W> {
     }
 
     pub fn write_string_pool(&mut self, entries: &[PoolEntry]) -> io::Result<()> {
+        self.embedded_file_preamble_open = false;
         codec::encode_string_pool(entries, &mut self.state.writer)
     }
 
@@ -529,6 +540,7 @@ impl<W: Write> Encoder<W> {
         if let Some(&id) = self.stack_pool.get(frames) {
             return Ok(InternedStackFrames(id));
         }
+        self.embedded_file_preamble_open = false;
         let id = self.next_stack_pool_id;
         self.next_stack_pool_id += 1;
         self.stack_pool.insert(frames.into(), id);
@@ -545,7 +557,22 @@ impl<W: Write> Encoder<W> {
     }
 
     pub fn write_stack_pool(&mut self, entries: &[StackPoolEntry]) -> io::Result<()> {
+        self.embedded_file_preamble_open = false;
         codec::encode_stack_pool(entries, &mut self.state.writer)
+    }
+
+    /// Write an opaque file into the trace preamble.
+    ///
+    /// Embedded files must be written immediately after the header and before
+    /// every other frame.
+    pub fn write_embedded_file(&mut self, file: &EmbeddedFile) -> io::Result<()> {
+        if !self.embedded_file_preamble_open {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "embedded files must be written before all other frames",
+            ));
+        }
+        codec::encode_embedded_file(file, &mut self.state.writer)
     }
 
     /// Flush the underlying writer.
@@ -562,6 +589,7 @@ impl<W: Write> Encoder<W> {
     pub fn into_raw_encoder(self) -> RawEncoder<W> {
         RawEncoder {
             writer: self.state.writer,
+            embedded_file_preamble_open: self.embedded_file_preamble_open,
         }
     }
 }
@@ -574,12 +602,27 @@ impl<W: Write> Encoder<W> {
 /// writer while tracking the total byte count.
 pub struct RawEncoder<W> {
     writer: CountingWriter<W>,
+    embedded_file_preamble_open: bool,
 }
 
 impl<W: Write> RawEncoder<W> {
     /// Write pre-encoded bytes to the underlying writer.
     pub fn write_raw(&mut self, bytes: &[u8]) -> io::Result<()> {
+        if !bytes.is_empty() {
+            self.embedded_file_preamble_open = false;
+        }
         self.writer.write_all(bytes)
+    }
+
+    /// Write an opaque file into the trace preamble.
+    pub fn write_embedded_file(&mut self, file: &EmbeddedFile) -> io::Result<()> {
+        if !self.embedded_file_preamble_open {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "embedded files must be written before all other frames",
+            ));
+        }
+        codec::encode_embedded_file(file, &mut self.writer)
     }
 
     /// Total bytes written (including bytes written by the [`Encoder`] before
@@ -1474,5 +1517,30 @@ mod tests {
         assert_eq!(events[0].1, vec![FieldValue::Varint(1)]);
         assert_eq!(events[1].0, Some(2_000));
         assert_eq!(events[1].1, vec![FieldValue::Varint(2)]);
+    }
+
+    #[test]
+    fn embedded_files_are_restricted_to_the_preamble() {
+        let first = EmbeddedFile::borrowed("first.wasm", b"\0asm").unwrap();
+        let late = EmbeddedFile::borrowed("late.wasm", b"\0asm").unwrap();
+        let mut encoder = Encoder::new();
+        encoder.write_embedded_file(&first).unwrap();
+        encoder
+            .register_schema(
+                "Ev",
+                vec![FieldDef {
+                    name: "v".into(),
+                    field_type: FieldType::Varint,
+                }],
+            )
+            .unwrap();
+
+        let error = encoder.write_embedded_file(&late).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+
+        let mut raw = Encoder::new().into_raw_encoder();
+        raw.write_raw(&[codec::TAG_TIMESTAMP_RESET]).unwrap();
+        let error = raw.write_embedded_file(&late).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
 }

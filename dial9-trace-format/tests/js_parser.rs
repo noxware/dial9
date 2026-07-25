@@ -1,5 +1,6 @@
 //! Integration test: encode a trace in Rust, decode it with the JS reader, compare results.
 
+use dial9_trace_format::EmbeddedFile;
 use dial9_trace_format::encoder::Encoder;
 use dial9_trace_format::schema::FieldDef;
 use dial9_trace_format::types::{FieldType, FieldValue};
@@ -129,6 +130,21 @@ fn js_decodes_empty_stream() {
     let json = js_decode(&data);
     assert_eq!(json["version"], 1);
     assert_eq!(json["frames"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn js_decodes_embedded_file() {
+    let mut encoder = Encoder::new();
+    encoder
+        .write_embedded_file(&EmbeddedFile::owned("extensión.wasm", vec![0, 1, 2, 255]).unwrap())
+        .unwrap();
+
+    let json = js_decode(&encoder.finish());
+    let frame = &json["frames"][0];
+    assert_eq!(frame["type"], "embedded_file");
+    assert_eq!(frame["name"], "extensión.wasm");
+    assert_eq!(frame["data"]["0"], 0);
+    assert_eq!(frame["data"]["3"], 255);
 }
 
 #[test]

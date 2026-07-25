@@ -117,17 +117,27 @@ declare module "*/decode.js" {
     annotations: SchemaAnnotation[];
   }
 
+  export interface EmbeddedFileFrame {
+    type: "embedded_file";
+    /** Opaque UTF-8 label from the trace preamble. */
+    name: string;
+    /** Zero-copy view into the decoder's current input buffer. */
+    data: Uint8Array;
+  }
+
   export type DecodedFrame =
     | SchemaFrame
     | EventFrame
     | StringPoolFrame
     | StackPoolFrame
-    | SchemaAnnotationsFrame;
+    | SchemaAnnotationsFrame
+    | EmbeddedFileFrame;
 
   /** Positional decode state snapshot for streaming rollback. */
   export interface DecoderSnapshot {
     pos: number;
     timestampBaseNs: bigint;
+    embeddedFilePreambleOpen: boolean;
   }
 
   /**
