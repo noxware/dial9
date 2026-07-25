@@ -15,3 +15,7 @@
   remains correct across concatenated segments and arbitrary streaming chunk
   boundaries; copying is required before the streaming buffer prefix is
   discarded.
+- `dial9-trace-format::StreamingDecoder` now feeds zero-copy event callbacks
+  from arbitrary chunks while retaining only an incomplete frame suffix. It
+  consumes repeated attachment preambles internally and enforces the same
+  placement rules as the slice decoder.
