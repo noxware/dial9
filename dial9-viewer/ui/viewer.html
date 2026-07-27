@@ -6602,6 +6602,15 @@
                         mouseNs = null;
                         return;
                     }
+                    // Composable panels own their hit testing and tooltip
+                    // contents. Keep the shared crosshair in sync, but do not
+                    // let this lane-hover handler hide their tooltip.
+                    if (e.target.closest && e.target.closest("[data-d9-tooltip-owner]")) {
+                        mouseNs = eventToTimelineNs(e.clientX);
+                        lanesContainer.style.cursor = "";
+                        scheduleCrosshairRedraw();
+                        return;
+                    }
                     // Over the span panel: it owns its own tooltip, but we
                     // still want the crosshair to follow the mouse so users
                     // can correlate spans with the task detail / lanes below.

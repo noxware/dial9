@@ -139,6 +139,7 @@ function createPanelDom(
   const root = document.createElement("div");
   root.className = "d9-composable-panel foldable-panel is-collapsed";
   root.dataset.panelKey = panel.key;
+  root.dataset.d9TooltipOwner = "";
 
   const label = document.createElement("div");
   label.className = "chart-label";
