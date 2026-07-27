@@ -44,6 +44,12 @@ export interface ExtensionRuntime {
 
 export async function prepareExtension(bytes: BufferSource): Promise<PreparedExtension> {
   const module = await WebAssembly.compile(bytes);
+  return prepareCompiledExtension(module);
+}
+
+export async function prepareCompiledExtension(
+  module: WebAssembly.Module,
+): Promise<PreparedExtension> {
   const imports = WebAssembly.Module.imports(module);
   if (imports.length !== 0) {
     throw new Error(`WASM extension imports ${imports.length} host capability/capabilities`);
@@ -67,6 +73,10 @@ export class WasmExtensionRuntime implements ExtensionRuntime {
   constructor(exports: ExtensionExports, manifest: ViewerExtensionManifest) {
     this.#exports = exports;
     this.#manifest = manifest;
+  }
+
+  get memoryBytes(): number {
+    return this.#exports.memory.buffer.byteLength;
   }
 
   push(bytes: Uint8Array): RecordBatch[] {
