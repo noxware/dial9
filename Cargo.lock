@@ -5513,6 +5513,8 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 name = "viewer-extension-demo"
 version = "0.1.0"
 dependencies = [
+ "dial9-perf-self-profile",
+ "dial9-trace-format",
  "dial9-viewer-extension",
 ]
 

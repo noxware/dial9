@@ -330,3 +330,38 @@ and immediately continues its own parser. Worker queues preserve order; there
 is no v1 backpressure. Loading a module after a trace replays the viewer's
 retained decompressed buffer. Replacing or cancelling a logical trace disposes
 its extension instances.
+
+## Performance check
+
+Generate the deterministic 250,000-event fixture and run all equivalent paths:
+
+```sh
+cargo build -p viewer-extension-demo --target wasm32-unknown-unknown \
+  --profile viewer-extension
+cargo run -p viewer-extension-demo --features trace-fixture \
+  --bin make_trace -- /tmp/viewer-extension-bench.bin 250000
+DIAL9_EXTENSION_WASM=../../target/wasm32-unknown-unknown/viewer-extension/viewer_extension_demo.wasm \
+DIAL9_EXTENSION_TRACE=/tmp/viewer-extension-bench.bin \
+  npm --prefix dial9-viewer/ui run bench:viewer-extension
+```
+
+The benchmark checks result equivalence before timing. It excludes Wasm
+compilation and the one-time reference parse, but includes instantiation,
+streaming D9TF decode, computation, guest-to-host validation/copy, simulated
+transferable transport, and chunk-store insertion where named.
+
+One local Node/V8 baseline:
+
+| Path | Mean |
+| --- | ---: |
+| JS `for`, parsed events | 38.1 ms |
+| JS `filter`/`map`, parsed events | 59.9 ms |
+| JS D9TF parse + `for` | 256.9 ms |
+| Wasm, precompiled + validated batches | 65.2 ms |
+| Wasm + transferable transport + host store | 84.9 ms |
+
+That run used a 10.53 MiB trace, produced 492 batches and 21.16 MiB of host
+columns, and ended with 4.31 MiB of guest linear memory. The stripped reference
+module was 91.1 KiB. The benchmark fails if a batch exceeds the extension's
+1,024-row bound or, for a large fixture, guest memory grows to the size of the
+complete trace.
