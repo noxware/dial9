@@ -3,6 +3,7 @@ import {
   cpuPanel,
   type CpuPanelInput,
 } from "../../components/panels/fixtures.js";
+import { dinosaurPanel } from "../../components/panels/dinosaur-fixture.js";
 import {
   mountPanelRuntime,
   type PanelRuntime,
@@ -20,6 +21,8 @@ interface LegacyMountOptions {
 
 interface LegacyPanelData {
   readonly cpu: CpuPanelInput;
+  readonly traceStart: number;
+  readonly traceEnd: number;
 }
 
 interface LegacyPanelSession {
@@ -38,7 +41,10 @@ function mount(options: LegacyMountOptions): LegacyPanelSession {
   return {
     setData(data) {
       const cpu = cpuPanel(data.cpu);
-      runtime.setPanels(cpu === null ? [] : [cpu]);
+      runtime.setPanels([
+        ...(cpu === null ? [] : [cpu]),
+        dinosaurPanel(data.traceStart, data.traceEnd),
+      ]);
       for (const element of runtime.elements) element.style.display = "block";
     },
     clear() {

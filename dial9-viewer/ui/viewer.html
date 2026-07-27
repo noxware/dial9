@@ -1521,6 +1521,8 @@
                         intervals: processCpuUsage.intervals,
                         capacity: processCpuUsage.availableParallelism,
                     },
+                    traceStart: minTs,
+                    traceEnd: maxTs,
                 });
                 syncFoldablePanels();
             }
