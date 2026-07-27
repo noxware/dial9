@@ -1,0 +1,77 @@
+.d9-composable-panel {
+  display: none;
+  height: 92px;
+  background: #111b2e;
+  border-top: 1px solid #333;
+  flex-shrink: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.d9-composable-panel .chart-label {
+  position: absolute;
+  top: 4px;
+  left: 8px;
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  max-width: max(120px, calc(100% - 260px));
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  font-size: 0.75em;
+  color: #888;
+  z-index: 2;
+}
+
+.d9-composable-panel-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: 10px;
+  font-weight: 400;
+}
+
+.d9-composable-panel-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.d9-composable-panel-swatch {
+  width: 12px;
+  display: inline-block;
+  flex-shrink: 0;
+  color: inherit;
+}
+
+.d9-composable-panel-swatch.is-reference {
+  border-top: 1px dashed currentColor;
+}
+
+.d9-composable-panel-swatch.is-line {
+  border-top: 2px solid currentColor;
+}
+
+.d9-composable-panel-swatch.is-area {
+  height: 6px;
+  border: 1px solid currentColor;
+  background: currentColor;
+  opacity: 0.55;
+}
+
+.d9-composable-panel-readout {
+  position: absolute;
+  top: 4px;
+  right: 12px;
+  font-size: 0.75em;
+  color: #aaa;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.d9-composable-panel canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
