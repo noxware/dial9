@@ -1,6 +1,8 @@
 node_modules/
 dist/*
 !dist/.gitkeep
+playwright-report/
+test-results/
 # parity tool reports (generated)
 parity/out/
 # regenerable fixture seed tree (incl. the >200 MB large family) — only the
