@@ -370,3 +370,39 @@ acquire browser capabilities through this ABI.
 See
 [`examples/viewer-extension-demo`](../examples/viewer-extension-demo/src/lib.rs)
 for CPU, context-switch, and arbitrary-order dinosaur panels.
+
+## Performance validation
+
+Generate the fixed 250k-event fixture and a larger trace, then run both
+benchmarks:
+
+```bash
+cargo build --profile viewer-extension --target wasm32-unknown-unknown \
+  -p dial9-viewer-extension-demo --lib
+cargo run --release -p dial9-viewer-extension-demo \
+  --features trace-fixture --bin make_trace -- \
+  /tmp/dial9-extension-250k.bin 250000
+cargo run --release -p dial9-viewer-extension-demo \
+  --features trace-fixture --bin make_trace -- \
+  /tmp/dial9-extension-large.bin 1000000
+
+export DIAL9_EXTENSION_WASM="$PWD/target/wasm32-unknown-unknown/viewer-extension/dial9_viewer_extension_demo.wasm"
+export DIAL9_EXTENSION_TRACE_250K=/tmp/dial9-extension-250k.bin
+export DIAL9_EXTENSION_TRACE_LARGE=/tmp/dial9-extension-large.bin
+
+npm --prefix dial9-viewer/ui run bench -- \
+  src/lib/viewer-extension/viewer-extension.bench.ts
+npm --prefix dial9-viewer/ui run bench:viewer-extension-transport
+```
+
+The Vitest benchmark measures decode, compute, JS/WebAssembly input and output
+copies, validation, and guest/host memory. The Playwright probe uses a real
+DedicatedWorker and reports the production main-thread fanout copy,
+main-to-Worker transfer, and final acknowledgement as one measurement. It keeps
+prepared-buffer transfer plus acknowledgement as a separate control; the two
+measurements are not subtracted. Worker-to-main transfer plus
+`ExtensionStore.append` is measured separately. The probe runs both a streaming
+profile (approximately 16 KiB chunks) and the 256 KiB buffered/replay profile,
+capturing actual output batch sizes and message grouping independently for each
+profile before timing. These are reproducible measurements, not CI performance
+thresholds.
