@@ -60,6 +60,39 @@ Root-served verbatim assets (`demo-trace.bin`, `flamegraph.css`) live in
 in both modes. The Node tests read the demo trace from
 `public/demo-trace.bin`.
 
+## WASM viewer extensions (legacy viewer)
+
+The legacy `viewer.html` accepts core WebAssembly viewer extensions by drag and
+drop. Build the reference extension from the repository root:
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo build \
+  --target wasm32-unknown-unknown \
+  --profile viewer-extension \
+  -p dial9-viewer-extension-demo \
+  --lib
+```
+
+Run `npm run dev`, open `/viewer.html`, and drop
+`target/wasm32-unknown-unknown/viewer-extension/dial9_viewer_extension_demo.wasm`
+either before or after a trace. Dropping it before a trace queues it for that
+load; dropping it after a trace replays the decompressed trace retained by the
+viewer. Multiple modules run in isolated Workers and produce independently
+scoped panels.
+
+The TypeScript host, validation, components, and legacy adapter live under
+`src/lib/viewer-extension/` and `src/legacy-viewer-extensions.ts`. Run their
+focused tests with:
+
+```bash
+npx vitest run src/lib/viewer-extension
+```
+
+The public SDK, manifest, component, transport, and isolation contracts are
+documented in
+[`dial9-viewer-extension/README.md`](../../dial9-viewer-extension/README.md).
+
 Key files:
 
 - `index.html` — landing page / S3 browser. Emits one `trace=/api/object?…`
