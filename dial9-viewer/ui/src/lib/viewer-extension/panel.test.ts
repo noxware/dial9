@@ -1227,7 +1227,7 @@ describe("extension panel components", () => {
     ]);
   });
 
-  it("clamps a time-weighted aggregate after reduction", () => {
+  it("uses a weighted aggregate's interval mapping and clamps after reduction", () => {
     const manifest = parseExtensionManifestJson(
       JSON.stringify({
         version: 1,
@@ -1238,13 +1238,27 @@ describe("extension panel components", () => {
               { name: "start", type: "u64" },
               { name: "end", type: "u64" },
               { name: "raw_percent", type: "f64" },
+              { name: "plot_x", type: "u64" },
+              { name: "plot_y", type: "f64" },
             ],
           },
         ],
         panels: [
           {
             title: "Usage",
+            x_axis: { type: "time" },
+            scales: [
+              { name: "usage", domain: { mode: "fixed", min: 0, max: 200 } },
+            ],
             components: [
+              {
+                name: "line/v1",
+                table: "usage",
+                x: "plot_x",
+                y: "plot_y",
+                scale: "usage",
+                color: "blue",
+              },
               {
                 name: "readout/v1",
                 table: "usage",
@@ -1275,6 +1289,8 @@ describe("extension panel components", () => {
         { type: "u64", values: new BigUint64Array([0n, 10n]).buffer },
         { type: "u64", values: new BigUint64Array([10n, 20n]).buffer },
         { type: "f64", values: new Float64Array([200, 50]).buffer },
+        { type: "u64", values: new BigUint64Array([100n, 110n]).buffer },
+        { type: "f64", values: new Float64Array([1, 2]).buffer },
       ],
     });
     const panel = new ExtensionPanel(

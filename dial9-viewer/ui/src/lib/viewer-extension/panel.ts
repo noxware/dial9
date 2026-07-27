@@ -1779,13 +1779,9 @@ export class ExtensionPanel {
     if (typeof reducer === "object") {
       const starts = table.column(reducer.start);
       const ends = table.column(reducer.end);
-      const [start, end] =
-        drawing === undefined
-          ? [0, table.rowCount]
-          : this.#visibleRows(drawing, layout.xStart, layout.xEnd);
       let weighted = 0;
       let weight = 0;
-      for (let row = start; row < end; row += 1) {
+      for (let row = 0; row < table.rowCount; row += 1) {
         const value = column.number(row);
         const rowStart = starts.number(row);
         const rowEnd = ends.number(row);
