@@ -1772,6 +1772,12 @@
                 // blocking work starts — otherwise the label is set but never
                 // shown, and the spinner appears stuck on the last parse line.
                 await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+                if (
+                    extensionGeneration != null &&
+                    extensionGeneration !== viewerExtensionTraceGeneration
+                ) {
+                    return;
+                }
                 if (!processTrace()) {
                     if (extensionGeneration != null) {
                         abortViewerExtensionTrace(extensionGeneration);
