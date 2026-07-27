@@ -174,7 +174,8 @@ dial9_viewer_extension::manifest!(
             {
               "name": "line/v1",
               "table": "context_switches",
-              "x": "start_ns",
+              "start": "start_ns",
+              "end": "end_ns",
               "y": "involuntary_rate",
               "color": "#ffb74d"
             },
@@ -200,19 +201,20 @@ dial9_viewer_extension::manifest!(
               },
               "items": [
                 { "label": "Voluntary", "column": "voluntary_rate", "unit": "switches/s" },
-                { "label": "Time", "column": "start_ns", "unit": "ns" }
+                { "label": "Time", "column": "start_ns", "unit": "timestamp" }
               ]
             },
             {
               "name": "tooltip/v1",
               "table": "context_switches",
               "match": {
-                "x": "start_ns",
+                "start": "start_ns",
+                "end": "end_ns",
                 "y": "involuntary_rate"
               },
               "items": [
                 { "label": "Involuntary", "column": "involuntary_rate", "unit": "switches/s" },
-                { "label": "Time", "column": "start_ns", "unit": "ns" }
+                { "label": "Time", "column": "start_ns", "unit": "timestamp" }
               ]
             },
             {
@@ -227,7 +229,7 @@ dial9_viewer_extension::manifest!(
         },
         {
           "title": "WASM · Extremely Scientific Dinosaur",
-          "x_axis": { "kind": "linear" },
+          "x_axis": { "kind": "linear", "min": 0, "max": 100 },
           "y_scales": [
             { "name": "dino", "include_zero": true, "min": 0, "max": 10 }
           ],

@@ -158,11 +158,23 @@ function parsePanel(
 function parseAxis(value: unknown, path: string): AxisManifest {
   if (value === undefined) return Object.freeze({ kind: "time" });
   const axis = record(value, path);
-  exactKeys(axis, ["kind"], path);
+  exactKeys(axis, ["kind", "min", "max"], path, ["min", "max"]);
   if (axis.kind !== "time" && axis.kind !== "linear") {
     throw new ManifestError(`${path}.kind must be "time" or "linear"`);
   }
-  return Object.freeze({ kind: axis.kind });
+  if (axis.kind === "time" && (axis.min !== undefined || axis.max !== undefined)) {
+    throw new ManifestError(`${path} bounds are only valid for a linear axis`);
+  }
+  const min = axis.min === undefined ? undefined : finiteNumber(axis.min, `${path}.min`);
+  const max = axis.max === undefined ? undefined : finiteNumber(axis.max, `${path}.max`);
+  if (min !== undefined && max !== undefined && !(max > min)) {
+    throw new ManifestError(`${path}.max must be greater than min`);
+  }
+  return Object.freeze({
+    kind: axis.kind,
+    ...(min === undefined ? {} : { min }),
+    ...(max === undefined ? {} : { max }),
+  });
 }
 
 function parseScales(
@@ -228,7 +240,30 @@ function parseComponent(
         colorSpec(component.color, `${path}.color`, tableFor(component, path, tables));
       }
       break;
-    case "line/v1":
+    case "line/v1": {
+      exactKeys(
+        component,
+        ["name", "table", "x", "start", "end", "y", "scale", "color"],
+        path,
+        ["x", "start", "end", "scale", "color"],
+      );
+      const hasX = component.x !== undefined;
+      const hasInterval = component.start !== undefined || component.end !== undefined;
+      if (hasX === hasInterval) {
+        throw new ManifestError(`${path} must specify either x or start/end`);
+      }
+      validateChannels(
+        component,
+        path,
+        tables,
+        hasX ? ["x", "y"] : ["start", "end", "y"],
+      );
+      validateScale(component.scale, path, scales);
+      if (component.color !== undefined) {
+        colorSpec(component.color, `${path}.color`, tableFor(component, path, tables));
+      }
+      break;
+    }
     case "step-line/v1":
     case "polyline/v1":
       exactKeys(component, ["name", "table", "x", "y", "scale", "color"], path, [

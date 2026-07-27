@@ -36,6 +36,9 @@ test("recreates CPU and keeps the dinosaur fully interactive", async ({
   await expect(cpuPanel.locator(".d9-extension-readout")).toHaveText(
     "avg 0.48 cores · avg 4.4% · max 1.52 cores",
   );
+  await expect(cpuPanel.locator(".d9-extension-legend")).toHaveText(
+    "available parallelism (11 cores)",
+  );
   await expect(page.locator("#cpu-panel-info")).toHaveText(
     "avg 0.48 cores · avg 4.4% · max 1.52",
   );
@@ -50,6 +53,13 @@ test("recreates CPU and keeps the dinosaur fully interactive", async ({
     cpuPanel.locator("canvas"),
   );
   expect(extensionTooltip).toBe(originalTooltip);
+
+  const contextSwitches = extensionPanel(
+    page,
+    "WASM · Context Switch Rate",
+  );
+  const contextTooltip = await hoverContextSwitchTail(page, contextSwitches);
+  expect(contextTooltip).toMatch(/^Involuntary: .* switches\/s\nTime: \+\d/);
 
   const dinosaur = extensionPanel(
     page,
@@ -273,11 +283,29 @@ async function hoverLinearPoint(
 ): Promise<void> {
   await panel.scrollIntoViewIfNeeded();
   const box = await boundingBox(panel.locator("canvas"));
-  const drawLeft = 162;
+  const drawLeft = 100;
   const drawRight = box.width;
-  const clientX = box.x + drawLeft + ((x - 10) / (90 - 10)) * (drawRight - drawLeft);
+  const clientX = box.x + drawLeft + (x / 100) * (drawRight - drawLeft);
   const clientY = box.y + 84 - (y / 10) * (84 - 20);
   await page.mouse.move(clientX, clientY);
+}
+
+async function hoverContextSwitchTail(
+  page: Page,
+  panel: ReturnType<Page["locator"]>,
+): Promise<string> {
+  await panel.scrollIntoViewIfNeeded();
+  const box = await boundingBox(panel.locator("canvas"));
+  const clientX = box.x + 100 + (box.width - 100) * 0.98;
+  for (const y of [82, 78, 74, 70]) {
+    await page.mouse.move(clientX, box.y + y);
+    const tooltip = page.locator("#tooltip");
+    if (await tooltip.isVisible()) {
+      const text = (await tooltip.innerText()).trim();
+      if (text.startsWith("Involuntary:")) return text;
+    }
+  }
+  throw new Error("expected the involuntary line to cover the final interval");
 }
 
 async function boundingBox(locator: ReturnType<Page["locator"]>) {

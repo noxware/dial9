@@ -35,6 +35,8 @@ export type DomainValue = number | ScalarRef;
 
 export interface AxisManifest {
   readonly kind: "time" | "linear";
+  readonly min?: number;
+  readonly max?: number;
 }
 
 export interface ScaleManifest {

@@ -179,7 +179,7 @@ Panels have these fields:
 | Field | Meaning |
 | --- | --- |
 | `title` | Text shown at the left of the panel |
-| `x_axis` | Optional `{ "kind": "time" }` (default) or `{ "kind": "linear" }` |
+| `x_axis` | Optional `{ "kind": "time" }` (default) or a linear axis with optional `min`/`max` |
 | `y_scales` | Optional named scales; defaults to one zero-inclusive scale |
 | `components` | Stackable components in drawing order |
 
@@ -204,7 +204,7 @@ meaning; it cannot issue Canvas commands or set pixel-level appearance.
 | `background/v1` | `color`: literal or UTF-8 scalar reference |
 | `interval-area/v1` | `table`, `start`, `end`, `y` |
 | `interval-line/v1` | `table`, `start`, `end`, `y` |
-| `line/v1` | `table`, `x`, `y` |
+| `line/v1` | `table`, `y`, and either `x` or `start`/`end` |
 | `step-line/v1` | `table`, `x`, `y` |
 | `polyline/v1` | `table`, `x`, `y` |
 | `horizontal-rule/v1` | `value`: number or scalar reference |
@@ -226,18 +226,19 @@ a literal or a numeric ramp:
 ```
 
 `polyline/v1` alone preserves exact row order, including repeated or decreasing
-X coordinates. `line/v1` and `step-line/v1` index rows by X so the viewer can
-draw only the visible range. Interval components index overlap against the
-visible range.
+X coordinates. Point-based `line/v1` and `step-line/v1` index rows by X.
+Interval-based `line/v1` linearly joins values at contiguous interval
+boundaries and covers the final interval through its end. Interval components
+index overlap against the visible range.
 
 Tooltip items contain `label`, `column`, and an optional `unit`. An optional
 `match` maps geometric channels (`x`, `start`, `end`, `y`) to columns, allowing
 overlaid graphs from one table to have independent tooltips. Graph hit testing
 runs in reverse drawing order.
 
-A swatch's `shape` is `line`, `area`, or `reference`. It may show a formatted
-scalar `value`. Multiple swatches compose beside the title; reference labels
-stay outside the canvas so guides cannot overlap text.
+A swatch's `shape` is `line`, `area`, or `reference`. A scalar `value` is
+formatted as `label (value)`. Multiple swatches compose beside the title;
+reference labels stay outside the canvas so guides cannot overlap text.
 
 Like tooltips, a readout may use `match` to select one channel mapping when a
 table drives multiple overlaid graphs. Readout items use either:
@@ -257,9 +258,11 @@ table drives multiple overlaid graphs. Readout items use either:
 Readout values compose at the right with `·`. Reducers are cached for the
 current viewport rather than recomputed for every pointer event.
 
-Known units such as `ns` and `%` use viewer formatters. Unknown units are plain
-suffixes. Omitting `unit` applies ordinary number formatting without adding a
-suffix. Titles, labels, values, and errors are inserted as text, never HTML.
+Known units such as `ns` and `%` use viewer formatters. Tooltip unit `timestamp`
+uses the viewer's current relative or wall-clock time mode. Unknown units are
+plain suffixes. Omitting `unit` applies ordinary number formatting without
+adding a suffix. Titles, labels, values, and errors are inserted as text, never
+HTML.
 
 An unknown component name or version leaves its panel shell visible with an
 error naming the missing component. Other panels and extensions continue.

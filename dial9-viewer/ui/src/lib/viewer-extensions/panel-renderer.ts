@@ -37,6 +37,7 @@ export interface PanelViewport {
   readonly end: number;
   readonly labelWidth: number;
   readonly scrollbarWidth: number;
+  readonly formatTimestamp?: (timestamp: number) => string;
 }
 
 interface ScaleDomain {
@@ -79,6 +80,18 @@ interface IndexedInterval {
   readonly row: number;
   readonly start: number;
   readonly end: number;
+}
+
+interface IntervalLineDatum extends IndexedInterval {
+  readonly y: number;
+}
+
+interface IntervalLineSegment {
+  readonly row: number;
+  readonly start: number;
+  readonly end: number;
+  readonly startY: number;
+  readonly endY: number;
 }
 
 interface VisibleRows {
@@ -291,6 +304,18 @@ export class SemanticPanelRenderer {
           this.#drawIntervals(context, projector, component, componentIndex, xDomain);
           break;
         case "line/v1":
+          if (hasIntervalChannels(component)) {
+            this.#drawIntervalLinearLine(
+              context,
+              projector,
+              component,
+              componentIndex,
+              xDomain,
+            );
+          } else {
+            this.#drawSortedLine(context, projector, component, componentIndex, xDomain);
+          }
+          break;
         case "step-line/v1":
           this.#drawSortedLine(context, projector, component, componentIndex, xDomain);
           break;
@@ -337,7 +362,7 @@ export class SemanticPanelRenderer {
       if (!GRAPH_COMPONENTS.has(component.name)) continue;
       const record = componentRecord(component);
       const tableName = stringProperty(record, "table");
-      if (component.name.startsWith("interval-")) {
+      if (hasIntervalChannels(component)) {
         const index = this.#intervalIndex(
           tableName,
           stringProperty(record, "start"),
@@ -353,9 +378,11 @@ export class SemanticPanelRenderer {
         max = Math.max(max, index.last);
       }
     }
-    return Number.isFinite(min) && Number.isFinite(max)
-      ? nonemptyDomain(min, max)
-      : [0, 1];
+    if (!Number.isFinite(min)) min = 0;
+    if (!Number.isFinite(max)) max = 1;
+    if (this.#panel.x_axis.min !== undefined) min = this.#panel.x_axis.min;
+    if (this.#panel.x_axis.max !== undefined) max = this.#panel.x_axis.max;
+    return nonemptyDomain(min, max);
   }
 
   #visibleRows(xDomain: readonly [number, number]): ReadonlyMap<number, VisibleRows> {
@@ -366,7 +393,7 @@ export class SemanticPanelRenderer {
       const tableName = stringProperty(record, "table");
       const table = this.#extension.tables.table(tableName);
       let visible: readonly number[];
-      if (component.name.startsWith("interval-")) {
+      if (hasIntervalChannels(component)) {
         visible = this.#intervalIndex(
           tableName,
           stringProperty(record, "start"),
@@ -536,6 +563,63 @@ export class SemanticPanelRenderer {
         this.#hits.push(lineHit(tableName, interval.row, channels, x1, y, x2, y));
         previousLine = { end: interval.end, y };
       }
+    }
+  }
+
+  #drawIntervalLinearLine(
+    context: CanvasRenderingContext2D,
+    projector: Projector,
+    component: ComponentManifest,
+    componentIndex: number,
+    xDomain: readonly [number, number],
+  ): void {
+    const record = componentRecord(component);
+    const tableName = stringProperty(record, "table");
+    const startColumn = stringProperty(record, "start");
+    const endColumn = stringProperty(record, "end");
+    const yColumn = stringProperty(record, "y");
+    const scale = optionalString(record.scale) ?? "default";
+    const table = this.#extension.tables.table(tableName);
+    let intervals = this.#intervalIndex(tableName, startColumn, endColumn)
+      .entriesInRange(xDomain[0], xDomain[1])
+      .flatMap((entry): IntervalLineDatum[] => {
+        const y = numeric(table.value(entry.row, yColumn));
+        return y === null ? [] : [{ ...entry, y }];
+      });
+    const drawWidth = projector.drawRight - projector.drawLeft;
+    if (intervals.length > drawWidth * 4) {
+      intervals = coalesceIntervals(intervals, table, yColumn, projector)
+        .map((entry) => ({
+          ...entry,
+          y: numeric(table.value(entry.row, yColumn))!,
+        }));
+    }
+    const channels = Object.freeze({
+      start: startColumn,
+      end: endColumn,
+      y: yColumn,
+    });
+
+    for (const segment of intervalLinearSegments(intervals)) {
+      const x1 = projector.xClamped(segment.start);
+      const x2 = projector.xClamped(segment.end);
+      if (!(x2 > x1)) continue;
+      const y1 = projector.yClamped(scale, segment.startY);
+      const y2 = projector.yClamped(scale, segment.endY);
+      context.strokeStyle = this.#componentColor(
+        record.color as ColorSpec | undefined,
+        table,
+        segment.row,
+        componentIndex,
+      );
+      context.lineWidth = 1.5;
+      context.beginPath();
+      context.moveTo(x1, y1);
+      context.lineTo(x2, y2);
+      context.stroke();
+      this.#hits.push(
+        lineHit(tableName, segment.row, channels, x1, y1, x2, y2),
+      );
     }
   }
 
@@ -728,6 +812,13 @@ export class SemanticPanelRenderer {
     for (const component of this.#panel.components) {
       if (component.name !== "swatch/v1") continue;
       const record = componentRecord(component);
+      let text = stringProperty(record, "label");
+      if (isScalarRef(record.value)) {
+        const ref = record.value as ScalarValueRef;
+        const value = this.#scalar(ref);
+        if (value === null) continue;
+        text += ` (${formatValue(value, ref.unit)})`;
+      }
       const item = document.createElement("span");
       item.className = "d9-extension-legend-item";
       const swatch = document.createElement("span");
@@ -735,13 +826,6 @@ export class SemanticPanelRenderer {
         `d9-extension-legend-swatch is-${stringProperty(record, "shape")}`;
       swatch.style.color = stringProperty(record, "color");
       item.append(swatch);
-
-      let text = stringProperty(record, "label");
-      if (isScalarRef(record.value)) {
-        const ref = record.value as ScalarValueRef;
-        const value = this.#scalar(ref);
-        if (value !== null) text += ` ${formatValue(value, ref.unit)}`;
-      }
       item.append(document.createTextNode(text));
       this.#legend.append(item);
     }
@@ -915,7 +999,7 @@ export class SemanticPanelRenderer {
       if (!GRAPH_COMPONENTS.has(component.name)) continue;
       const record = componentRecord(component);
       if (record.table !== tableName) continue;
-      const channels = component.name.startsWith("interval-")
+      const channels = hasIntervalChannels(component)
         ? {
             start: stringProperty(record, "start"),
             end: stringProperty(record, "end"),
@@ -935,7 +1019,7 @@ export class SemanticPanelRenderer {
       if (!GRAPH_COMPONENTS.has(component.name)) continue;
       const record = componentRecord(component);
       if (record.table !== tableName) continue;
-      if (component.name.startsWith("interval-")) {
+      if (hasIntervalChannels(component)) {
         return {
           start: stringProperty(record, "start"),
           end: stringProperty(record, "end"),
@@ -1084,7 +1168,11 @@ export class SemanticPanelRenderer {
       label.textContent = `${item.label}:`;
       const formatted = document.createElement("span");
       formatted.className = "value";
-      formatted.textContent = formatValue(value, item.unit);
+      formatted.textContent = formatTooltipValue(
+        value,
+        item.unit,
+        this.#viewport?.formatTimestamp,
+      );
       fragment.append(label, document.createTextNode(" "), formatted);
       rendered++;
     }
@@ -1291,6 +1379,34 @@ function channelsMatch(
   );
 }
 
+function hasIntervalChannels(component: ComponentManifest): boolean {
+  const record = componentRecord(component);
+  return (
+    component.name.startsWith("interval-") ||
+    (component.name === "line/v1" &&
+      typeof record.start === "string" &&
+      typeof record.end === "string")
+  );
+}
+
+function intervalLinearSegments(
+  intervals: readonly IntervalLineDatum[],
+): IntervalLineSegment[] {
+  return intervals.flatMap((interval, index): IntervalLineSegment[] => {
+    if (!(interval.end > interval.start)) return [];
+    const next = intervals[index + 1];
+    const endY =
+      next !== undefined && interval.end === next.start ? next.y : interval.y;
+    return [{
+      row: interval.row,
+      start: interval.start,
+      end: interval.end,
+      startY: interval.y,
+      endY,
+    }];
+  });
+}
+
 function downsampleLine(
   points: readonly LinePoint[],
   projector: Projector,
@@ -1423,6 +1539,17 @@ export function formatValue(value: CellValue, unit?: string): string {
   if (unit === "%") return `${trimFixed(number, 1)}%`;
   const formatted = formatNumber(number);
   return unit === undefined ? formatted : `${formatted} ${unit}`;
+}
+
+export function formatTooltipValue(
+  value: CellValue,
+  unit: string | undefined,
+  formatTimestamp?: (timestamp: number) => string,
+): string {
+  if (unit !== "timestamp") return formatValue(value, unit);
+  const timestamp = numeric(value);
+  if (timestamp === null) return "";
+  return formatTimestamp?.(timestamp) ?? formatDuration(timestamp);
 }
 
 function formatDuration(nanoseconds: number): string {

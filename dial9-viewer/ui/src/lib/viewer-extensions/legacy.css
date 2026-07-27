@@ -40,16 +40,16 @@
 .d9-extension-legend {
   display: inline-flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
-  margin-left: 12px;
+  margin-left: 10px;
   overflow: hidden;
 }
 
 .d9-extension-legend-item {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   min-width: 0;
   color: #aaa;
   font-weight: 400;
@@ -57,20 +57,24 @@
 
 .d9-extension-legend-swatch {
   display: inline-block;
-  width: 16px;
+  width: 12px;
   height: 0;
   flex: 0 0 auto;
+}
+
+.d9-extension-legend-swatch.is-line {
   border-top: 2px solid currentcolor;
 }
 
 .d9-extension-legend-swatch.is-area {
-  height: 8px;
+  height: 6px;
   border: 1px solid currentcolor;
-  background: color-mix(in srgb, currentcolor 38%, transparent);
+  background: currentcolor;
+  opacity: 0.55;
 }
 
 .d9-extension-legend-swatch.is-reference {
-  border-top-style: dashed;
+  border-top: 1px dashed currentcolor;
 }
 
 .d9-extension-readout {

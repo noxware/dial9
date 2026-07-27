@@ -77,6 +77,46 @@ describe("viewer extension manifest", () => {
     );
   });
 
+  it("supports bounded linear axes and interval-backed straight lines", () => {
+    const raw = cpuManifest();
+    const panel = (raw.panels as Array<Record<string, unknown>>)[0]!;
+    panel.x_axis = { kind: "linear", min: 0, max: 100 };
+    panel.components = [{
+      name: "line/v1",
+      table: "cpu",
+      start: "start",
+      end: "end",
+      y: "cores",
+    }];
+    const parsed = parseManifest(JSON.stringify(raw));
+    expect(parsed.panels[0]!.x_axis).toEqual({
+      kind: "linear",
+      min: 0,
+      max: 100,
+    });
+    expect(parsed.panels[0]!.components[0]).toMatchObject({
+      name: "line/v1",
+      start: "start",
+      end: "end",
+    });
+  });
+
+  it("rejects ambiguous point-and-interval line channels", () => {
+    const raw = cpuManifest();
+    const panel = (raw.panels as Array<Record<string, unknown>>)[0]!;
+    panel.components = [{
+      name: "line/v1",
+      table: "cpu",
+      x: "start",
+      start: "start",
+      end: "end",
+      y: "cores",
+    }];
+    expect(() => parseManifest(JSON.stringify(raw))).toThrowError(
+      /either x or start\/end/,
+    );
+  });
+
   it("retains an unknown component version for an in-panel compatibility error", () => {
     const raw = cpuManifest();
     const panel = (raw.panels as Array<Record<string, unknown>>)[0]!;
