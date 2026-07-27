@@ -89,7 +89,9 @@ describe("viewer extension manifest", () => {
 
   it("extracts exactly one UTF-8 custom section", () => {
     const json = JSON.stringify(cpuManifest());
-    const module = new WebAssembly.Module(wasmWithCustomSection("dial9.viewer.manifest", json));
+    const module = new WebAssembly.Module(
+      wasmWithCustomSection("dial9.viewer.manifest", json) as Uint8Array<ArrayBuffer>,
+    );
     expect(manifestFromModule(module).panels[0]!.title).toBe("CPU");
   });
 

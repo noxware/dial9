@@ -5,6 +5,7 @@
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>dial9 Trace Viewer</title>
         <script src="ui-switch.js"></script>
+        <script type="module" src="/src/lib/viewer-extensions/legacy.ts"></script>
         <link rel="stylesheet" href="flamegraph.css" />
         <style>
             /* Stacking layers (low -> high). Only the tiers that must agree on
@@ -823,8 +824,8 @@
     <body>
         <div id="drag-overlay">
             <div class="drag-overlay-msg">
-                Drop trace file to load
-                <small>Replaces the current trace</small>
+                Drop a trace or WASM viewer extension
+                <small>A trace replaces the current trace; an extension augments it</small>
             </div>
         </div>
         <div id="drop-zone">
@@ -840,7 +841,7 @@
                     <a href="#" id="load-demo" style="color: #6c63ff; font-size: 0.9em">or load demo trace</a>
                 </div>
             </div>
-            <input type="file" id="file-input" accept=".bin,.gz" />
+            <input type="file" id="file-input" accept=".bin,.gz,.wasm" />
         </div>
 
         <div id="viewer">
@@ -1536,20 +1537,30 @@
                     hideDragFeedback();
                 }
             });
-            document.addEventListener("drop", (e) => {
+            document.addEventListener("drop", async (e) => {
                 if (!isFileDrag(e)) return;
                 e.preventDefault();
                 dragCounter = 0;
                 hideDragFeedback();
-                const file = e.dataTransfer.files[0];
-                if (file) loadFile(file);
+                const files = [...e.dataTransfer.files];
+                for (const file of files.filter(isWasmFile)) {
+                    await loadViewerExtension(file);
+                }
+                const traceFile = files.find((file) => !isWasmFile(file));
+                if (traceFile) loadFile(traceFile);
             });
 
-            fileInput.addEventListener("change", (e) => {
-                if (e.target.files[0]) loadFile(e.target.files[0]);
+            fileInput.addEventListener("change", async (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    if (isWasmFile(file)) await loadViewerExtension(file);
+                    else loadFile(file);
+                }
+                e.target.value = "";
             });
             document.getElementById("btn-reset").addEventListener("click", () => {
                 resetTraceState({ clearUrlRange: true });
+                window.Dial9ViewerExtensions?.reset();
                 currentTraceBuffer = null;
                 currentTraceName = null;
                 viewer.style.display = "none";
@@ -1560,6 +1571,26 @@
             // re-parse in memory with a different time filter.
             let currentTraceBuffer = null;
             let currentTraceName = null;
+
+            function isWasmFile(file) {
+                return file.name.toLowerCase().endsWith(".wasm");
+            }
+
+            async function loadViewerExtension(file) {
+                if (!window.Dial9ViewerExtensions) {
+                    alert("The viewer extension runtime has not loaded yet");
+                    return;
+                }
+                try {
+                    await window.Dial9ViewerExtensions.loadFile(file);
+                } catch (err) {
+                    alert("Error loading viewer extension: " + err.message);
+                }
+            }
+
+            window.addEventListener("dial9-viewer-extensions-change", () => {
+                if (trace) renderAll();
+            });
 
             /** Clear UI state tied to the current trace so it doesn't leak into the next one. */
             function resetTraceState({ clearUrlRange } = {}) {
@@ -1679,13 +1710,25 @@
 
             /** Parse an already-fetched buffer and show the viewer. */
             async function parseAndShowTrace(buffer, name, opts = {}) {
+                let processingExtensions = false;
                 try {
-                    const fullOpts = { ...opts, onParseProgress: makeParseProgress() };
                     updateLoadProgress("Decompressing…");
-                    const parsed = await parseTrace(buffer, fullOpts);
+                    const prepared = await TraceParser.prepareTraceBuffer(buffer);
+                    const reuseExtensions = opts.reuseViewerExtensions === true;
+                    const { reuseViewerExtensions: _reuse, ...parseOptions } = opts;
+                    if (!reuseExtensions) {
+                        processingExtensions = true;
+                        window.Dial9ViewerExtensions?.processTraceBuffer(
+                            prepared,
+                            currentTraceBuffer != null,
+                        );
+                    }
+                    const fullOpts = { ...parseOptions, onParseProgress: makeParseProgress() };
+                    const parsed = await parseTrace(prepared, fullOpts);
                     if (loadPerf) loadPerf.parseDoneMs = performance.now();
-                    await showParsedTrace(parsed, buffer, name);
+                    await showParsedTrace(parsed, prepared, name);
                 } catch (err) {
+                    if (processingExtensions) window.Dial9ViewerExtensions?.cancelTrace();
                     if (err.name === "AbortError") return;
                     alert("Error: " + err.message);
                     resetDropZone();
@@ -1705,6 +1748,7 @@
             async function streamAndShowTrace(urls, name, opts = {}) {
                 const list = Array.isArray(urls) ? urls : [urls];
                 try {
+                    window.Dial9ViewerExtensions?.beginTrace(currentTraceBuffer != null);
                     const credHeaders = window.Dial9Creds ? Dial9Creds.headers() : {};
                     const stream = list.length === 1
                         ? await TraceParser.fetchTraceStream(list[0], {
@@ -1720,6 +1764,7 @@
                         async *[Symbol.asyncIterator]() {
                             for await (const chunk of stream) {
                                 captured.push(chunk);
+                                window.Dial9ViewerExtensions?.pushTraceChunk(chunk);
                                 yield chunk;
                             }
                         },
@@ -1737,8 +1782,10 @@
                     const buffer = new Uint8Array(total);
                     let off = 0;
                     for (const c of captured) { buffer.set(c, off); off += c.length; }
+                    window.Dial9ViewerExtensions?.finishTrace(buffer.buffer);
                     await showParsedTrace(parsed, buffer.buffer, name);
                 } catch (err) {
+                    window.Dial9ViewerExtensions?.cancelTrace();
                     if (err.name === "AbortError") return;
                     throw err;
                 }
@@ -1934,6 +1981,7 @@
                 const opts = {};
                 if (startNs != null) opts.startTime = startNs;
                 if (endNs != null) opts.endTime = endNs;
+                opts.reuseViewerExtensions = true;
                 await parseAndShowTrace(currentTraceBuffer, currentTraceName, opts);
 
                 clearRangeBtn.style.display = (startNs != null || endNs != null) ? "" : "none";
@@ -2043,13 +2091,18 @@
             }
 
             const urlScope = Dial9TraceScope.readScope(urlParams);
-            if (traceUrls.length) {
-                showLoadingState(traceUrls.length > 1 ? `Loading ${traceUrls.length} traces…` : 'Loading trace…');
-                loadTraceFromUrl(traceUrls);
-            } else if (urlScope) {
-                showLoadingState('Loading trace selection…');
-                loadTraceFromScope(urlScope);
-            }
+            // Module scripts run after this legacy inline script. Wait for
+            // DOMContentLoaded so the extension adapter receives the first
+            // trace instead of missing an immediately-started URL load.
+            window.addEventListener("DOMContentLoaded", () => {
+                if (traceUrls.length) {
+                    showLoadingState(traceUrls.length > 1 ? `Loading ${traceUrls.length} traces…` : 'Loading trace…');
+                    loadTraceFromUrl(traceUrls);
+                } else if (urlScope) {
+                    showLoadingState('Loading trace selection…');
+                    loadTraceFromScope(urlScope);
+                }
+            }, { once: true });
 
             function onLoadDemo(e) {
                 e.stopPropagation();
@@ -2960,6 +3013,12 @@
                 if (prof) _t = _profMark(prof, `spanPanel(allSpans=${allSpans.length})`, _t);
                 renderCustomEventsPanel(scrollbarW);
                 renderProcessCpuPanel(scrollbarW);
+                window.Dial9ViewerExtensions?.render({
+                    start: viewStart,
+                    end: viewEnd,
+                    labelWidth: LABEL_W,
+                    scrollbarWidth: scrollbarW,
+                });
                 if (prof) _t = _profMark(prof, `customEvents(${genericCustomEvents.length})`, _t);
                 renderTaskDetail(scrollbarW);
                 if (prof) _t = _profMark(prof, "taskDetail", _t);
@@ -6568,6 +6627,17 @@
                     // CPU panel owns its interval tooltip.
                     if (e.target.closest && e.target.closest("#cpu-panel")) {
                         mouseNs = eventToTimelineNs(e.clientX);
+                        lanesContainer.style.cursor = "";
+                        scheduleCrosshairRedraw();
+                        return;
+                    }
+                    // WASM extension panels own their component hit testing and
+                    // tooltip while sharing the viewer's time-axis crosshair.
+                    if (e.target.closest && e.target.closest(".d9-extension-panel")) {
+                        const panel = e.target.closest(".d9-extension-panel");
+                        mouseNs = panel.dataset.xAxis === "time"
+                            ? eventToTimelineNs(e.clientX)
+                            : null;
                         lanesContainer.style.cursor = "";
                         scheduleCrosshairRedraw();
                         return;

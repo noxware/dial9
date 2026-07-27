@@ -84,10 +84,11 @@ describe("WASM extension runtime", () => {
       rows: 2,
       validity: null,
     });
-    expect(Array.from((batch!.columns[0] as { values: BigUint64Array }).values)).toEqual([
-      10n,
-      20n,
-    ]);
+    expect(
+      Array.from(
+        (batch!.columns[0] as unknown as { values: BigUint64Array }).values,
+      ),
+    ).toEqual([10n, 20n]);
     expect(batch!.columns[1]!.validity).toEqual(new Uint8Array([1]));
   });
 

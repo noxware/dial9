@@ -43,7 +43,7 @@ dial9_viewer_extension::manifest!(
         {
           "name": "dino_body",
           "columns": [
-            { "name": "time_ns", "type": "u64" },
+            { "name": "x", "type": "u8" },
             { "name": "value", "type": "f64" },
             { "name": "tooltip", "type": "utf8" }
           ]
@@ -51,7 +51,7 @@ dial9_viewer_extension::manifest!(
         {
           "name": "dino_flames",
           "columns": [
-            { "name": "time_ns", "type": "u64" },
+            { "name": "x", "type": "u8" },
             { "name": "value", "type": "f64" },
             { "name": "tooltip", "type": "utf8" }
           ]
@@ -224,7 +224,7 @@ dial9_viewer_extension::manifest!(
         },
         {
           "title": "WASM · Extremely Scientific Dinosaur",
-          "x_axis": { "kind": "time" },
+          "x_axis": { "kind": "linear" },
           "y_scales": [
             { "name": "dino", "include_zero": true, "min": 0, "max": 10 }
           ],
@@ -236,7 +236,7 @@ dial9_viewer_extension::manifest!(
             {
               "name": "polyline/v1",
               "table": "dino_body",
-              "x": "time_ns",
+              "x": "x",
               "y": "value",
               "scale": "dino",
               "color": "#66d17a"
@@ -244,7 +244,7 @@ dial9_viewer_extension::manifest!(
             {
               "name": "polyline/v1",
               "table": "dino_flames",
-              "x": "time_ns",
+              "x": "x",
               "y": "value",
               "scale": "dino",
               "color": "#ff7043"
@@ -265,7 +265,7 @@ dial9_viewer_extension::manifest!(
               "name": "tooltip/v1",
               "table": "dino_body",
               "match": {
-                "x": "time_ns",
+                "x": "x",
                 "y": "value"
               },
               "items": [
@@ -276,7 +276,7 @@ dial9_viewer_extension::manifest!(
               "name": "tooltip/v1",
               "table": "dino_flames",
               "match": {
-                "x": "time_ns",
+                "x": "x",
                 "y": "value"
               },
               "items": [
@@ -352,7 +352,7 @@ impl CpuBatch {
         self.start_ns.len()
     }
 
-    fn flush(&mut self, output: &mut OutputSink<'_>) -> Result<(), ExtensionError> {
+    fn flush(&mut self, output: &mut OutputSink) -> Result<(), ExtensionError> {
         if self.start_ns.is_empty() {
             return Ok(());
         }
@@ -433,7 +433,7 @@ impl ContextBatch {
         self.time_ns.len()
     }
 
-    fn flush(&mut self, output: &mut OutputSink<'_>) -> Result<(), ExtensionError> {
+    fn flush(&mut self, output: &mut OutputSink) -> Result<(), ExtensionError> {
         if self.time_ns.is_empty() {
             return Ok(());
         }
@@ -456,28 +456,15 @@ impl ContextBatch {
 pub struct DemoExtension {
     previous: Option<ResourceSample>,
     capacity: Option<f64>,
-    min_timestamp_ns: Option<u64>,
-    max_timestamp_ns: Option<u64>,
     cpu: CpuBatch,
     context: ContextBatch,
 }
 
 impl DemoExtension {
-    fn observe_timestamp(&mut self, timestamp_ns: u64) {
-        self.min_timestamp_ns = Some(
-            self.min_timestamp_ns
-                .map_or(timestamp_ns, |value| value.min(timestamp_ns)),
-        );
-        self.max_timestamp_ns = Some(
-            self.max_timestamp_ns
-                .map_or(timestamp_ns, |value| value.max(timestamp_ns)),
-        );
-    }
-
     fn observe_resource_usage(
         &mut self,
         sample: ResourceSample,
-        output: &mut OutputSink<'_>,
+        output: &mut OutputSink,
     ) -> Result<(), ExtensionError> {
         self.context.push(self.previous, sample);
         if let Some(previous) = self.previous {
@@ -499,12 +486,8 @@ impl Extension for DemoExtension {
     fn on_event(
         &mut self,
         event: Event<'_, '_>,
-        output: &mut OutputSink<'_>,
+        output: &mut OutputSink,
     ) -> Result<(), ExtensionError> {
-        if let Some(timestamp_ns) = event.timestamp_ns() {
-            self.observe_timestamp(timestamp_ns);
-        }
-
         match event.name() {
             "SegmentMetadataEvent" => {
                 if let Some(entries) = event
@@ -530,7 +513,7 @@ impl Extension for DemoExtension {
         Ok(())
     }
 
-    fn finish(mut self, output: &mut OutputSink<'_>) -> Result<(), ExtensionError> {
+    fn finish(mut self, output: &mut OutputSink) -> Result<(), ExtensionError> {
         self.cpu.flush(output)?;
         self.context.flush(output)?;
         if let Some(capacity) = self.capacity {
@@ -542,9 +525,7 @@ impl Extension for DemoExtension {
                 }],
             )?;
         }
-        if let (Some(start), Some(end)) = (self.min_timestamp_ns, self.max_timestamp_ns) {
-            emit_dinosaur(output, start, end.max(start.saturating_add(1)))?;
-        }
+        emit_dinosaur(output)?;
         Ok(())
     }
 }
@@ -618,34 +599,24 @@ const DINO_FLAME_POINTS: &[(u8, f64, &str)] = &[
     (78, 7.2, "🔥"),
 ];
 
-fn emit_dinosaur(
-    output: &mut OutputSink<'_>,
-    start_ns: u64,
-    end_ns: u64,
-) -> Result<(), ExtensionError> {
-    emit_points(output, DINO_BODY, start_ns, end_ns, DINO_BODY_POINTS)?;
-    emit_points(output, DINO_FLAMES, start_ns, end_ns, DINO_FLAME_POINTS)
+fn emit_dinosaur(output: &mut OutputSink) -> Result<(), ExtensionError> {
+    emit_points(output, DINO_BODY, DINO_BODY_POINTS)?;
+    emit_points(output, DINO_FLAMES, DINO_FLAME_POINTS)
 }
 
 fn emit_points(
-    output: &mut OutputSink<'_>,
+    output: &mut OutputSink,
     table: TableId,
-    start_ns: u64,
-    end_ns: u64,
     points: &[(u8, f64, &str)],
 ) -> Result<(), ExtensionError> {
-    let span = end_ns - start_ns;
-    let time_ns = points
-        .iter()
-        .map(|(percent, _, _)| start_ns + ((u128::from(span) * u128::from(*percent)) / 100) as u64)
-        .collect();
+    let x = points.iter().map(|(x, _, _)| *x).collect();
     let values = points.iter().map(|(_, value, _)| *value).collect();
     let (offsets, data) = utf8_column(points.iter().map(|(_, _, tooltip)| *tooltip))?;
     output.emit(
         table,
         vec![
-            Column::U64 {
-                values: time_ns,
+            Column::U8 {
+                values: x,
                 validity: None,
             },
             Column::F64 {

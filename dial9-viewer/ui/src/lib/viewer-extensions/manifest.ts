@@ -23,7 +23,7 @@ const COLUMN_TYPES = new Set<ColumnType>([
   "utf8",
 ]);
 const NUMERIC_TYPES = new Set<ColumnType>(["f64", "i64", "u64", "u32", "u8"]);
-const KNOWN_COMPONENTS = new Set([
+export const KNOWN_COMPONENT_NAMES = Object.freeze([
   "background/v1",
   "interval-area/v1",
   "interval-line/v1",
@@ -34,7 +34,8 @@ const KNOWN_COMPONENTS = new Set([
   "tooltip/v1",
   "swatch/v1",
   "readout/v1",
-]);
+] as const);
+const KNOWN_COMPONENTS = new Set<string>(KNOWN_COMPONENT_NAMES);
 
 export class ManifestError extends Error {
   constructor(message: string) {
