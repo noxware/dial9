@@ -1,0 +1,155 @@
+{
+  "version": 1,
+  "tables": [
+    {
+      "name": "queue_depth",
+      "columns": [
+        { "name": "start_ns", "type": "u64" },
+        { "name": "end_ns", "type": "u64" },
+        { "name": "global_depth", "type": "f64", "nullable": true },
+        { "name": "max_local_depth", "type": "f64", "nullable": true },
+        { "name": "active_tasks", "type": "u32" }
+      ]
+    },
+    {
+      "name": "queue_limits",
+      "columns": [
+        { "name": "warning", "type": "f64" },
+        { "name": "critical", "type": "f64" }
+      ]
+    }
+  ],
+  "panels": [
+    {
+      "title": "Queue Depth",
+      "y_scales": [
+        {
+          "name": "depth",
+          "include_zero": true,
+          "max": {
+            "table": "queue_limits",
+            "column": "critical",
+            "select": "first"
+          }
+        }
+      ],
+      "components": [
+        {
+          "name": "interval-area/v1",
+          "table": "queue_depth",
+          "start": "start_ns",
+          "end": "end_ns",
+          "y": "global_depth",
+          "scale": "depth",
+          "color": "#4fc3f7"
+        },
+        {
+          "name": "interval-line/v1",
+          "table": "queue_depth",
+          "start": "start_ns",
+          "end": "end_ns",
+          "y": "global_depth",
+          "scale": "depth",
+          "color": "#4fc3f7"
+        },
+        {
+          "name": "step-line/v1",
+          "table": "queue_depth",
+          "x": "end_ns",
+          "y": "max_local_depth",
+          "scale": "depth",
+          "color": "#81c784"
+        },
+        {
+          "name": "horizontal-rule/v1",
+          "value": {
+            "table": "queue_limits",
+            "column": "warning",
+            "select": "first"
+          },
+          "scale": "depth",
+          "color": "#ffb74d"
+        },
+        {
+          "name": "horizontal-rule/v1",
+          "value": {
+            "table": "queue_limits",
+            "column": "critical",
+            "select": "first"
+          },
+          "scale": "depth",
+          "color": "#ff5252"
+        },
+        {
+          "name": "swatch/v1",
+          "label": "Global",
+          "color": "#4fc3f7",
+          "shape": "area"
+        },
+        {
+          "name": "swatch/v1",
+          "label": "Max local",
+          "color": "#81c784",
+          "shape": "line"
+        },
+        {
+          "name": "swatch/v1",
+          "label": "warning",
+          "color": "#ffb74d",
+          "shape": "reference",
+          "value": {
+            "table": "queue_limits",
+            "column": "warning",
+            "select": "first"
+          }
+        },
+        {
+          "name": "swatch/v1",
+          "label": "critical",
+          "color": "#ff5252",
+          "shape": "reference",
+          "value": {
+            "table": "queue_limits",
+            "column": "critical",
+            "select": "first"
+          }
+        },
+        {
+          "name": "tooltip/v1",
+          "table": "queue_depth",
+          "match": {
+            "start": "start_ns",
+            "end": "end_ns",
+            "y": "global_depth"
+          },
+          "items": [
+            { "label": "Global", "column": "global_depth" },
+            { "label": "Max local", "column": "max_local_depth" },
+            { "label": "Active tasks", "column": "active_tasks" }
+          ]
+        },
+        {
+          "name": "tooltip/v1",
+          "table": "queue_depth",
+          "match": {
+            "x": "end_ns",
+            "y": "max_local_depth"
+          },
+          "items": [
+            { "label": "Max local", "column": "max_local_depth" },
+            { "label": "Active tasks", "column": "active_tasks" }
+          ]
+        },
+        {
+          "name": "readout/v1",
+          "table": "queue_depth",
+          "items": [
+            { "label": "max global", "column": "global_depth", "reduce": "max" },
+            { "label": "max local", "column": "max_local_depth", "reduce": "max" },
+            { "label": "active", "column": "active_tasks", "sample": "cursor" }
+          ]
+        }
+      ]
+    }
+  ]
+}

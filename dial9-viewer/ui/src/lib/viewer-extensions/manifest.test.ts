@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   ManifestError,
   manifestFromModule,
@@ -100,6 +101,28 @@ describe("viewer extension manifest", () => {
       new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]),
     );
     expect(() => manifestFromModule(module)).toThrowError(ManifestError);
+  });
+
+  it("expresses queue depth as independent stackable components", () => {
+    const fixture = readFileSync(
+      new URL("./fixtures/queue-depth-manifest.json", import.meta.url),
+      "utf8",
+    );
+    const manifest = parseManifest(fixture);
+    expect(manifest.panels[0]!.components.map(({ name }) => name)).toEqual([
+      "interval-area/v1",
+      "interval-line/v1",
+      "step-line/v1",
+      "horizontal-rule/v1",
+      "horizontal-rule/v1",
+      "swatch/v1",
+      "swatch/v1",
+      "swatch/v1",
+      "swatch/v1",
+      "tooltip/v1",
+      "tooltip/v1",
+      "readout/v1",
+    ]);
   });
 });
 
