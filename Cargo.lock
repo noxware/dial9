@@ -1952,6 +1952,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "dial9-viewer-extension"
+version = "0.5.0-rc0"
+dependencies = [
+ "dial9-trace-format",
+]
+
+[[package]]
 name = "diff"
 version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
