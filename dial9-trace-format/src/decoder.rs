@@ -722,6 +722,388 @@ impl<'a> Iterator for Decoder<'a> {
     }
 }
 
+struct StreamingDecodeState {
+    registry: SchemaRegistry,
+    schema_cache: Vec<Option<SchemaCache>>,
+    string_pool: StringPool,
+    stack_pool: StackPool,
+    version: Option<u8>,
+    timestamp_base_ns: u64,
+}
+
+impl StreamingDecodeState {
+    fn new() -> Self {
+        Self {
+            registry: SchemaRegistry::new(),
+            schema_cache: Vec::new(),
+            string_pool: StringPool::new(),
+            stack_pool: StackPool::new(),
+            version: None,
+            timestamp_base_ns: 0,
+        }
+    }
+
+    fn reset_segment(&mut self) {
+        self.registry.clear();
+        self.schema_cache.clear();
+        self.string_pool = StringPool::new();
+        self.stack_pool = StackPool::new();
+        self.timestamp_base_ns = 0;
+    }
+
+    fn schema_info(&self, type_id: WireTypeId) -> Option<SchemaInfo<'_>> {
+        self.schema_cache
+            .get(type_id.0 as usize)
+            .and_then(Option::as_ref)
+            .map(|cache| SchemaInfo {
+                field_tags: &cache.field_tags,
+                has_timestamp: cache.entry.has_timestamp,
+            })
+    }
+
+    fn register_schema(&mut self, type_id: WireTypeId, entry: SchemaEntry) -> Result<(), String> {
+        let index = type_id.0 as usize;
+        if index >= self.schema_cache.len() {
+            self.schema_cache.resize_with(index + 1, || None);
+        }
+        self.schema_cache[index] = Some(SchemaCache {
+            field_tags: entry
+                .fields
+                .iter()
+                .map(|field| field.field_type as u8)
+                .collect(),
+            entry: entry.clone(),
+        });
+        self.registry.register(type_id, entry)
+    }
+
+    fn process<E>(
+        &mut self,
+        data: &[u8],
+        absolute_pos: usize,
+        callback: &mut impl for<'a, 'f> FnMut(RawEvent<'a, 'f>) -> Result<(), E>,
+    ) -> Result<usize, TryForEachError<E>> {
+        let mut pos = 0;
+        if self.version.is_none() {
+            let prefix_len = data.len().min(codec::MAGIC.len());
+            if data[..prefix_len] != codec::MAGIC[..prefix_len] {
+                return Err(TryForEachError::Decode(DecodeError {
+                    pos: absolute_pos,
+                    message: "invalid trace header".into(),
+                }));
+            }
+            if data.len() < HEADER_SIZE {
+                return Ok(0);
+            }
+            self.version = codec::decode_header(data);
+            pos = HEADER_SIZE;
+        }
+
+        let mut values = Vec::new();
+        while pos < data.len() {
+            let remaining = &data[pos..];
+            let tag = remaining[0];
+
+            // A logical trace may concatenate independently-decodable physical
+            // segments. Each new header resets schemas and pools.
+            if tag == codec::MAGIC[0] {
+                let prefix_len = remaining.len().min(codec::MAGIC.len());
+                if remaining[..prefix_len] != codec::MAGIC[..prefix_len] {
+                    return Err(TryForEachError::Decode(DecodeError {
+                        pos: absolute_pos + pos,
+                        message: format!("unknown frame tag 0x{tag:02x}"),
+                    }));
+                }
+                if remaining.len() < HEADER_SIZE {
+                    return Ok(pos);
+                }
+                self.reset_segment();
+                pos += HEADER_SIZE;
+                continue;
+            }
+
+            // Decode events directly so the field-value scratch allocation is
+            // reused and the callback can borrow the current input chunk.
+            if tag == codec::TAG_EVENT {
+                let Some(type_id_bytes) = remaining.get(1..3) else {
+                    return Ok(pos);
+                };
+                let type_id = WireTypeId(u16::from_le_bytes(
+                    type_id_bytes.try_into().expect("two bytes"),
+                ));
+                let Some(cache) = self
+                    .schema_cache
+                    .get(type_id.0 as usize)
+                    .and_then(Option::as_ref)
+                else {
+                    return Err(TryForEachError::Decode(DecodeError {
+                        pos: absolute_pos + pos,
+                        message: format!("unknown type_id {type_id:?}"),
+                    }));
+                };
+
+                let mut frame_pos = 3;
+                let timestamp_ns = if cache.entry.has_timestamp {
+                    let Some(delta) = codec::decode_u24_le(&remaining[frame_pos..]) else {
+                        return Ok(pos);
+                    };
+                    frame_pos += 3;
+                    let Some(timestamp) = self.timestamp_base_ns.checked_add(delta as u64) else {
+                        return Err(TryForEachError::Decode(DecodeError {
+                            pos: absolute_pos + pos + frame_pos,
+                            message: "timestamp overflow".into(),
+                        }));
+                    };
+                    Some(timestamp)
+                } else {
+                    None
+                };
+
+                values.clear();
+                for &field_tag in &cache.field_tags {
+                    let Some(field_type) = FieldType::from_tag(field_tag) else {
+                        return Err(TryForEachError::Decode(DecodeError {
+                            pos: absolute_pos + pos + frame_pos,
+                            message: format!("unknown field type tag {field_tag:#x}"),
+                        }));
+                    };
+                    if field_type.is_optional() {
+                        let Some(&present) = remaining.get(frame_pos) else {
+                            return Ok(pos);
+                        };
+                        frame_pos += 1;
+                        if present == 0 {
+                            values.push(FieldValueRef::None);
+                            continue;
+                        }
+                    }
+                    let Some((value, consumed)) =
+                        FieldValueRef::decode(field_type.inner(), remaining, frame_pos)
+                    else {
+                        return Ok(pos);
+                    };
+                    values.push(value);
+                    frame_pos += consumed;
+                }
+
+                pos += frame_pos;
+                if let Some(timestamp) = timestamp_ns {
+                    self.timestamp_base_ns = timestamp;
+                }
+                callback(RawEvent {
+                    type_id,
+                    name: &cache.entry.name,
+                    timestamp_ns,
+                    fields: &values,
+                    schema: &cache.entry,
+                    string_pool: &self.string_pool,
+                    stack_pool: &self.stack_pool,
+                })
+                .map_err(TryForEachError::User)?;
+                continue;
+            }
+
+            if !matches!(
+                tag,
+                codec::TAG_SCHEMA
+                    | codec::TAG_STRING_POOL
+                    | codec::TAG_STACK_POOL
+                    | codec::TAG_TIMESTAMP_RESET
+                    | codec::TAG_SCHEMA_ANNOTATIONS
+            ) {
+                return Err(TryForEachError::Decode(DecodeError {
+                    pos: absolute_pos + pos,
+                    message: format!("unknown frame tag 0x{tag:02x}"),
+                }));
+            }
+
+            let Some((frame, consumed)) = codec::decode_frame_ref(
+                remaining,
+                |type_id| self.schema_info(type_id),
+                self.timestamp_base_ns,
+            ) else {
+                return Ok(pos);
+            };
+            pos += consumed;
+            match frame {
+                FrameRef::Schema { type_id, entry } => {
+                    self.register_schema(type_id, entry).map_err(|message| {
+                        TryForEachError::Decode(DecodeError {
+                            pos: absolute_pos + pos,
+                            message,
+                        })
+                    })?;
+                }
+                FrameRef::StringPool(entries) => {
+                    for entry in entries {
+                        if let Ok(value) = std::str::from_utf8(entry.data) {
+                            self.string_pool
+                                .insert(InternedString(entry.pool_id), value.to_owned());
+                        }
+                    }
+                }
+                FrameRef::StackPool(entries) => {
+                    for entry in entries {
+                        self.stack_pool
+                            .insert(InternedStackFrames(entry.pool_id), entry.to_stack_frames());
+                    }
+                }
+                FrameRef::TimestampReset(timestamp) => {
+                    self.timestamp_base_ns = timestamp;
+                }
+                FrameRef::SchemaAnnotations {
+                    type_id,
+                    annotations,
+                } => {
+                    if let Some(cache) = self
+                        .schema_cache
+                        .get_mut(type_id.0 as usize)
+                        .and_then(Option::as_mut)
+                    {
+                        cache.entry.annotations.extend_from_slice(&annotations);
+                    }
+                    if let Some(entry) = self.registry.schemas.get_mut(&type_id) {
+                        entry.annotations.extend_from_slice(&annotations);
+                    }
+                }
+                FrameRef::Event { .. } => unreachable!("events are decoded above"),
+            }
+        }
+        Ok(pos)
+    }
+}
+
+/// Incremental event decoder for a trace delivered in arbitrary byte chunks.
+///
+/// Complete frames are consumed immediately. Only the incomplete suffix of
+/// the current frame is retained between calls.
+pub struct StreamingDecoder {
+    state: StreamingDecodeState,
+    tail: Vec<u8>,
+    stream_pos: usize,
+    failed: bool,
+    finished: bool,
+}
+
+impl StreamingDecoder {
+    /// Create an empty decoder. The first input must begin with a D9TF header.
+    pub fn new() -> Self {
+        Self {
+            state: StreamingDecodeState::new(),
+            tail: Vec::new(),
+            stream_pos: 0,
+            failed: false,
+            finished: false,
+        }
+    }
+
+    /// Decode one chunk and call `callback` for every complete event.
+    ///
+    /// The event borrows from this call's input or the retained incomplete
+    /// suffix and is valid only for the callback invocation.
+    pub fn push<E>(
+        &mut self,
+        chunk: &[u8],
+        mut callback: impl for<'a, 'f> FnMut(RawEvent<'a, 'f>) -> Result<(), E>,
+    ) -> Result<(), TryForEachError<E>> {
+        if self.failed || self.finished {
+            return Err(TryForEachError::Decode(DecodeError {
+                pos: self.stream_pos,
+                message: "streaming decoder is no longer accepting input".into(),
+            }));
+        }
+
+        let mut chunk_pos = 0;
+        if !self.tail.is_empty() {
+            let old_tail_len = self.tail.len();
+            let mut supplied = 0;
+            let mut probe_len = 64;
+            loop {
+                if supplied < chunk.len() {
+                    let end = chunk.len().min(supplied.saturating_add(probe_len));
+                    self.tail.extend_from_slice(&chunk[supplied..end]);
+                    supplied = end;
+                }
+
+                match self
+                    .state
+                    .process(&self.tail, self.stream_pos, &mut callback)
+                {
+                    Ok(0) if supplied == chunk.len() => return Ok(()),
+                    Ok(0) => probe_len = probe_len.saturating_mul(2),
+                    Ok(consumed) => {
+                        debug_assert!(consumed >= old_tail_len);
+                        chunk_pos = consumed - old_tail_len;
+                        self.stream_pos += consumed;
+                        self.tail.clear();
+                        break;
+                    }
+                    Err(error) => {
+                        self.failed = true;
+                        return Err(error);
+                    }
+                }
+            }
+        }
+
+        let remaining = &chunk[chunk_pos..];
+        match self
+            .state
+            .process(remaining, self.stream_pos, &mut callback)
+        {
+            Ok(consumed) => {
+                self.stream_pos += consumed;
+                self.tail.extend_from_slice(&remaining[consumed..]);
+                Ok(())
+            }
+            Err(error) => {
+                self.failed = true;
+                Err(error)
+            }
+        }
+    }
+
+    /// Finish the stream, rejecting a missing header or incomplete frame.
+    pub fn finish(&mut self) -> Result<(), DecodeError> {
+        if self.finished {
+            return Ok(());
+        }
+        if self.failed {
+            return Err(DecodeError {
+                pos: self.stream_pos,
+                message: "streaming decoder previously failed".into(),
+            });
+        }
+        if self.state.version.is_none() {
+            return Err(DecodeError {
+                pos: self.stream_pos,
+                message: if self.tail.is_empty() {
+                    "missing trace header".into()
+                } else {
+                    "truncated trace header".into()
+                },
+            });
+        }
+        if !self.tail.is_empty() {
+            return Err(DecodeError {
+                pos: self.stream_pos,
+                message: format!(
+                    "truncated or malformed frame with tag 0x{:02x}",
+                    self.tail[0]
+                ),
+            });
+        }
+        self.finished = true;
+        Ok(())
+    }
+}
+
+impl Default for StreamingDecoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Iterator that yields only [`DecodedFrameRef::Event`] frames,
 /// consuming non-event frames to keep decoder state up to date.
 pub struct EventIter<'d, 'a> {
@@ -963,5 +1345,102 @@ mod tests {
         // Get just the first event — schema is consumed internally
         let first = dec.events().next().unwrap().unwrap();
         assert!(matches!(first, DecodedFrameRef::Event { .. }));
+    }
+
+    type EventSnapshot = (String, Option<u64>, Vec<FieldValue>);
+
+    fn streaming_test_trace() -> Vec<u8> {
+        let mut first = Encoder::new();
+        let first_schema = first
+            .register_schema(
+                "First",
+                vec![
+                    FieldDef::new("name", FieldType::String),
+                    FieldDef::new("value", FieldType::Varint),
+                ],
+            )
+            .unwrap();
+        first
+            .write_event(
+                &first_schema,
+                &[
+                    FieldValue::Varint(1_000),
+                    FieldValue::String("one".into()),
+                    FieldValue::Varint(1),
+                ],
+            )
+            .unwrap();
+        let mut data = first.finish();
+
+        let mut second = Encoder::new();
+        let pooled = second.intern_string("two").unwrap();
+        let second_schema = second
+            .register_schema(
+                "Second",
+                vec![FieldDef::new("name", FieldType::PooledString)],
+            )
+            .unwrap();
+        second
+            .write_event(
+                &second_schema,
+                &[FieldValue::Varint(2_000), FieldValue::PooledString(pooled)],
+            )
+            .unwrap();
+        data.extend_from_slice(&second.finish());
+        data
+    }
+
+    fn collect_streaming<'a>(
+        chunks: impl IntoIterator<Item = &'a [u8]>,
+    ) -> Result<Vec<EventSnapshot>, String> {
+        let mut decoder = StreamingDecoder::new();
+        let mut events = Vec::new();
+        for chunk in chunks {
+            decoder
+                .push(chunk, |event| {
+                    events.push((
+                        event.name.to_owned(),
+                        event.timestamp_ns,
+                        event.fields.iter().map(FieldValueRef::to_owned).collect(),
+                    ));
+                    Ok::<_, String>(())
+                })
+                .map_err(|error| error.to_string())?;
+        }
+        decoder.finish().map_err(|error| error.to_string())?;
+        Ok(events)
+    }
+
+    #[test]
+    fn streaming_decoder_matches_slice_decoder_at_every_boundary() {
+        let data = streaming_test_trace();
+        let mut decoder = Decoder::new(&data).unwrap();
+        let mut expected = Vec::new();
+        decoder
+            .for_each_event(|event| {
+                expected.push((
+                    event.name.to_owned(),
+                    event.timestamp_ns,
+                    event.fields.iter().map(FieldValueRef::to_owned).collect(),
+                ));
+            })
+            .unwrap();
+
+        for split in 0..=data.len() {
+            let actual = collect_streaming([&data[..split], &data[split..]])
+                .unwrap_or_else(|error| panic!("split at byte {split}: {error}"));
+            assert_eq!(actual, expected, "split at byte {split}");
+        }
+        assert_eq!(collect_streaming(data.chunks(1)).unwrap(), expected);
+    }
+
+    #[test]
+    fn streaming_decoder_rejects_truncated_input() {
+        let data = streaming_test_trace();
+        let mut decoder = StreamingDecoder::new();
+        decoder
+            .push(&data[..data.len() - 1], |_| Ok::<_, String>(()))
+            .unwrap();
+        assert!(decoder.finish().is_err());
     }
 }
