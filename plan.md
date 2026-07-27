@@ -26,6 +26,8 @@ Main thread JS
 - Core WebAssembly sin imports, WASI, DOM, red ni objetos JavaScript.
 - Cómputo streaming sobre D9TF, sin materializar eventos como objetos JS.
 - Componentes TypeScript reutilizables; terceros no reciben acceso a Canvas.
+- El manifest declara qué datos y semántica consume cada componente, no layout
+  físico ni instrucciones de dibujo de bajo nivel.
 - Legacy viewer primero, sin perder funcionalidad de `upstream/main`.
 - CPU exacto y dragón son las validaciones visibles; los paneles originales
   permanecen para compararlos.
@@ -76,6 +78,11 @@ pub trait Extension: Default {
   stacks.
 - `OutputSink::emit(table: TableId, columns: Vec<Column>)` puede emitir durante
   el parse o al finalizar.
+- `finish` es únicamente el hook de fin de input para vaciar estado o un batch
+  parcial. No retorna un bundle, manifest, store ni conjunto monolítico de
+  tablas.
+- La extensión de referencia emite batches acotados durante el parse; no
+  retiene todos los eventos o todas las rows hasta `finish`.
 - `TableId` es el índice `u32` de la tabla en el manifest. Las columnas viajan
   en el orden declarado; no se transmiten nombres.
 - Cada `Column` contiene los `Vec<T>` construidos por el usuario y su validity
@@ -113,7 +120,8 @@ output.emit(
 
 El manifest es JSON estático en la custom section
 `dial9.viewer.manifest`. Es la fuente de verdad para tablas, schemas, paneles y
-componentes.
+componentes. Es un contrato semántico: describe qué representar y de dónde
+obtener los datos, no cómo ejecutar primitivas Canvas o CSS.
 
 ```rust
 dial9_viewer_extension::manifest!(r#"
@@ -233,6 +241,24 @@ Componentes iniciales:
 - Presentación: `tooltip/v1`, `swatch/v1` y `readout/v1`; pueden renderizar DOM,
   pero consumen las mismas tablas y hits.
 
+Límite de responsabilidad:
+
+- El manifest elige el componente, tabla, canales, labels, units y opciones
+  semánticas que cambian el significado de la representación.
+- El viewer posee altura y ancho físicos, layout responsive, padding, ejes,
+  grilla, tipografía, grosor y estilo de trazos, opacidad, hit tolerance,
+  posicionamiento de tooltips, spacing de legends, DPR y adaptación al theme.
+- No se exponen `height`, `width`, `line_width`, dash arrays, coordenadas en
+  píxeles, estado Canvas ni comandos de dibujo. Los valores X/Y son datos del
+  dominio y el viewer los proyecta al viewport.
+- Los componentes son primitivas semánticas pequeñas, no bags de settings ni
+  una scene graph genérica. Si una geometría realmente distinta no puede
+  expresarse componiendo las existentes, se agrega un componente versionado
+  pequeño al viewer.
+- Colores o ramps se declaran sólo cuando codifican identidad o significado en
+  los datos, como series y thresholds; las decisiones visuales restantes usan
+  defaults consistentes del viewer.
+
 Contrato común:
 
 - El orden del array es el orden de dibujo. El hit test recorre las capas
@@ -260,6 +286,18 @@ Contrato común:
 - Un nombre/version desconocido deshabilita sólo su panel, pero mantiene su
   shell visible con un error que identifica el componente faltante.
 
+Referencia visual:
+
+- `574-generalize-series-and-fields` es la referencia de aceptación para el
+  rendering de estos componentes, no sólo una fuente de ideas. Sus paneles
+  `demo=1`, legends, swatches, tooltips, guides, thresholds, ejes, spacing y
+  jerarquía visual igualaban o mejoraban los paneles equivalentes de `main`.
+- Reutilizar o extraer su rendering y CSS cuando sea aplicable, en vez de
+  reescribir una implementación visual paralela. Su modelo declarativo viejo
+  no es la referencia para cómputo ni API pública.
+- El resultado no puede perder calidad visual frente a esa branch ni frente a
+  los paneles originales de `main`.
+
 ## Implementación
 
 - Reutilizar selectivamente de `574-computed-fields-and-views-p8` el decoder
@@ -284,6 +322,12 @@ Contrato común:
 - Convertir `viewer.html` en entrada Vite manteniendo sus scripts legacy y
   añadir un adaptador TypeScript fino para lifecycle, fanout, paneles,
   viewport, tooltip y la llamada desde `renderAll()`.
+- Construir primero el vertical slice de CPU reutilizando la presentación de
+  `574-generalize-series-and-fields` y revisar su API y paridad visual antes de
+  generalizar componentes o agregar opciones públicas.
+- No agregar opciones de manifest que sólo ajusten la apariencia de un fixture;
+  CPU, context switches, queue depth y dragón deben surgir de pocas primitivas
+  reutilizables con styling controlado por el viewer.
 - Un `.wasm` arrastrado crea una instancia nueva:
   - sin trace queda pendiente para la próxima carga;
   - con trace procesa el buffer descomprimido retenido;
@@ -313,12 +357,17 @@ Contrato común:
 - Preservar coordenadas repetidas y recorridos hacia atrás.
 - Mostrar 💩 al alcanzar la cola y ❤️ al alcanzar la cabeza únicamente dentro
   del tooltip; ningún emoji forma parte del dibujo.
+- La llama tiene hit testing y tooltip independientes que muestran 🔥, como en
+  `p5`.
 
 ### Presentación y pruebas
 
 - Tomar de `574-generalize-series-and-fields` la calidad visual de legends,
   tooltips, guides y thresholds: swatches junto al título y labels fuera del
   canvas para evitar superposiciones.
+- Validar esa referencia con comparación visual real. Comprobar sólo que existe
+  un canvas, que tiene píxeles o que los valores numéricos coinciden no
+  demuestra paridad de presentación.
 - Fixture de manifest para el layout y los reducers de queue depth, sin
   reemplazar su panel.
 - Test de line y step-line superpuestos, orden Z y tooltips independientes.
@@ -329,7 +378,13 @@ Contrato común:
 - Tests de imports, traps, pointers fuera de memoria, manifests/batches
   inválidos, múltiples módulos y drops antes/después del trace.
 - Benchmark reproducible con los 250k eventos de `p8` y un trace generado
-  grande: decode, cómputo, transferencia y memoria guest/host.
+  grande: decode, cómputo, transferencia y memoria guest/host. Verificar que el
+  guest emite incrementalmente y que su memoria no crece por retener el trace
+  completo.
+- Medir el `.wasm` release stripped de la extensión de referencia. El SDK no
+  debe incorporar debug sections, dependencias ajenas ni infraestructura
+  innecesaria; un tamaño inesperadamente grande es un fallo a investigar, no
+  sólo una métrica informativa.
 - CI compila la extensión de ejemplo para `wasm32-unknown-unknown` y ejecuta
   Rust, Vitest, build Vite y Playwright.
 - Las suites actuales y una revisión visual verifican que el legacy viewer
