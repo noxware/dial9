@@ -301,6 +301,27 @@ describe("extension panel components", () => {
     });
   });
 
+  it("reuses viewport domains and reducer results during pointer updates", () => {
+    const { panel } = cpuFixture();
+    const number = vi.spyOn(ColumnReader.prototype, "number");
+    try {
+      const first = panel.presentation(VIEWPORT, null);
+      const readsAfterFirstPresentation = number.mock.calls.length;
+      expect(readsAfterFirstPresentation).toBeGreaterThan(0);
+
+      expect(panel.xValueAt(300, { ...VIEWPORT })).toBe(15);
+      expect(panel.presentation({ ...VIEWPORT }, null)).toEqual(first);
+      expect(number).toHaveBeenCalledTimes(readsAfterFirstPresentation);
+
+      panel.presentation({ ...VIEWPORT, start: 5 }, null);
+      expect(number.mock.calls.length).toBeGreaterThan(
+        readsAfterFirstPresentation,
+      );
+    } finally {
+      number.mockRestore();
+    }
+  });
+
   it("preserves decreasing and repeated polyline coordinates for a dinosaur", () => {
     const body = [
       [10, 3], [18, 4], [28, 5.8], [40, 7], [52, 6.8], [59, 7.8],
@@ -1263,9 +1284,52 @@ describe("extension panel components", () => {
       0,
     );
 
+    expect(panel.error).toBeUndefined();
     expect(panel.presentation({ ...VIEWPORT, end: 20 }, null).readout).toEqual([
       { label: "avg", value: "100.0%" },
     ]);
+  });
+
+  it("rejects simple viewport reducers without a graphical mapping", () => {
+    const manifest = parseExtensionManifestJson(
+      JSON.stringify({
+        version: 1,
+        tables: [
+          {
+            name: "values",
+            columns: [{ name: "value", type: "f64" }],
+          },
+        ],
+        panels: [
+          {
+            title: "Unmapped",
+            components: [
+              {
+                name: "readout/v1",
+                table: "values",
+                items: [
+                  {
+                    label: "max",
+                    column: "value",
+                    reduce: "max",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const panel = new ExtensionPanel(
+      "unmapped",
+      new ExtensionStore(manifest),
+      manifest.panels[0]!,
+      0,
+    );
+
+    expect(panel.error).toBe(
+      "readout/v1 simple reducers require a matching graphical component for viewport filtering",
+    );
   });
 
   it("expresses queue depth with layered scales, swatches, cursor values, and viewport reducers", () => {

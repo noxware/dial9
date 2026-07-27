@@ -143,6 +143,11 @@ interface Layout {
   readonly domains: ReadonlyMap<string, readonly [number, number]>;
 }
 
+interface CachedReduction {
+  readonly layout: Layout;
+  readonly value: number | null;
+}
+
 const SECONDARY_SCALE_WIDTH = 76;
 
 function* drawingRows(
@@ -310,6 +315,8 @@ export class ExtensionPanel {
   readonly #drawings: DrawingRuntime[] = [];
   readonly #presentations: PresentationComponent[] = [];
   readonly #linearDomain: readonly [number, number] | undefined;
+  readonly #reductionCache = new Map<ReadoutItem, CachedReduction>();
+  #cachedLayout: Layout | undefined;
 
   constructor(
     instanceId: string,
@@ -350,6 +357,7 @@ export class ExtensionPanel {
       this.#validateScalarReferences();
       this.#validateFixedScales();
       this.#validateColorDomains();
+      this.#validateReadoutMappings();
       linearDomain =
         spec.x_axis.type === "linear"
           ? spec.x_axis.domain ?? this.#deriveLinearDomain()
@@ -665,6 +673,22 @@ export class ExtensionPanel {
     }
   }
 
+  #validateReadoutMappings(): void {
+    for (const component of this.#presentations) {
+      if (
+        component.name !== "readout/v1" ||
+        !component.items.some((item) => typeof item.reduce === "string")
+      ) {
+        continue;
+      }
+      if (this.#matchingDrawing(component.table, component.match) === undefined) {
+        throw new Error(
+          `readout/v1 simple reducers require a matching graphical component for viewport filtering`,
+        );
+      }
+    }
+  }
+
   #compileDrawing(
     component: DrawingComponent,
     componentIndex: number,
@@ -766,6 +790,18 @@ export class ExtensionPanel {
   }
 
   #layout(viewport: PanelViewport): Layout {
+    const cached = this.#cachedLayout;
+    if (
+      cached !== undefined &&
+      cached.viewport.start === viewport.start &&
+      cached.viewport.end === viewport.end &&
+      cached.viewport.width === viewport.width &&
+      cached.viewport.height === viewport.height &&
+      cached.viewport.labelWidth === viewport.labelWidth &&
+      (cached.viewport.rightInset ?? 0) === (viewport.rightInset ?? 0)
+    ) {
+      return cached;
+    }
     const [xStart, xEnd] =
       this.spec.x_axis.type === "time"
         ? [viewport.start, viewport.end]
@@ -786,8 +822,8 @@ export class ExtensionPanel {
         this.#scaleDomain(scale, xStart, xEnd),
       );
     }
-    return {
-      viewport,
+    const layout = {
+      viewport: { ...viewport },
       xStart,
       xEnd,
       drawWidth,
@@ -795,6 +831,8 @@ export class ExtensionPanel {
       chartHeight,
       domains,
     };
+    this.#cachedLayout = layout;
+    return layout;
   }
 
   #scaleDomain(
@@ -1700,7 +1738,13 @@ export class ExtensionPanel {
             ? null
             : table.column(item.column).cell(sampledRow);
       } else {
-        value = this.#reduce(item, reducer, table, drawing, layout);
+        const cached = this.#reductionCache.get(item);
+        if (cached?.layout === layout) {
+          value = cached.value;
+        } else {
+          value = this.#reduce(item, reducer, table, drawing, layout);
+          this.#reductionCache.set(item, { layout, value });
+        }
         if (value !== null && item.clamp !== undefined) {
           if (item.clamp.min !== undefined) {
             value = Math.max(item.clamp.min, value);
@@ -1732,13 +1776,13 @@ export class ExtensionPanel {
     layout: Layout,
   ): number | null {
     const column = table.column(item.column);
-    const [start, end] =
-      drawing === undefined
-        ? [0, table.rowCount]
-        : this.#visibleRows(drawing, layout.xStart, layout.xEnd);
     if (typeof reducer === "object") {
       const starts = table.column(reducer.start);
       const ends = table.column(reducer.end);
+      const [start, end] =
+        drawing === undefined
+          ? [0, table.rowCount]
+          : this.#visibleRows(drawing, layout.xStart, layout.xEnd);
       let weighted = 0;
       let weight = 0;
       for (let row = start; row < end; row += 1) {
@@ -1755,6 +1799,16 @@ export class ExtensionPanel {
       return weight === 0 ? null : weighted / weight;
     }
 
+    if (drawing === undefined) {
+      throw new Error(
+        "simple readout reducer has no graphical viewport mapping",
+      );
+    }
+    const [start, end] = this.#visibleRows(
+      drawing,
+      layout.xStart,
+      layout.xEnd,
+    );
     let count = 0;
     let sum = 0;
     let minimum = Infinity;

@@ -239,8 +239,11 @@ A readout item also accepts:
 Reducers ignore null cells and operate on the current viewport. The weighted
 mean clips each interval's duration to that viewport. An optional
 `"clamp":{"min":...,"max":...}` applies finite bounds to the aggregate after
-reduction. A readout without `reduce` follows the topmost matching hit when
-available, then the matching series at the cursor.
+reduction. Simple reducers derive viewport membership from the graphical
+component selected by `table` and `match`; the panel reports an error if none
+matches. `time_weighted_mean` can stand alone because its own `start` and `end`
+columns define viewport overlap. A readout without `reduce` follows the
+topmost matching hit when available, then the matching series at the cursor.
 
 Known units are `ns`, `us`, `ms`, `s`, `bytes`, and `%`. Unknown units are
 rendered as suffixes. Omitting `unit` preserves the raw value with no numeric
