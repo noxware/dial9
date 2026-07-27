@@ -34,7 +34,12 @@ interface ExtensionExports {
 
 export interface PreparedExtension {
   readonly manifest: ViewerExtensionManifest;
-  readonly runtime: WasmExtensionRuntime;
+  readonly runtime: ExtensionRuntime;
+}
+
+export interface ExtensionRuntime {
+  push(bytes: Uint8Array): RecordBatch[];
+  finish(): RecordBatch[];
 }
 
 export async function prepareExtension(bytes: BufferSource): Promise<PreparedExtension> {
@@ -55,7 +60,7 @@ export async function prepareExtension(bytes: BufferSource): Promise<PreparedExt
   return { manifest, runtime: new WasmExtensionRuntime(exports, manifest) };
 }
 
-export class WasmExtensionRuntime {
+export class WasmExtensionRuntime implements ExtensionRuntime {
   readonly #exports: ExtensionExports;
   readonly #manifest: ViewerExtensionManifest;
 
