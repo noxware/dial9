@@ -104,6 +104,7 @@ export class ColumnReader {
   readonly schema: ColumnSchema;
   readonly rowCount: number;
   readonly #chunks: readonly ReadChunk[];
+  #cachedChunkIndex = 0;
 
   constructor(table: ExtensionTable, columnIndex: number) {
     const schema = table.schema.columns[columnIndex];
@@ -176,6 +177,31 @@ export class ColumnReader {
     if (!Number.isSafeInteger(row) || row < 0 || row >= this.rowCount) {
       throw new RangeError(`row ${row} is outside column ${this.schema.name}`);
     }
+
+    const cached = this.#chunks[this.#cachedChunkIndex]!;
+    if (row >= cached.start && row < cached.start + cached.rows) {
+      return { chunk: cached, localRow: row - cached.start };
+    }
+
+    const direction = row < cached.start ? -1 : 1;
+    let adjacentIndex = this.#cachedChunkIndex + direction;
+    while (
+      adjacentIndex >= 0 &&
+      adjacentIndex < this.#chunks.length &&
+      this.#chunks[adjacentIndex]!.rows === 0
+    ) {
+      adjacentIndex += direction;
+    }
+    const adjacent = this.#chunks[adjacentIndex];
+    if (
+      adjacent !== undefined &&
+      row >= adjacent.start &&
+      row < adjacent.start + adjacent.rows
+    ) {
+      this.#cachedChunkIndex = adjacentIndex;
+      return { chunk: adjacent, localRow: row - adjacent.start };
+    }
+
     let low = 0;
     let high = this.#chunks.length;
     while (low + 1 < high) {
@@ -183,6 +209,7 @@ export class ColumnReader {
       if (this.#chunks[middle]!.start <= row) low = middle;
       else high = middle;
     }
+    this.#cachedChunkIndex = low;
     const chunk = this.#chunks[low]!;
     return { chunk, localRow: row - chunk.start };
   }

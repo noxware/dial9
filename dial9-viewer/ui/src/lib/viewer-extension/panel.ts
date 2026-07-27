@@ -82,6 +82,11 @@ interface SortedColumnIndex {
   ): readonly [number, number];
 }
 
+interface IntervalIndex {
+  readonly startIndex: SortedColumnIndex;
+  readonly prefixMaxEnd: Float64Array;
+}
+
 interface BackgroundRuntime {
   readonly kind: "background";
   readonly componentIndex: number;
@@ -298,6 +303,10 @@ export class ExtensionPanel {
   readonly #store: ExtensionStore;
   readonly #tables = new Map<string, TableReader>();
   readonly #sortedIndexes = new Map<ColumnReader, SortedColumnIndex>();
+  readonly #intervalIndexes = new Map<
+    ColumnReader,
+    Map<ColumnReader, IntervalIndex>
+  >();
   readonly #drawings: DrawingRuntime[] = [];
   readonly #presentations: PresentationComponent[] = [];
   readonly #linearDomain: readonly [number, number] | undefined;
@@ -340,6 +349,7 @@ export class ExtensionPanel {
       }
       this.#validateScalarReferences();
       this.#validateFixedScales();
+      this.#validateColorDomains();
       linearDomain =
         spec.x_axis.type === "linear"
           ? spec.x_axis.domain ?? this.#deriveLinearDomain()
@@ -528,6 +538,35 @@ export class ExtensionPanel {
     return index;
   }
 
+  #intervalIndex(
+    start: ColumnReader,
+    end: ColumnReader,
+    componentName: IntervalAreaComponent["name"] | IntervalLineComponent["name"],
+  ): IntervalIndex {
+    let byEnd = this.#intervalIndexes.get(start);
+    if (byEnd === undefined) {
+      byEnd = new Map();
+      this.#intervalIndexes.set(start, byEnd);
+    }
+    let index = byEnd.get(end);
+    if (index !== undefined) return index;
+
+    const startIndex = this.#index(start, componentName);
+    const prefixMaxEnd = new Float64Array(end.rowCount);
+    let maximum = -Infinity;
+    for (let row = 0; row < end.rowCount; row += 1) {
+      const value = end.number(row);
+      if (value !== null && value > maximum) maximum = value;
+      prefixMaxEnd[row] = maximum;
+    }
+    index = {
+      startIndex,
+      prefixMaxEnd,
+    };
+    byEnd.set(end, index);
+    return index;
+  }
+
   #validateScalarReferences(): void {
     const validate = (
       value: number | string | ScalarReference | undefined,
@@ -556,6 +595,19 @@ export class ExtensionPanel {
           break;
         case "interval-area/v1":
           validate(component.baseline);
+          if (typeof component.color !== "string") {
+            validate(component.color.domain?.min);
+            validate(component.color.domain?.max);
+          }
+          break;
+        case "interval-line/v1":
+        case "line/v1":
+        case "step-line/v1":
+        case "polyline/v1":
+          if (typeof component.color !== "string") {
+            validate(component.color.domain?.min);
+            validate(component.color.domain?.max);
+          }
           break;
         case "horizontal-rule/v1":
           validate(component.y);
@@ -586,6 +638,33 @@ export class ExtensionPanel {
     }
   }
 
+  #validateColorDomains(): void {
+    for (const component of this.spec.components) {
+      if (
+        "unsupported" in component ||
+        !("color" in component) ||
+        typeof component.color === "string" ||
+        !("stops" in component.color) ||
+        component.color.domain === undefined
+      ) {
+        continue;
+      }
+      const minimum = this.#numberValue(component.color.domain.min);
+      const maximum = this.#numberValue(component.color.domain.max);
+      if (minimum !== null && maximum !== null) {
+        if (minimum >= maximum) {
+          throw new Error(
+            `${component.name} color domain requires finite min less than max`,
+          );
+        }
+      } else if (component.color.domain.fallback_scale === undefined) {
+        throw new Error(
+          `${component.name} color domain is unavailable and has no fallback scale`,
+        );
+      }
+    }
+  }
+
   #compileDrawing(
     component: DrawingComponent,
     componentIndex: number,
@@ -610,14 +689,11 @@ export class ExtensionPanel {
         const table = this.#table(component.table);
         const start = table.column(component.start);
         const end = table.column(component.end);
-        const startIndex = this.#index(start, component.name);
-        const prefixMaxEnd = new Float64Array(table.rowCount);
-        let maximum = -Infinity;
-        for (let row = 0; row < table.rowCount; row += 1) {
-          const value = end.number(row);
-          if (value !== null && value > maximum) maximum = value;
-          prefixMaxEnd[row] = maximum;
-        }
+        const { startIndex, prefixMaxEnd } = this.#intervalIndex(
+          start,
+          end,
+          component.name,
+        );
         return {
           kind: "interval",
           componentIndex,
@@ -899,13 +975,55 @@ export class ExtensionPanel {
     return [low, lastRow];
   }
 
+  #colorDomain(
+    color: SeriesColor,
+    layout: Layout,
+  ): readonly [number, number] | undefined {
+    if (typeof color === "string" || color.domain === undefined) {
+      return undefined;
+    }
+    const minimum = this.#numberValue(color.domain.min);
+    const maximum = this.#numberValue(color.domain.max);
+    if (minimum !== null && maximum !== null && minimum < maximum) {
+      return [minimum, maximum];
+    }
+    return color.domain.fallback_scale === undefined
+      ? undefined
+      : layout.domains.get(color.domain.fallback_scale);
+  }
+
+  #rowColorValue(
+    drawing: IntervalRuntime | PointRuntime,
+    row: number,
+    domain: readonly [number, number] | undefined,
+  ): number | null {
+    const color = drawing.spec.color;
+    let value = drawing.color?.number(row) ?? null;
+    if (
+      typeof color !== "string" &&
+      color.domain !== undefined
+    ) {
+      if (value !== null && domain !== undefined) {
+        value = interpolateValue(
+          color.stops[0]!.at,
+          color.stops.at(-1)!.at,
+          normalizeValue(value, domain[0], domain[1]),
+        );
+      } else {
+        value = null;
+      }
+    }
+    return value;
+  }
+
   #rowColor(
     drawing: IntervalRuntime | PointRuntime,
     row: number,
+    domain: readonly [number, number] | undefined,
   ): string {
     return rampColor(
       drawing.spec.color,
-      drawing.color?.number(row) ?? null,
+      this.#rowColorValue(drawing, row, domain),
     );
   }
 
@@ -967,6 +1085,7 @@ export class ExtensionPanel {
       return;
     }
     if (drawing.kind === "interval") {
+      const colorDomain = this.#colorDomain(drawing.spec.color, layout);
       const [start, end] = this.#visibleRows(
         drawing,
         layout.xStart,
@@ -980,6 +1099,12 @@ export class ExtensionPanel {
         layout.xEnd,
         (row) => drawing.start.number(row),
         (row) => drawing.y.number(row),
+        drawing.color === undefined
+          ? undefined
+          : (row) => this.#rowColorValue(drawing, row, colorDomain),
+        typeof drawing.spec.color === "string"
+          ? undefined
+          : drawing.spec.color.stops.map((stop) => stop.at),
       );
       let prior:
         | {
@@ -1009,7 +1134,7 @@ export class ExtensionPanel {
         }
         const x1 = this.#x(Math.max(xStart, layout.xStart), layout);
         const x2 = this.#x(Math.min(xEnd, layout.xEnd), layout);
-        const color = this.#rowColor(drawing, row);
+        const color = this.#rowColor(drawing, row, colorDomain);
         if (drawing.spec.name === "interval-area/v1") {
           const baseline = this.#numberValue(drawing.spec.baseline);
           if (baseline === null) continue;
@@ -1088,6 +1213,7 @@ export class ExtensionPanel {
     layout: Layout,
     drawing: PointRuntime,
   ): void {
+    const colorDomain = this.#colorDomain(drawing.spec.color, layout);
     const [start, end] = this.#visibleRows(
       drawing,
       layout.xStart,
@@ -1104,6 +1230,12 @@ export class ExtensionPanel {
             layout.xEnd,
             (row) => drawing.x.number(row),
             (row) => drawing.y.number(row),
+            drawing.color === undefined
+              ? undefined
+              : (row) => this.#rowColorValue(drawing, row, colorDomain),
+            typeof drawing.spec.color === "string"
+              ? undefined
+              : drawing.spec.color.stops.map((stop) => stop.at),
           );
     this.#stroke(context, drawing.spec);
     context.globalAlpha = 1;
@@ -1149,7 +1281,7 @@ export class ExtensionPanel {
       const x = this.#x(prior.xValue, layout);
       const y = this.#y(prior.yValue, drawing.spec.scale, layout);
       context.fillStyle =
-        constantColor ?? this.#rowColor(drawing, prior.row);
+        constantColor ?? this.#rowColor(drawing, prior.row, colorDomain);
       context.fillRect(x - 1.5, y - 1.5, 3, 3);
     };
     for (const row of drawingRows(start, end, sampled)) {
@@ -1167,7 +1299,11 @@ export class ExtensionPanel {
         connected: false,
       };
       if (prior !== undefined) {
-        const color = constantColor ?? this.#rowColor(drawing, row);
+        const color = constantColor ?? this.#rowColor(
+          drawing,
+          row,
+          colorDomain,
+        );
         let connected: boolean;
         if (drawing.spec.name === "step-line/v1") {
           const horizontal = append(
@@ -1565,6 +1701,14 @@ export class ExtensionPanel {
             : table.column(item.column).cell(sampledRow);
       } else {
         value = this.#reduce(item, reducer, table, drawing, layout);
+        if (value !== null && item.clamp !== undefined) {
+          if (item.clamp.min !== undefined) {
+            value = Math.max(item.clamp.min, value);
+          }
+          if (item.clamp.max !== undefined) {
+            value = Math.min(item.clamp.max, value);
+          }
+        }
       }
       return value === null
         ? []

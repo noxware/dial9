@@ -187,6 +187,12 @@ scalar cardinality or values produce a visible error in the affected panel.
   `{"column":"load","stops":[{"at":0,"color":"#4fc3f7"}, ...]}`. Stops are
   finite and strictly increasing; values outside the range use the endpoint
   color.
+- A ramp may normalize its column through
+  `"domain":{"min":...,"max":...}` before applying its stops. Bounds accept
+  finite numbers or one-row numeric scalar references. An optional
+  `fallback_scale` uses that named Y scale's current domain when either bound
+  is unavailable; without it, an unavailable domain is a visible panel error.
+  Resolved bounds must satisfy `min < max`.
 - A null or non-finite required geometric value creates a gap. Invalid or
   non-positive intervals are not drawn.
 
@@ -219,8 +225,10 @@ not needed.
 `line/v1`, `step-line/v1`, and interval components reject unsorted inputs.
 Use `polyline/v1` when source order itself defines the path. Nulls separate
 runs rather than connecting across missing data. Dense sorted series are
-coalesced per horizontal pixel while retaining endpoints, extrema, and gaps;
-`polyline/v1` is not reordered or coalesced.
+coalesced per horizontal pixel while retaining endpoints, geometric and color
+extrema, transitions between ramp bands, and gaps. Deliberately oscillating
+colors remain dense rather than losing their semantics; `polyline/v1` is not
+reordered or coalesced.
 
 Tooltip and readout items have `label`, `column`, and an optional `unit`.
 A readout item also accepts:
@@ -229,9 +237,10 @@ A readout item also accepts:
 - `{"name":"time_weighted_mean","start":"start_ns","end":"end_ns"}`.
 
 Reducers ignore null cells and operate on the current viewport. The weighted
-mean clips each interval's duration to that viewport. A readout without
-`reduce` follows the topmost matching hit when available, then the matching
-series at the cursor.
+mean clips each interval's duration to that viewport. An optional
+`"clamp":{"min":...,"max":...}` applies finite bounds to the aggregate after
+reduction. A readout without `reduce` follows the topmost matching hit when
+available, then the matching series at the cursor.
 
 Known units are `ns`, `us`, `ms`, `s`, `bytes`, and `%`. Unknown units are
 rendered as suffixes. Omitting `unit` preserves the raw value with no numeric

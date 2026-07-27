@@ -28,11 +28,19 @@ export interface ColorStop {
   readonly color: string;
 }
 
+export interface SeriesColorDomain {
+  readonly min: NumericValue;
+  readonly max: NumericValue;
+  /** Used when a scalar bound is null or otherwise unavailable. */
+  readonly fallback_scale?: string;
+}
+
 export type SeriesColor =
   | string
   | {
       readonly column: string;
       readonly stops: readonly ColorStop[];
+      readonly domain?: SeriesColorDomain;
     };
 
 export interface VisibleScaleDomain {
@@ -138,6 +146,11 @@ export type ReadoutReducer =
 
 export interface ReadoutItem extends DisplayItem {
   readonly reduce?: ReadoutReducer;
+  /** Applied to the numeric reducer result before formatting. */
+  readonly clamp?: {
+    readonly min?: number;
+    readonly max?: number;
+  };
 }
 
 export interface ReadoutComponent {
@@ -356,6 +369,8 @@ function colorValue(
 function seriesColor(
   value: unknown,
   table: TableSchema,
+  tables: ReadonlyMap<string, TableSchema>,
+  scales: ReadonlySet<string>,
   path: string,
 ): SeriesColor {
   if (typeof value === "string") return nonemptyString(value, path);
@@ -377,7 +392,46 @@ function seriesColor(
       fail(`${path}.stops must be strictly increasing`);
     }
   }
-  return { column, stops };
+  if (source["domain"] === undefined) return { column, stops };
+
+  const domainSource = object(source["domain"], `${path}.domain`);
+  const fallbackScale = optionalString(
+    domainSource["fallback_scale"],
+    `${path}.domain.fallback_scale`,
+  );
+  if (fallbackScale !== undefined && !scales.has(fallbackScale)) {
+    fail(
+      `${path}.domain.fallback_scale references unknown scale ${fallbackScale}`,
+    );
+  }
+  const minimum = numericValue(
+    domainSource["min"],
+    tables,
+    `${path}.domain.min`,
+  );
+  const maximum = numericValue(
+    domainSource["max"],
+    tables,
+    `${path}.domain.max`,
+  );
+  if (
+    typeof minimum === "number" &&
+    typeof maximum === "number" &&
+    minimum >= maximum
+  ) {
+    fail(`${path}.domain.min must be less than max`);
+  }
+  return {
+    column,
+    stops,
+    domain: {
+      min: minimum,
+      max: maximum,
+      ...(fallbackScale === undefined
+        ? {}
+        : { fallback_scale: fallbackScale }),
+    },
+  };
 }
 
 function match(
@@ -515,49 +569,84 @@ function component(
         const itemSource = object(item, itemPath);
         const base = displayItem(item, table, itemPath);
         const reducerSource = itemSource["reduce"];
-        if (reducerSource === undefined) return base;
+        let reduce: ReadoutReducer | undefined;
+        if (reducerSource !== undefined) {
+          if (typeof reducerSource === "string") {
+            if (!REDUCERS.has(reducerSource as ReducerName)) {
+              fail(`${itemPath}.reduce is unsupported`);
+            }
+            if (
+              reducerSource !== "count" &&
+              !NUMERIC_COLUMN_TYPES.has(
+                columnByName(table, base.column, `${itemPath}.column`).type,
+              )
+            ) {
+              fail(`${itemPath}.column must be numeric for ${reducerSource}`);
+            }
+            reduce = reducerSource as ReducerName;
+          } else {
+            const reducer = object(reducerSource, `${itemPath}.reduce`);
+            if (reducer["name"] !== "time_weighted_mean") {
+              fail(`${itemPath}.reduce.name is unsupported`);
+            }
+            if (
+              !NUMERIC_COLUMN_TYPES.has(
+                columnByName(table, base.column, `${itemPath}.column`).type,
+              )
+            ) {
+              fail(`${itemPath}.column must be numeric for time_weighted_mean`);
+            }
+            reduce = {
+              name: "time_weighted_mean",
+              start: numericColumn(
+                table,
+                reducer["start"],
+                `${itemPath}.reduce.start`,
+              ),
+              end: numericColumn(
+                table,
+                reducer["end"],
+                `${itemPath}.reduce.end`,
+              ),
+            };
+          }
+        }
 
-        let reduce: ReadoutReducer;
-        if (typeof reducerSource === "string") {
-          if (!REDUCERS.has(reducerSource as ReducerName)) {
-            fail(`${itemPath}.reduce is unsupported`);
+        let clamp: ReadoutItem["clamp"];
+        if (itemSource["clamp"] !== undefined) {
+          if (reduce === undefined) {
+            fail(`${itemPath}.clamp requires reduce`);
+          }
+          const clampSource = object(
+            itemSource["clamp"],
+            `${itemPath}.clamp`,
+          );
+          const minimum = clampSource["min"] === undefined
+            ? undefined
+            : finite(clampSource["min"], `${itemPath}.clamp.min`);
+          const maximum = clampSource["max"] === undefined
+            ? undefined
+            : finite(clampSource["max"], `${itemPath}.clamp.max`);
+          if (minimum === undefined && maximum === undefined) {
+            fail(`${itemPath}.clamp requires min or max`);
           }
           if (
-            reducerSource !== "count" &&
-            !NUMERIC_COLUMN_TYPES.has(
-              columnByName(table, base.column, `${itemPath}.column`).type,
-            )
+            minimum !== undefined &&
+            maximum !== undefined &&
+            minimum > maximum
           ) {
-            fail(`${itemPath}.column must be numeric for ${reducerSource}`);
+            fail(`${itemPath}.clamp.min must not exceed max`);
           }
-          reduce = reducerSource as ReducerName;
-        } else {
-          const reducer = object(reducerSource, `${itemPath}.reduce`);
-          if (reducer["name"] !== "time_weighted_mean") {
-            fail(`${itemPath}.reduce.name is unsupported`);
-          }
-          if (
-            !NUMERIC_COLUMN_TYPES.has(
-              columnByName(table, base.column, `${itemPath}.column`).type,
-            )
-          ) {
-            fail(`${itemPath}.column must be numeric for time_weighted_mean`);
-          }
-          reduce = {
-            name: "time_weighted_mean",
-            start: numericColumn(
-              table,
-              reducer["start"],
-              `${itemPath}.reduce.start`,
-            ),
-            end: numericColumn(
-              table,
-              reducer["end"],
-              `${itemPath}.reduce.end`,
-            ),
+          clamp = {
+            ...(minimum === undefined ? {} : { min: minimum }),
+            ...(maximum === undefined ? {} : { max: maximum }),
           };
         }
-        return { ...base, reduce };
+        return {
+          ...base,
+          ...(reduce === undefined ? {} : { reduce }),
+          ...(clamp === undefined ? {} : { clamp }),
+        };
       });
       if (items.length === 0) fail(`${path}.items must not be empty`);
       const componentMatch = match(source["match"], table, `${path}.match`);
@@ -568,7 +657,13 @@ function component(
 
     const scale = nonemptyString(source["scale"], `${path}.scale`);
     if (!scales.has(scale)) fail(`${path}.scale references unknown scale ${scale}`);
-    const color = seriesColor(source["color"], table, `${path}.color`);
+    const color = seriesColor(
+      source["color"],
+      table,
+      tables,
+      scales,
+      `${path}.color`,
+    );
 
     if (name === "interval-area/v1" || name === "interval-line/v1") {
       const base = {

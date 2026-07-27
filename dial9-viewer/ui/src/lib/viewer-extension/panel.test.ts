@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ExtensionStore, type ColumnarBatch } from "./columnar.js";
+import { ColumnReader } from "./data.js";
 import { parseExtensionManifestJson } from "./manifest.js";
 import { ExtensionPanel, type PanelViewport } from "./panel.js";
 
@@ -118,10 +119,15 @@ function cpuFixture() {
               y: "cores",
               scale: "usage",
               color: {
-                column: "percent",
+                column: "cores",
+                domain: {
+                  min: 0,
+                  max: { table: "settings", column: "capacity" },
+                  fallback_scale: "usage",
+                },
                 stops: [
                   { at: 0, color: "#4fc3f7" },
-                  { at: 100, color: "#ef4444" },
+                  { at: 1, color: "#ef4444" },
                 ],
               },
             },
@@ -233,6 +239,23 @@ function cpuFixture() {
 }
 
 describe("extension panel components", () => {
+  it("shares interval indexes between layers with the same bounds", () => {
+    const original = ColumnReader.prototype.number;
+    let endReads = 0;
+    const number = vi
+      .spyOn(ColumnReader.prototype, "number")
+      .mockImplementation(function (this: ColumnReader, row: number) {
+        if (this.schema.name === "end") endReads += 1;
+        return original.call(this, row);
+      });
+    try {
+      cpuFixture();
+      expect(endReads).toBe(3);
+    } finally {
+      number.mockRestore();
+    }
+  });
+
   it("renders and presents a CPU panel from only tables plus components", () => {
     const { panel } = cpuFixture();
     const context = new FakeContext();
@@ -876,6 +899,205 @@ describe("extension panel components", () => {
     expect(context.strokes.length).toBeLessThanOrEqual(165);
   });
 
+  it("keeps a transient ramp color when downsampling dense rows", () => {
+    const rows = 30;
+    const manifest = parseExtensionManifestJson(
+      JSON.stringify({
+        version: 1,
+        tables: [
+          {
+            name: "dense",
+            columns: [
+              { name: "x", type: "f64" },
+              { name: "y", type: "f64" },
+              { name: "warning", type: "f64" },
+            ],
+          },
+        ],
+        panels: [
+          {
+            title: "Warnings",
+            x_axis: { type: "linear", domain: [0, rows] },
+            scales: [
+              { name: "y", domain: { mode: "fixed", min: 0, max: 2 } },
+            ],
+            components: [
+              {
+                name: "line/v1",
+                table: "dense",
+                x: "x",
+                y: "y",
+                scale: "y",
+                color: {
+                  column: "warning",
+                  stops: [
+                    { at: 0, color: "#4fc3f7" },
+                    { at: 100, color: "#ef4444" },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const store = new ExtensionStore(manifest);
+    const warnings = new Float64Array(rows);
+    warnings[15] = 100;
+    store.append({
+      table_id: 0,
+      rows,
+      columns: [
+        {
+          type: "f64",
+          values: Float64Array.from({ length: rows }, (_, row) => row).buffer,
+        },
+        { type: "f64", values: new Float64Array(rows).fill(1).buffer },
+        { type: "f64", values: warnings.buffer },
+      ],
+    });
+    const panel = new ExtensionPanel(
+      "warnings",
+      store,
+      manifest.panels[0]!,
+      0,
+    );
+    const context = new FakeContext();
+
+    panel.render(
+      context as unknown as CanvasRenderingContext2D,
+      { ...VIEWPORT, width: VIEWPORT.labelWidth + 1 },
+    );
+
+    expect(context.strokes.some((stroke) => stroke[0] === "#ef4444")).toBe(
+      true,
+    );
+  });
+
+  it("falls back to the visible scale for an unavailable color domain", () => {
+    const manifest = parseExtensionManifestJson(
+      JSON.stringify({
+        version: 1,
+        tables: [
+          {
+            name: "intervals",
+            columns: [
+              { name: "start", type: "u64" },
+              { name: "end", type: "u64" },
+              { name: "cores", type: "f64" },
+            ],
+          },
+          {
+            name: "settings",
+            columns: [
+              { name: "capacity", type: "f64", nullable: true },
+            ],
+          },
+        ],
+        panels: [
+          {
+            title: "Usage",
+            scales: [
+              {
+                name: "usage",
+                domain: {
+                  mode: "visible",
+                  include: [
+                    0,
+                    1,
+                    { table: "settings", column: "capacity" },
+                  ],
+                },
+              },
+            ],
+            components: [
+              {
+                name: "interval-area/v1",
+                table: "intervals",
+                start: "start",
+                end: "end",
+                y: "cores",
+                scale: "usage",
+                color: {
+                  column: "cores",
+                  domain: {
+                    min: 0,
+                    max: { table: "settings", column: "capacity" },
+                    fallback_scale: "usage",
+                  },
+                  stops: [
+                    { at: 0, color: "#4fc3f7" },
+                    { at: 1, color: "#ef4444" },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const populate = (target: ExtensionStore): void => {
+      target.append({
+        table_id: 0,
+        rows: 1,
+        columns: [
+          { type: "u64", values: new BigUint64Array([0n]).buffer },
+          { type: "u64", values: new BigUint64Array([30n]).buffer },
+          { type: "f64", values: new Float64Array([2]).buffer },
+        ],
+      });
+      target.append({
+        table_id: 1,
+        rows: 1,
+        columns: [
+          {
+            type: "f64",
+            values: new Float64Array([0]).buffer,
+            validity: new Uint8Array([0]).buffer,
+          },
+        ],
+      });
+    };
+    const store = new ExtensionStore(manifest);
+    populate(store);
+    const panel = new ExtensionPanel(
+      "usage",
+      store,
+      manifest.panels[0]!,
+      0,
+    );
+    const context = new FakeContext();
+
+    panel.render(context as unknown as CanvasRenderingContext2D, VIEWPORT);
+
+    expect(
+      context.fills.some(
+        (fill) => fill[0] === "#ef4444" && fill[1] === 0.38,
+      ),
+    ).toBe(true);
+
+    const source = structuredClone(manifest) as unknown as {
+      panels: Array<{
+        components: Array<{
+          color?: { domain?: { fallback_scale?: string } };
+        }>;
+      }>;
+    };
+    delete source.panels[0]!.components[0]!.color!.domain!.fallback_scale;
+    const invalidManifest = parseExtensionManifestJson(JSON.stringify(source));
+    const invalidStore = new ExtensionStore(invalidManifest);
+    populate(invalidStore);
+    const invalidPanel = new ExtensionPanel(
+      "invalid",
+      invalidStore,
+      invalidManifest.panels[0]!,
+      0,
+    );
+    expect(invalidPanel.error).toContain(
+      "color domain is unavailable and has no fallback scale",
+    );
+  });
+
   it("hit-tests overlaid line and step layers in reverse Z order", () => {
     const labels = utf8(["line", "line", "line"]);
     const stepLabels = utf8(["step-0", "step-1", "step-2"]);
@@ -981,6 +1203,68 @@ describe("extension panel components", () => {
     expect(panel.presentation(viewport, 3, hit).readout).toEqual([
       { label: "sample", value: "step-1" },
       { label: "visible max", value: "5" },
+    ]);
+  });
+
+  it("clamps a time-weighted aggregate after reduction", () => {
+    const manifest = parseExtensionManifestJson(
+      JSON.stringify({
+        version: 1,
+        tables: [
+          {
+            name: "usage",
+            columns: [
+              { name: "start", type: "u64" },
+              { name: "end", type: "u64" },
+              { name: "raw_percent", type: "f64" },
+            ],
+          },
+        ],
+        panels: [
+          {
+            title: "Usage",
+            components: [
+              {
+                name: "readout/v1",
+                table: "usage",
+                items: [
+                  {
+                    label: "avg",
+                    column: "raw_percent",
+                    reduce: {
+                      name: "time_weighted_mean",
+                      start: "start",
+                      end: "end",
+                    },
+                    clamp: { max: 100 },
+                    unit: "%",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const store = new ExtensionStore(manifest);
+    store.append({
+      table_id: 0,
+      rows: 2,
+      columns: [
+        { type: "u64", values: new BigUint64Array([0n, 10n]).buffer },
+        { type: "u64", values: new BigUint64Array([10n, 20n]).buffer },
+        { type: "f64", values: new Float64Array([200, 50]).buffer },
+      ],
+    });
+    const panel = new ExtensionPanel(
+      "usage",
+      store,
+      manifest.panels[0]!,
+      0,
+    );
+
+    expect(panel.presentation({ ...VIEWPORT, end: 20 }, null).readout).toEqual([
+      { label: "avg", value: "100.0%" },
     ]);
   });
 

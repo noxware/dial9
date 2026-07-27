@@ -45,10 +45,15 @@ const CPU_MANIFEST = {
           y: "cores",
           scale: "usage",
           color: {
-            column: "percent",
+            column: "cores",
+            domain: {
+              min: 0,
+              max: { table: "settings", column: "capacity" },
+              fallback_scale: "usage",
+            },
             stops: [
               { at: 0, color: "#4fc3f7" },
-              { at: 100, color: "#ef4444" },
+              { at: 1, color: "#ef4444" },
             ],
           },
         },
@@ -102,6 +107,7 @@ const CPU_MANIFEST = {
                 start: "start_ns",
                 end: "end_ns",
               },
+              clamp: { min: 0, max: 100 },
             },
             {
               label: "max",
@@ -153,6 +159,14 @@ describe("extension manifest", () => {
     expect(manifest.panels[0]?.components).toHaveLength(6);
     expect(manifest.panels[0]?.components[0]).toMatchObject({
       name: "interval-area/v1",
+      color: {
+        column: "cores",
+        domain: {
+          min: 0,
+          max: { table: "settings", column: "capacity" },
+          fallback_scale: "usage",
+        },
+      },
     });
     expect(manifest.panels[0]?.components[4]).toMatchObject({
       name: "tooltip/v1",
@@ -161,6 +175,74 @@ describe("extension manifest", () => {
         { label: "Cores", column: "cores" },
       ],
     });
+    const readout = manifest.panels[0]?.components[5];
+    expect(readout).toMatchObject({ name: "readout/v1" });
+    if (
+      readout?.name !== "readout/v1" ||
+      "unsupported" in readout
+    ) {
+      throw new Error("test invariant");
+    }
+    expect(readout.items[0]).toMatchObject({
+      label: "avg",
+      clamp: { min: 0, max: 100 },
+    });
+  });
+
+  it("requires a valid aggregate clamp", () => {
+    const source = structuredClone(CPU_MANIFEST) as unknown as {
+      panels: Array<{
+        components: Array<Record<string, unknown>>;
+      }>;
+    };
+    const readout = source.panels[0]!.components[5]!;
+    const item = (readout["items"] as Array<Record<string, unknown>>)[0]!;
+
+    delete item["reduce"];
+    expect(() => parseExtensionManifestJson(JSON.stringify(source))).toThrow(
+      "clamp requires reduce",
+    );
+
+    item["reduce"] = {
+      name: "time_weighted_mean",
+      start: "start_ns",
+      end: "end_ns",
+    };
+    item["clamp"] = { min: 2, max: 1 };
+    expect(() => parseExtensionManifestJson(JSON.stringify(source))).toThrow(
+      "clamp.min must not exceed max",
+    );
+  });
+
+  it("rejects an unknown fallback color scale", () => {
+    const source = structuredClone(CPU_MANIFEST) as unknown as {
+      panels: Array<{
+        components: Array<Record<string, unknown>>;
+      }>;
+    };
+    const area = source.panels[0]!.components[0]!;
+    const color = area["color"] as Record<string, unknown>;
+    const domain = color["domain"] as Record<string, unknown>;
+    domain["fallback_scale"] = "missing";
+
+    expect(() => parseExtensionManifestJson(JSON.stringify(source))).toThrow(
+      "fallback_scale references unknown scale missing",
+    );
+  });
+
+  it("rejects an inverted literal color domain", () => {
+    const source = structuredClone(CPU_MANIFEST) as unknown as {
+      panels: Array<{
+        components: Array<Record<string, unknown>>;
+      }>;
+    };
+    const area = source.panels[0]!.components[0]!;
+    const color = area["color"] as Record<string, unknown>;
+    color["domain"] = { min: 2, max: 1 };
+
+    expect(() => parseExtensionManifestJson(JSON.stringify(source))).toThrow(
+      "domain.min must be less than max",
+    );
   });
 
   it("rejects physical layout and canvas styling", () => {

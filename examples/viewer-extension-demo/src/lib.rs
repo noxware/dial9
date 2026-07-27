@@ -23,7 +23,8 @@ dial9_viewer_extension::manifest!(
             { "name": "window_ns", "type": "u64" },
             { "name": "cpu_ns", "type": "u64" },
             { "name": "cores", "type": "f64" },
-            { "name": "percent", "type": "f64", "nullable": true }
+            { "name": "percent", "type": "f64", "nullable": true },
+            { "name": "raw_percent", "type": "f64", "nullable": true }
           ]
         },
         {
@@ -96,10 +97,15 @@ dial9_viewer_extension::manifest!(
               "y": "cores",
               "scale": "usage",
               "color": {
-                "column": "percent",
+                "column": "cores",
+                "domain": {
+                  "min": 0,
+                  "max": { "table": "settings", "column": "capacity" },
+                  "fallback_scale": "usage"
+                },
                 "stops": [
                   { "at": 0, "color": "#4fc3f7" },
-                  { "at": 100, "color": "#ff7361" }
+                  { "at": 1, "color": "#ff7361" }
                 ]
               }
             },
@@ -111,10 +117,15 @@ dial9_viewer_extension::manifest!(
               "y": "cores",
               "scale": "usage",
               "color": {
-                "column": "percent",
+                "column": "cores",
+                "domain": {
+                  "min": 0,
+                  "max": { "table": "settings", "column": "capacity" },
+                  "fallback_scale": "usage"
+                },
                 "stops": [
                   { "at": 0, "color": "#4fc3f7" },
-                  { "at": 100, "color": "#ff7361" }
+                  { "at": 1, "color": "#ff7361" }
                 ]
               }
             },
@@ -166,12 +177,13 @@ dial9_viewer_extension::manifest!(
                 },
                 {
                   "label": "avg",
-                  "column": "percent",
+                  "column": "raw_percent",
                   "reduce": {
                     "name": "time_weighted_mean",
                     "start": "start_ns",
                     "end": "end_ns"
                   },
+                  "clamp": { "max": 100 },
                   "unit": "%"
                 },
                 {
@@ -432,6 +444,8 @@ struct CpuBatch {
     cores: Vec<f64>,
     percent: Vec<f64>,
     percent_validity: Vec<u8>,
+    raw_percent: Vec<f64>,
+    raw_percent_validity: Vec<u8>,
 }
 
 impl Default for CpuBatch {
@@ -444,6 +458,8 @@ impl Default for CpuBatch {
             cores: Vec::with_capacity(BATCH_ROWS),
             percent: Vec::with_capacity(BATCH_ROWS),
             percent_validity: Vec::with_capacity(BATCH_ROWS.div_ceil(8)),
+            raw_percent: Vec::with_capacity(BATCH_ROWS),
+            raw_percent_validity: Vec::with_capacity(BATCH_ROWS.div_ceil(8)),
         }
     }
 }
@@ -475,10 +491,16 @@ impl CpuBatch {
         self.window_ns.push(window_ns);
         self.cpu_ns.push(cpu_ns);
         self.cores.push(cores);
+        let raw_percent = capacity.map(|value| (cores / value) * 100.0);
         push_optional(
             &mut self.percent,
             &mut self.percent_validity,
-            capacity.map(|value| ((cores / value) * 100.0).min(100.0)),
+            raw_percent.map(|value| value.min(100.0)),
+        );
+        push_optional(
+            &mut self.raw_percent,
+            &mut self.raw_percent_validity,
+            raw_percent,
         );
     }
 
@@ -513,6 +535,10 @@ impl CpuBatch {
                 Column::F64 {
                     values: batch.percent,
                     validity: Some(batch.percent_validity),
+                },
+                Column::F64 {
+                    values: batch.raw_percent,
+                    validity: Some(batch.raw_percent_validity),
                 },
             ],
         )
@@ -945,14 +971,16 @@ mod tests {
         let mut cpu = CpuBatch::default();
         let mut context = ContextBatch::default();
 
-        cpu.push(previous_cpu, current_cpu, Some(2.0));
+        cpu.push(previous_cpu, current_cpu, Some(0.5));
         context.push(previous_context, current_context);
 
         assert_eq!(cpu.start_ns, [10]);
         assert_eq!(cpu.cpu_ns, [10]);
         assert_eq!(cpu.cores, [1.0]);
-        assert_eq!(cpu.percent, [50.0]);
+        assert_eq!(cpu.percent, [100.0]);
         assert_eq!(cpu.percent_validity, [1]);
+        assert_eq!(cpu.raw_percent, [200.0]);
+        assert_eq!(cpu.raw_percent_validity, [1]);
         assert_eq!(context.voluntary_delta, [5]);
         assert_eq!(context.involuntary_delta, [1]);
         assert_eq!(context.voluntary_rate, [500_000_000.0]);

@@ -78,6 +78,10 @@ describe.skipIf(!hasCompiledExtension)(
           interval.totalPercent!,
           12,
         );
+        expect(actual.cell("raw_percent", row)).toBeCloseTo(
+          (interval.cores / expected.availableParallelism!) * 100,
+          12,
+        );
       }
 
       expect(store.table("settings").cell("capacity", 0)).toBe(

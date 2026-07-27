@@ -228,6 +228,10 @@ async function inspectPanels(page) {
           panel.querySelector(".viewer-extension-error")?.textContent ?? "",
       ).filter(Boolean),
       cpuTitle: document.querySelector("#cpu-panel-label")?.textContent?.trim(),
+      legacyCpuReadout:
+        document.querySelector("#cpu-panel-info")?.textContent
+          ?.replace(/\s+/g, " ")
+          .trim() ?? "",
       cpuIndex,
       taskIndex,
       extensionIndices,
@@ -298,6 +302,13 @@ function assertPanelStructure(observation) {
   );
   assert.match(byTitle.get(EXPECTED_TITLES[0]).readout, /\bavg\b/i);
   assert.match(byTitle.get(EXPECTED_TITLES[0]).readout, /\bmax\b/i);
+  // The reference-component style keeps the unit on the final max item; the
+  // legacy panel omits only that suffix. All labels and numeric values match.
+  assert.equal(
+    byTitle.get(EXPECTED_TITLES[0]).readout.replace(/ cores$/, ""),
+    observation.legacyCpuReadout,
+    "WASM and legacy CPU readout values differ",
+  );
   for (const title of EXPECTED_TITLES.slice(1, 3)) {
     assert.match(byTitle.get(title).swatches, /Voluntary/);
     assert.match(byTitle.get(title).swatches, /Involuntary/);
@@ -449,6 +460,7 @@ async function assertCpuTooltip(page) {
       if (text.includes("CPU time")) {
         assert.match(text, /Window/);
         assert.match(text, /Cores/);
+        assert.match(text, /Total CPU/);
         return;
       }
     }
