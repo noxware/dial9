@@ -3,8 +3,9 @@ import { ColumnReader, TableReader } from "./data.js";
 import { formatAxisValue, formatExtensionValue } from "./format.js";
 import {
   clipSegment,
+  interpolateValue,
+  normalizeValue,
   pointToSegmentDistance,
-  type Rectangle,
   type Segment,
 } from "./geometry.js";
 import type {
@@ -21,6 +22,7 @@ import type {
   PresentationComponent,
   ReadoutComponent,
   ReadoutItem,
+  ScalarReference,
   ScaleSpec,
   SeriesColor,
   SwatchComponent,
@@ -72,6 +74,7 @@ interface SortedColumnIndex {
   lowerBound(value: number): number;
   upperBound(value: number): number;
   nearestRow(value: number): number | undefined;
+  rowAtOrBefore(value: number): number | undefined;
   rowRange(
     start: number,
     end: number,
@@ -135,6 +138,8 @@ interface Layout {
   readonly domains: ReadonlyMap<string, readonly [number, number]>;
 }
 
+const SECONDARY_SCALE_WIDTH = 76;
+
 function* drawingRows(
   start: number,
   end: number,
@@ -147,7 +152,10 @@ function* drawingRows(
   for (let row = start; row < end; row += 1) yield row;
 }
 
-function makeSortedIndex(column: ColumnReader): SortedColumnIndex {
+function makeSortedIndex(
+  column: ColumnReader,
+  componentName: DrawingComponent["name"],
+): SortedColumnIndex {
   const values: number[] = [];
   const rows: number[] = [];
   let prior = -Infinity;
@@ -155,8 +163,12 @@ function makeSortedIndex(column: ColumnReader): SortedColumnIndex {
     const value = column.number(row);
     if (value === null) continue;
     if (value < prior) {
+      const hint =
+        componentName === "line/v1" || componentName === "step-line/v1"
+          ? "; use polyline/v1 for arbitrary-order paths"
+          : "";
       throw new Error(
-        `${column.schema.name} must be nondecreasing; use polyline/v1 for source-order paths`,
+        `${componentName} requires ${column.schema.name} to be nondecreasing${hint}`,
       );
     }
     prior = value;
@@ -197,6 +209,10 @@ function makeSortedIndex(column: ColumnReader): SortedColumnIndex {
       return value - numeric[at - 1]! <= numeric[at]! - value
         ? sourceRows[at - 1]
         : sourceRows[at];
+    },
+    rowAtOrBefore(value): number | undefined {
+      const at = upperBound(value);
+      return at === 0 ? undefined : sourceRows[at - 1];
     },
     rowRange(start, end, pad): readonly [number, number] {
       if (numeric.length === 0) return [0, 0];
@@ -297,6 +313,7 @@ export class ExtensionPanel {
     this.spec = spec;
     this.#store = store;
     let error: string | undefined;
+    let linearDomain: readonly [number, number] | undefined;
     try {
       for (const [componentIndex, component] of spec.components.entries()) {
         if ("unsupported" in component) {
@@ -321,14 +338,17 @@ export class ExtensionPanel {
             break;
         }
       }
+      this.#validateScalarReferences();
+      this.#validateFixedScales();
+      linearDomain =
+        spec.x_axis.type === "linear"
+          ? spec.x_axis.domain ?? this.#deriveLinearDomain()
+          : undefined;
     } catch (cause) {
       error = cause instanceof Error ? cause.message : String(cause);
     }
     this.error = error;
-    this.#linearDomain =
-      spec.x_axis.type === "linear"
-        ? spec.x_axis.domain ?? this.#deriveLinearDomain()
-        : undefined;
+    this.#linearDomain = linearDomain;
   }
 
   render(
@@ -342,36 +362,29 @@ export class ExtensionPanel {
     context.fillRect(0, 0, width, height);
     if (this.error !== undefined || layout.drawWidth <= 0) return;
 
-    for (const drawing of this.#drawings) {
-      if (drawing.kind !== "background") continue;
-      const value =
-        typeof drawing.spec.color === "string"
-          ? drawing.spec.color
-          : this.#cellValue(
-              drawing.spec.color.table,
-              drawing.spec.color.column,
-            );
-      if (typeof value === "string") {
-        context.fillStyle = value;
-        context.fillRect(0, 0, width, height);
-      }
-    }
-
-    const firstDomain = this.spec.scales[0];
-    if (firstDomain !== undefined) {
-      const domain = layout.domains.get(firstDomain.name);
+    for (const [index, scale] of this.spec.scales.entries()) {
+      const domain = layout.domains.get(scale.name);
       if (domain !== undefined) {
         context.fillStyle = "#667";
         context.font = "10px monospace";
-        context.textAlign = "right";
+        const secondary = index > 0;
+        context.textAlign = secondary ? "left" : "right";
+        const x = secondary
+          ? labelWidth +
+            layout.drawWidth +
+            6 +
+            (index - 1) * SECONDARY_SCALE_WIDTH
+          : labelWidth - 6;
         context.fillText(
-          formatAxisValue(domain[1]),
-          labelWidth - 6,
+          secondary
+            ? `${scale.name} ${formatAxisValue(domain[1])}`
+            : formatAxisValue(domain[1]),
+          x,
           layout.chartTop + 9,
         );
         context.fillText(
           formatAxisValue(domain[0]),
-          labelWidth - 6,
+          x,
           layout.chartTop + layout.chartHeight,
         );
       }
@@ -465,6 +478,7 @@ export class ExtensionPanel {
   presentation(
     viewport: PanelViewport,
     pointerX: number | null,
+    hit: PanelHit | null = null,
   ): PanelPresentation {
     if (this.error !== undefined) return { swatches: [], readout: [] };
     const layout = this.#layout(viewport);
@@ -474,7 +488,7 @@ export class ExtensionPanel {
       if (component.name === "swatch/v1") {
         swatches.push(this.#swatch(component));
       } else if (component.name === "readout/v1") {
-        readout.push(...this.#readout(component, layout, pointerX));
+        readout.push(...this.#readout(component, layout, pointerX, hit));
       }
     }
     return { swatches, readout };
@@ -488,10 +502,10 @@ export class ExtensionPanel {
     ) {
       return null;
     }
-    return (
-      layout.xStart +
-      ((pixelX - viewport.labelWidth) / layout.drawWidth) *
-        (layout.xEnd - layout.xStart)
+    return interpolateValue(
+      layout.xStart,
+      layout.xEnd,
+      (pixelX - viewport.labelWidth) / layout.drawWidth,
     );
   }
 
@@ -503,12 +517,73 @@ export class ExtensionPanel {
     return table;
   }
 
-  #index(column: ColumnReader): SortedColumnIndex {
+  #index(
+    column: ColumnReader,
+    componentName: DrawingComponent["name"],
+  ): SortedColumnIndex {
     let index = this.#sortedIndexes.get(column);
     if (index !== undefined) return index;
-    index = makeSortedIndex(column);
+    index = makeSortedIndex(column, componentName);
     this.#sortedIndexes.set(column, index);
     return index;
+  }
+
+  #validateScalarReferences(): void {
+    const validate = (
+      value: number | string | ScalarReference | undefined,
+    ): void => {
+      if (typeof value !== "object" || value === null) return;
+      const rows = this.#store.table(value.table).rowCount;
+      if (rows !== 1) {
+        throw new Error(
+          `Scalar reference ${value.table}.${value.column} requires exactly one row; got ${rows}`,
+        );
+      }
+    };
+    for (const scale of this.spec.scales) {
+      if (scale.domain.mode === "visible") {
+        for (const value of scale.domain.include) validate(value);
+      } else {
+        validate(scale.domain.min);
+        validate(scale.domain.max);
+      }
+    }
+    for (const component of this.spec.components) {
+      if ("unsupported" in component) continue;
+      switch (component.name) {
+        case "background/v1":
+          validate(component.color);
+          break;
+        case "interval-area/v1":
+          validate(component.baseline);
+          break;
+        case "horizontal-rule/v1":
+          validate(component.y);
+          break;
+        case "swatch/v1":
+          validate(component.value);
+          break;
+      }
+    }
+  }
+
+  #validateFixedScales(): void {
+    for (const scale of this.spec.scales) {
+      if (scale.domain.mode !== "fixed") continue;
+      const minimum = this.#numberValue(scale.domain.min);
+      const maximum = this.#numberValue(scale.domain.max);
+      if (
+        minimum === null ||
+        maximum === null ||
+        !Number.isFinite(minimum) ||
+        !Number.isFinite(maximum) ||
+        minimum >= maximum
+      ) {
+        throw new Error(
+          `Fixed scale ${scale.name} requires finite min less than max`,
+        );
+      }
+    }
   }
 
   #compileDrawing(
@@ -535,7 +610,7 @@ export class ExtensionPanel {
         const table = this.#table(component.table);
         const start = table.column(component.start);
         const end = table.column(component.end);
-        const startIndex = this.#index(start);
+        const startIndex = this.#index(start, component.name);
         const prefixMaxEnd = new Float64Array(table.rowCount);
         let maximum = -Infinity;
         for (let row = 0; row < table.rowCount; row += 1) {
@@ -581,7 +656,9 @@ export class ExtensionPanel {
               ? undefined
               : table.column(component.color.column),
           xIndex:
-            component.name === "polyline/v1" ? undefined : this.#index(x),
+            component.name === "polyline/v1"
+              ? undefined
+              : this.#index(x, component.name),
           channels: { x: component.x, y: component.y },
         };
       }
@@ -619,7 +696,10 @@ export class ExtensionPanel {
         : this.#linearDomain ?? [0, 1];
     const drawWidth = Math.max(
       0,
-      viewport.width - viewport.labelWidth - (viewport.rightInset ?? 0),
+      viewport.width -
+        viewport.labelWidth -
+        (viewport.rightInset ?? 0) -
+        Math.max(0, this.spec.scales.length - 1) * SECONDARY_SCALE_WIDTH,
     );
     const chartTop = 20;
     const chartHeight = Math.max(1, viewport.height - 28);
@@ -676,12 +756,7 @@ export class ExtensionPanel {
           include(this.#numberValue(drawing.spec.baseline));
         }
       } else if (drawing.kind === "point") {
-        const [start, end] = this.#visibleRows(drawing, xStart, xEnd);
-        for (let row = start; row < end; row += 1) {
-          if (this.#rowIntersectsRange(drawing, row, xStart, xEnd)) {
-            include(drawing.y.number(row));
-          }
-        }
+        this.#includePointDomain(drawing, xStart, xEnd, include);
       }
     }
     if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) return [0, 1];
@@ -691,6 +766,58 @@ export class ExtensionPanel {
       return [minimum - padding, maximum + padding];
     }
     return [minimum, maximum];
+  }
+
+  #includePointDomain(
+    drawing: PointRuntime,
+    xStart: number,
+    xEnd: number,
+    include: (value: number | null) => void,
+  ): void {
+    const [start, end] = this.#visibleRows(drawing, xStart, xEnd);
+    let prior:
+      | { readonly x: number; readonly y: number }
+      | undefined;
+    for (let row = start; row < end; row += 1) {
+      const x = drawing.x.number(row);
+      const y = drawing.y.number(row);
+      if (x === null || y === null) {
+        prior = undefined;
+        continue;
+      }
+      if (x >= xStart && x <= xEnd) include(y);
+      if (prior !== undefined) {
+        const minimumX = Math.min(prior.x, x);
+        const maximumX = Math.max(prior.x, x);
+        if (maximumX >= xStart && minimumX <= xEnd) {
+          if (drawing.spec.name === "step-line/v1") {
+            include(prior.y);
+            if (x >= xStart && x <= xEnd) include(y);
+          } else if (x === prior.x) {
+            include(prior.y);
+            include(y);
+          } else {
+            const clippedStart = Math.max(minimumX, xStart);
+            const clippedEnd = Math.min(maximumX, xEnd);
+            include(
+              interpolateValue(
+                prior.y,
+                y,
+                normalizeValue(clippedStart, prior.x, x),
+              ),
+            );
+            include(
+              interpolateValue(
+                prior.y,
+                y,
+                normalizeValue(clippedEnd, prior.x, x),
+              ),
+            );
+          }
+        }
+      }
+      prior = { x, y };
+    }
   }
 
   #fixedDomain(domain: FixedScaleDomain): readonly [number, number] {
@@ -713,8 +840,7 @@ export class ExtensionPanel {
   #x(value: number, layout: Layout): number {
     return (
       layout.viewport.labelWidth +
-      ((value - layout.xStart) / (layout.xEnd - layout.xStart)) *
-        layout.drawWidth
+      normalizeValue(value, layout.xStart, layout.xEnd) * layout.drawWidth
     );
   }
 
@@ -723,17 +849,31 @@ export class ExtensionPanel {
     return (
       layout.chartTop +
       layout.chartHeight -
-      ((value - domain[0]) / (domain[1] - domain[0])) * layout.chartHeight
+      normalizeValue(value, domain[0], domain[1]) * layout.chartHeight
     );
   }
 
-  #plotRectangle(layout: Layout): Rectangle {
-    return {
-      left: layout.viewport.labelWidth,
-      top: layout.chartTop,
-      right: layout.viewport.labelWidth + layout.drawWidth,
-      bottom: layout.chartTop + layout.chartHeight,
-    };
+  #projectSegment(
+    segment: Segment,
+    scale: string,
+    layout: Layout,
+  ): Segment | undefined {
+    const domain = layout.domains.get(scale);
+    if (domain === undefined) return undefined;
+    const clipped = clipSegment(segment, {
+      left: layout.xStart,
+      right: layout.xEnd,
+      top: domain[0],
+      bottom: domain[1],
+    });
+    return clipped === undefined
+      ? undefined
+      : {
+          x1: this.#x(clipped.x1, layout),
+          y1: this.#y(clipped.y1, scale, layout),
+          x2: this.#x(clipped.x2, layout),
+          y2: this.#y(clipped.y2, scale, layout),
+        };
   }
 
   #visibleRows(
@@ -785,6 +925,23 @@ export class ExtensionPanel {
     drawing: DrawingRuntime,
   ): void {
     if (drawing.kind === "background") {
+      const value =
+        typeof drawing.spec.color === "string"
+          ? drawing.spec.color
+          : this.#cellValue(
+              drawing.spec.color.table,
+              drawing.spec.color.column,
+            );
+      if (typeof value === "string") {
+        context.fillStyle = value;
+        context.globalAlpha = 1;
+        context.fillRect(
+          layout.viewport.labelWidth,
+          layout.chartTop,
+          layout.drawWidth,
+          layout.chartHeight,
+        );
+      }
       return;
     }
     if (drawing.kind === "rule") {
@@ -793,10 +950,15 @@ export class ExtensionPanel {
       context.strokeStyle = drawing.spec.color;
       this.#stroke(context, drawing.spec);
       context.globalAlpha = 1;
-      const y = this.#y(value, drawing.spec.scale, layout);
-      if (y < layout.chartTop || y > layout.chartTop + layout.chartHeight) {
+      const domain = layout.domains.get(drawing.spec.scale);
+      if (
+        domain === undefined ||
+        value < domain[0] ||
+        value > domain[1]
+      ) {
         return;
       }
+      const y = this.#y(value, drawing.spec.scale, layout);
       context.beginPath();
       context.moveTo(layout.viewport.labelWidth, y);
       context.lineTo(layout.viewport.labelWidth + layout.drawWidth, y);
@@ -839,26 +1001,29 @@ export class ExtensionPanel {
           xEnd === null ||
           value === null ||
           xEnd <= xStart ||
-          xEnd < layout.xStart ||
-          xStart > layout.xEnd
+          xEnd <= layout.xStart ||
+          xStart >= layout.xEnd
         ) {
           prior = undefined;
           continue;
         }
         const x1 = this.#x(Math.max(xStart, layout.xStart), layout);
         const x2 = this.#x(Math.min(xEnd, layout.xEnd), layout);
-        const y = this.#y(value, drawing.spec.scale, layout);
         const color = this.#rowColor(drawing, row);
         if (drawing.spec.name === "interval-area/v1") {
           const baseline = this.#numberValue(drawing.spec.baseline);
           if (baseline === null) continue;
-          const baselineY = this.#y(baseline, drawing.spec.scale, layout);
-          const top = layout.chartTop;
-          const bottom = layout.chartTop + layout.chartHeight;
-          const clippedY = Math.max(top, Math.min(bottom, y));
-          const clippedBaselineY = Math.max(
-            top,
-            Math.min(bottom, baselineY),
+          const domain = layout.domains.get(drawing.spec.scale);
+          if (domain === undefined) continue;
+          const clippedY = this.#y(
+            Math.max(domain[0], Math.min(domain[1], value)),
+            drawing.spec.scale,
+            layout,
+          );
+          const clippedBaselineY = this.#y(
+            Math.max(domain[0], Math.min(domain[1], baseline)),
+            drawing.spec.scale,
+            layout,
           );
           context.fillStyle = color;
           context.globalAlpha = 0.38;
@@ -880,15 +1045,15 @@ export class ExtensionPanel {
             xStart >= layout.xStart &&
             xStart <= layout.xEnd
           ) {
-            const connectorX = this.#x(xStart, layout);
-            const connector = clipSegment(
+            const connector = this.#projectSegment(
               {
-                x1: connectorX,
-                y1: this.#y(prior.value, drawing.spec.scale, layout),
-                x2: connectorX,
-                y2: y,
+                x1: xStart,
+                y1: prior.value,
+                x2: xStart,
+                y2: value,
               },
-              this.#plotRectangle(layout),
+              drawing.spec.scale,
+              layout,
             );
             if (connector !== undefined) {
               context.beginPath();
@@ -897,10 +1062,13 @@ export class ExtensionPanel {
               context.stroke();
             }
           }
+          const domain = layout.domains.get(drawing.spec.scale);
           if (
-            y >= layout.chartTop &&
-            y <= layout.chartTop + layout.chartHeight
+            domain !== undefined &&
+            value >= domain[0] &&
+            value <= domain[1]
           ) {
+            const y = this.#y(value, drawing.spec.scale, layout);
             context.beginPath();
             context.moveTo(x1, y);
             context.lineTo(x2, y);
@@ -946,9 +1114,12 @@ export class ExtensionPanel {
         ? drawing.spec.color
         : undefined;
     if (constantColor !== undefined) context.strokeStyle = constantColor;
-    const rectangle = this.#plotRectangle(layout);
     const append = (segment: Segment, color: string): boolean => {
-      const clipped = clipSegment(segment, rectangle);
+      const clipped = this.#projectSegment(
+        segment,
+        drawing.spec.scale,
+        layout,
+      );
       if (clipped === undefined) return false;
       context.strokeStyle = color;
       context.beginPath();
@@ -960,25 +1131,26 @@ export class ExtensionPanel {
     let prior:
       | {
           readonly row: number;
-          readonly x: number;
-          readonly y: number;
+          readonly xValue: number;
+          readonly yValue: number;
           connected: boolean;
         }
       | undefined;
     const drawIsolatedPoint = (): void => {
+      if (prior === undefined || prior.connected) return;
+      const domain = layout.domains.get(drawing.spec.scale);
       if (
-        prior === undefined ||
-        prior.connected ||
-        prior.x < rectangle.left ||
-        prior.x > rectangle.right ||
-        prior.y < rectangle.top ||
-        prior.y > rectangle.bottom
-      ) {
-        return;
-      }
+        domain === undefined ||
+        prior.xValue < layout.xStart ||
+        prior.xValue > layout.xEnd ||
+        prior.yValue < domain[0] ||
+        prior.yValue > domain[1]
+      ) return;
+      const x = this.#x(prior.xValue, layout);
+      const y = this.#y(prior.yValue, drawing.spec.scale, layout);
       context.fillStyle =
         constantColor ?? this.#rowColor(drawing, prior.row);
-      context.fillRect(prior.x - 1.5, prior.y - 1.5, 3, 3);
+      context.fillRect(x - 1.5, y - 1.5, 3, 3);
     };
     for (const row of drawingRows(start, end, sampled)) {
       const xValue = row === SAMPLE_GAP ? null : drawing.x.number(row);
@@ -990,8 +1162,8 @@ export class ExtensionPanel {
       }
       const current = {
         row,
-        x: this.#x(xValue, layout),
-        y: this.#y(yValue, drawing.spec.scale, layout),
+        xValue,
+        yValue,
         connected: false,
       };
       if (prior !== undefined) {
@@ -1000,19 +1172,19 @@ export class ExtensionPanel {
         if (drawing.spec.name === "step-line/v1") {
           const horizontal = append(
             {
-              x1: prior.x,
-              y1: prior.y,
-              x2: current.x,
-              y2: prior.y,
+              x1: prior.xValue,
+              y1: prior.yValue,
+              x2: current.xValue,
+              y2: prior.yValue,
             },
             color,
           );
           const vertical = append(
             {
-              x1: current.x,
-              y1: prior.y,
-              x2: current.x,
-              y2: current.y,
+              x1: current.xValue,
+              y1: prior.yValue,
+              x2: current.xValue,
+              y2: current.yValue,
             },
             color,
           );
@@ -1020,10 +1192,10 @@ export class ExtensionPanel {
         } else {
           connected = append(
             {
-              x1: prior.x,
-              y1: prior.y,
-              x2: current.x,
-              y2: current.y,
+              x1: prior.xValue,
+              y1: prior.yValue,
+              x2: current.xValue,
+              y2: current.yValue,
             },
             color,
           );
@@ -1046,11 +1218,14 @@ export class ExtensionPanel {
   ): number | undefined {
     if (drawing.kind === "background" || drawing.kind === "rule") return undefined;
     if (drawing.kind === "interval") {
-      const xValue =
-        layout.xStart +
-        ((x - layout.viewport.labelWidth) / layout.drawWidth) *
-          (layout.xEnd - layout.xStart);
+      const xValue = interpolateValue(
+        layout.xStart,
+        layout.xEnd,
+        (x - layout.viewport.labelWidth) / layout.drawWidth,
+      );
       const [start, end] = this.#visibleRows(drawing, xValue, xValue);
+      const domain = layout.domains.get(drawing.spec.scale);
+      if (domain === undefined) return undefined;
       for (let row = end - 1; row >= start; row -= 1) {
         const rowStart = drawing.start.number(row);
         const rowEnd = drawing.end.number(row);
@@ -1064,9 +1239,12 @@ export class ExtensionPanel {
         ) {
           continue;
         }
-        const valueY = this.#y(value, drawing.spec.scale, layout);
         if (drawing.spec.name === "interval-line/v1") {
-          if (Math.abs(y - valueY) <= 6) return row;
+          if (
+            value >= domain[0] &&
+            value <= domain[1] &&
+            Math.abs(y - this.#y(value, drawing.spec.scale, layout)) <= 6
+          ) return row;
           if (row > 0) {
             const previousEnd = drawing.end.number(row - 1);
             const previousValue = drawing.y.number(row - 1);
@@ -1074,18 +1252,15 @@ export class ExtensionPanel {
               previousEnd === rowStart &&
               previousValue !== null
             ) {
-              const connector = clipSegment(
+              const connector = this.#projectSegment(
                 {
-                  x1: this.#x(rowStart, layout),
-                  y1: this.#y(
-                    previousValue,
-                    drawing.spec.scale,
-                    layout,
-                  ),
-                  x2: this.#x(rowStart, layout),
-                  y2: valueY,
+                  x1: rowStart,
+                  y1: previousValue,
+                  x2: rowStart,
+                  y2: value,
                 },
-                this.#plotRectangle(layout),
+                drawing.spec.scale,
+                layout,
               );
               if (
                 connector !== undefined &&
@@ -1101,7 +1276,16 @@ export class ExtensionPanel {
         } else {
           const baseline = this.#numberValue(drawing.spec.baseline);
           if (baseline === null) continue;
-          const baselineY = this.#y(baseline, drawing.spec.scale, layout);
+          const valueY = this.#y(
+            Math.max(domain[0], Math.min(domain[1], value)),
+            drawing.spec.scale,
+            layout,
+          );
+          const baselineY = this.#y(
+            Math.max(domain[0], Math.min(domain[1], baseline)),
+            drawing.spec.scale,
+            layout,
+          );
           if (
             y >= Math.min(valueY, baselineY) - 3 &&
             y <= Math.max(valueY, baselineY) + 3
@@ -1113,22 +1297,32 @@ export class ExtensionPanel {
       return undefined;
     }
 
-    const xValue =
-      layout.xStart +
-      ((x - layout.viewport.labelWidth) / layout.drawWidth) *
-        (layout.xEnd - layout.xStart);
-    const tolerance =
-      (Math.abs(layout.xEnd - layout.xStart) * 6) / layout.drawWidth;
+    const toleranceStart = interpolateValue(
+      layout.xStart,
+      layout.xEnd,
+      (x - layout.viewport.labelWidth - 6) / layout.drawWidth,
+    );
+    const toleranceEnd = interpolateValue(
+      layout.xStart,
+      layout.xEnd,
+      (x - layout.viewport.labelWidth + 6) / layout.drawWidth,
+    );
     const [start, end] =
       drawing.spec.name === "polyline/v1"
         ? this.#visibleRows(drawing, layout.xStart, layout.xEnd)
         : this.#visibleRows(
             drawing,
-            xValue - tolerance,
-            xValue + tolerance,
+            Math.min(toleranceStart, toleranceEnd),
+            Math.max(toleranceStart, toleranceEnd),
           );
+    const domain = layout.domains.get(drawing.spec.scale);
+    if (domain === undefined) return undefined;
     let prior:
-      | { readonly row: number; readonly x: number; readonly y: number }
+      | {
+          readonly row: number;
+          readonly xValue: number;
+          readonly yValue: number;
+        }
       | undefined;
     let best: { readonly row: number; readonly distance: number } | undefined;
     for (let row = start; row < end; row += 1) {
@@ -1140,30 +1334,49 @@ export class ExtensionPanel {
       }
       const current = {
         row,
-        x: this.#x(xValue, layout),
-        y: this.#y(yValue, drawing.spec.scale, layout),
+        xValue,
+        yValue,
       };
+      if (
+        xValue >= layout.xStart &&
+        xValue <= layout.xEnd &&
+        yValue >= domain[0] &&
+        yValue <= domain[1]
+      ) {
+        const distance = Math.hypot(
+          x - this.#x(xValue, layout),
+          y - this.#y(yValue, drawing.spec.scale, layout),
+        );
+        if (
+          distance <= 6 &&
+          (best === undefined || distance < best.distance)
+        ) {
+          best = { row, distance };
+        }
+      }
       if (prior !== undefined) {
         let distance: number;
         let hitRow: number;
         if (drawing.spec.name === "step-line/v1") {
-          const horizontalSegment = clipSegment(
+          const horizontalSegment = this.#projectSegment(
             {
-              x1: prior.x,
-              y1: prior.y,
-              x2: current.x,
-              y2: prior.y,
+              x1: prior.xValue,
+              y1: prior.yValue,
+              x2: current.xValue,
+              y2: prior.yValue,
             },
-            this.#plotRectangle(layout),
+            drawing.spec.scale,
+            layout,
           );
-          const verticalSegment = clipSegment(
+          const verticalSegment = this.#projectSegment(
             {
-              x1: current.x,
-              y1: prior.y,
-              x2: current.x,
-              y2: current.y,
+              x1: current.xValue,
+              y1: prior.yValue,
+              x2: current.xValue,
+              y2: current.yValue,
             },
-            this.#plotRectangle(layout),
+            drawing.spec.scale,
+            layout,
           );
           const horizontal =
             horizontalSegment === undefined
@@ -1176,26 +1389,72 @@ export class ExtensionPanel {
           distance = Math.min(horizontal, vertical);
           hitRow =
             horizontal <= vertical ||
-            Math.abs(y - prior.y) <= Math.abs(y - current.y)
+            Math.abs(
+              y -
+                this.#y(
+                  Math.max(domain[0], Math.min(domain[1], prior.yValue)),
+                  drawing.spec.scale,
+                  layout,
+                ),
+            ) <=
+              Math.abs(
+                y -
+                  this.#y(
+                    Math.max(domain[0], Math.min(domain[1], current.yValue)),
+                    drawing.spec.scale,
+                    layout,
+                  ),
+              )
               ? prior.row
               : current.row;
         } else {
-          const segment = clipSegment(
+          const segment = this.#projectSegment(
             {
-              x1: prior.x,
-              y1: prior.y,
-              x2: current.x,
-              y2: current.y,
+              x1: prior.xValue,
+              y1: prior.yValue,
+              x2: current.xValue,
+              y2: current.yValue,
             },
-            this.#plotRectangle(layout),
+            drawing.spec.scale,
+            layout,
           );
           distance =
             segment === undefined
               ? Infinity
               : pointToSegmentDistance(x, y, segment);
           hitRow =
-            Math.hypot(x - prior.x, y - prior.y) <=
-            Math.hypot(x - current.x, y - current.y)
+            Math.hypot(
+              x -
+                this.#x(
+                  Math.max(
+                    layout.xStart,
+                    Math.min(layout.xEnd, prior.xValue),
+                  ),
+                  layout,
+                ),
+              y -
+                this.#y(
+                  Math.max(domain[0], Math.min(domain[1], prior.yValue)),
+                  drawing.spec.scale,
+                  layout,
+                ),
+            ) <=
+            Math.hypot(
+              x -
+                this.#x(
+                  Math.max(
+                    layout.xStart,
+                    Math.min(layout.xEnd, current.xValue),
+                  ),
+                  layout,
+                ),
+              y -
+                this.#y(
+                  Math.max(domain[0], Math.min(domain[1], current.yValue)),
+                  drawing.spec.scale,
+                  layout,
+                ),
+            )
               ? prior.row
               : current.row;
         }
@@ -1228,6 +1487,23 @@ export class ExtensionPanel {
     x: number,
   ): number | undefined {
     if (drawing.kind === "point") {
+      if (
+        drawing.spec.name === "step-line/v1" &&
+        drawing.xIndex !== undefined
+      ) {
+        const row = drawing.xIndex.rowAtOrBefore(x);
+        if (row === undefined || drawing.y.number(row) === null) {
+          return undefined;
+        }
+        const rowX = drawing.x.number(row);
+        if (rowX === x) return row;
+        if (row + 1 >= drawing.table.rowCount) return undefined;
+        const nextX = drawing.x.number(row + 1);
+        const nextY = drawing.y.number(row + 1);
+        return nextX !== null && nextY !== null && x < nextX
+          ? row
+          : undefined;
+      }
       if (drawing.xIndex !== undefined) return drawing.xIndex.nearestRow(x);
       let best: { row: number; distance: number } | undefined;
       for (let row = 0; row < drawing.table.rowCount; row += 1) {
@@ -1260,13 +1536,25 @@ export class ExtensionPanel {
     component: ReadoutComponent,
     layout: Layout,
     pointerX: number | null,
+    hit: PanelHit | null,
   ): readonly PresentedValue[] {
     const drawing = this.#matchingDrawing(component.table, component.match);
     const table = this.#table(component.table);
+    const hitRow =
+      hit !== null &&
+      hit.instanceId === this.instanceId &&
+      hit.panelIndex === this.panelIndex &&
+      hit.table === component.table &&
+      hit.row >= 0 &&
+      hit.row < table.rowCount &&
+      channelsMatch(hit.channels, component.match)
+        ? hit.row
+        : undefined;
     const sampledRow =
-      pointerX === null || drawing === undefined
+      hitRow ??
+      (pointerX === null || drawing === undefined
         ? undefined
-        : this.#sampleRow(drawing, pointerX);
+        : this.#sampleRow(drawing, pointerX));
     return component.items.flatMap((item) => {
       let value: Cell;
       const reducer = item.reduce;
@@ -1382,7 +1670,21 @@ export class ExtensionPanel {
   ): boolean {
     if (drawing.kind === "point") {
       const x = drawing.x.number(row);
-      return x !== null && x >= startValue && x <= endValue;
+      const y = drawing.y.number(row);
+      if (x === null || y === null) return false;
+      if (x >= startValue && x <= endValue) return true;
+      if (
+        drawing.spec.name !== "step-line/v1" ||
+        row + 1 >= drawing.table.rowCount
+      ) return false;
+      const nextX = drawing.x.number(row + 1);
+      const nextY = drawing.y.number(row + 1);
+      return (
+        nextX !== null &&
+        nextY !== null &&
+        x < endValue &&
+        nextX > startValue
+      );
     }
     const start = drawing.start.number(row);
     const end = drawing.end.number(row);

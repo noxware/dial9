@@ -30,4 +30,20 @@ describe("viewer extension geometry", () => {
     expect(pointToSegmentDistance(5, 4, segment)).toBe(4);
     expect(pointToSegmentDistance(-3, 4, segment)).toBe(5);
   });
+
+  it("clips extreme finite coordinates without producing infinities", () => {
+    const clipped = clipSegment(
+      {
+        x1: -Number.MAX_VALUE,
+        y1: -Number.MAX_VALUE,
+        x2: Number.MAX_VALUE,
+        y2: Number.MAX_VALUE,
+      },
+      RECTANGLE,
+    );
+    expect(clipped).toBeDefined();
+    expect(Object.values(clipped!).every(Number.isFinite)).toBe(true);
+    expect(Object.values(clipped!).every((value) => value >= 0 && value <= 10))
+      .toBe(true);
+  });
 });

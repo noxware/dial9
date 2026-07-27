@@ -1,0 +1,39 @@
+import { describe, expect, it } from "vitest";
+import {
+  minMaxRowsByPixel,
+  SAMPLE_GAP,
+} from "./sampling.js";
+
+describe("viewer extension sampling", () => {
+  it("keeps source-order endpoints and extrema in a dense pixel", () => {
+    const values = Array.from({ length: 20 }, () => 5);
+    values[3] = -1;
+    values[7] = 10;
+
+    expect(
+      minMaxRowsByPixel(
+        0,
+        values.length,
+        1,
+        0,
+        20,
+        (row) => row,
+        (row) => values[row]!,
+      ),
+    ).toEqual([0, 3, 7, 19]);
+  });
+
+  it("retains a gap between independently sampled runs", () => {
+    expect(
+      minMaxRowsByPixel(
+        0,
+        20,
+        1,
+        0,
+        20,
+        (row) => row,
+        (row) => (row === 10 ? null : row),
+      ),
+    ).toEqual([0, 9, SAMPLE_GAP, 11, 19]);
+  });
+});

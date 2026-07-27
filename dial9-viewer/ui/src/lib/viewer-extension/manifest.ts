@@ -73,6 +73,7 @@ export interface BackgroundComponent {
 export interface IntervalAreaComponent {
   readonly name: "interval-area/v1";
   readonly table: string;
+  /** Rows must be nondecreasing by this column. */
   readonly start: string;
   readonly end: string;
   readonly y: string;
@@ -84,6 +85,7 @@ export interface IntervalAreaComponent {
 export interface IntervalLineComponent {
   readonly name: "interval-line/v1";
   readonly table: string;
+  /** Rows must be nondecreasing by this column. */
   readonly start: string;
   readonly end: string;
   readonly y: string;
@@ -94,6 +96,10 @@ export interface IntervalLineComponent {
 export interface PointLineComponent {
   readonly name: "line/v1" | "step-line/v1" | "polyline/v1";
   readonly table: string;
+  /**
+   * `line/v1` and `step-line/v1` require nondecreasing values. `polyline/v1`
+   * is the arbitrary-order primitive and always preserves source row order.
+   */
   readonly x: string;
   readonly y: string;
   readonly scale: string;
@@ -338,9 +344,13 @@ function colorValue(
   tables: ReadonlyMap<string, TableSchema>,
   path: string,
 ): ColorValue {
-  return typeof value === "string"
-    ? nonemptyString(value, path)
-    : scalarReference(value, tables, path, false);
+  if (typeof value === "string") return nonemptyString(value, path);
+  const reference = scalarReference(value, tables, path, false);
+  const table = tables.get(reference.table)!;
+  if (columnByName(table, reference.column, `${path}.column`).type !== "utf8") {
+    fail(`${path}.column must reference a UTF-8 column`);
+  }
+  return reference;
 }
 
 function seriesColor(

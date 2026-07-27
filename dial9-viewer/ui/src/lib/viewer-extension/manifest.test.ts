@@ -179,6 +179,33 @@ describe("extension manifest", () => {
     );
   });
 
+  it("requires background scalar colors to come from UTF-8 columns", () => {
+    expect(() =>
+      parseExtensionManifestJson(
+        JSON.stringify({
+          version: 1,
+          tables: [
+            {
+              name: "settings",
+              columns: [{ name: "color", type: "u32" }],
+            },
+          ],
+          panels: [
+            {
+              title: "Background",
+              components: [
+                {
+                  name: "background/v1",
+                  color: { table: "settings", column: "color" },
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+    ).toThrow("color.column must reference a UTF-8 column");
+  });
+
   it("keeps unknown versioned components as panel-local errors", () => {
     const manifest = parseExtensionManifestJson(
       JSON.stringify({

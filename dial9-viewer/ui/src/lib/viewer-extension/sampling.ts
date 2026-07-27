@@ -1,3 +1,5 @@
+import { normalizeValue } from "./geometry.js";
+
 const ROWS_PER_PIXEL = 4;
 export const SAMPLE_GAP = -1;
 
@@ -62,7 +64,7 @@ export function minMaxRowsByPixel(
       0,
       Math.min(
         columns - 1,
-        Math.floor(((x - xStart) / (xEnd - xStart)) * columns),
+        Math.floor(normalizeValue(x, xStart, xEnd) * columns),
       ),
     );
     if (column !== activeColumn) {
@@ -92,4 +94,3 @@ export function minMaxRowsByPixel(
   if (rows.at(-1) === SAMPLE_GAP) rows.pop();
   return rows;
 }
-

@@ -6,6 +6,7 @@ import {
 } from "./coordinator.js";
 import {
   ExtensionPanel,
+  type PanelHit,
   type PanelPresentation,
   type PanelViewport,
   type PresentedValue,
@@ -88,6 +89,8 @@ interface PanelView {
   panel: ExtensionPanel | undefined;
   viewport?: PanelViewport;
   pointerValue: number | null;
+  pointerPosition?: { readonly x: number; readonly y: number };
+  hit: PanelHit | null;
   collapsed: boolean;
 }
 
@@ -331,6 +334,18 @@ export class LegacyViewerExtensionAdapter {
       view.viewport = panelViewport;
       try {
         view.panel.render(context, panelViewport);
+        if (view.pointerPosition !== undefined) {
+          view.pointerValue = view.panel.xValueAt(
+            view.pointerPosition.x,
+            panelViewport,
+          );
+          view.hit =
+            view.panel.hitTest(
+              view.pointerPosition.x,
+              view.pointerPosition.y,
+              panelViewport,
+            ) ?? null;
+        }
         this.#renderPresentation(view);
       } catch (error) {
         this.#failView(view, error);
@@ -527,6 +542,7 @@ export class LegacyViewerExtensionAdapter {
       error: errorElement,
       panel: options.panel,
       pointerValue: null,
+      hit: null,
       collapsed: false,
     };
 
@@ -603,13 +619,15 @@ export class LegacyViewerExtensionAdapter {
     if (bounds.width <= 0 || bounds.height <= 0) return;
     const x = ((event.clientX - bounds.left) / bounds.width) * viewport.width;
     const y = ((event.clientY - bounds.top) / bounds.height) * viewport.height;
+    view.pointerPosition = { x, y };
     view.pointerValue = panel.xValueAt(x, viewport);
+    const hit = panel.hitTest(x, y, viewport);
+    view.hit = hit ?? null;
     this.#renderPresentation(view);
     host.setTimePointer(
       panel.spec.x_axis.type === "time" ? view.pointerValue : null,
     );
 
-    const hit = panel.hitTest(x, y, viewport);
     const items = hit === undefined ? [] : panel.tooltip(hit);
     if (items.length === 0) {
       this.#hideTooltip(view, true);
@@ -620,6 +638,8 @@ export class LegacyViewerExtensionAdapter {
 
   #pointerLeave(view: PanelView): void {
     view.pointerValue = null;
+    delete view.pointerPosition;
+    view.hit = null;
     this.#renderPresentation(view);
     this.#host?.setTimePointer(null);
     this.#hideTooltip(view);
@@ -668,7 +688,11 @@ export class LegacyViewerExtensionAdapter {
     const panel = view.panel;
     const viewport = view.viewport;
     if (panel === undefined || viewport === undefined) return;
-    const presentation = panel.presentation(viewport, view.pointerValue);
+    const presentation = panel.presentation(
+      viewport,
+      view.pointerValue,
+      view.hit,
+    );
     this.#renderSwatches(view, presentation);
     this.#renderReadout(view, presentation);
   }
@@ -735,6 +759,8 @@ export class LegacyViewerExtensionAdapter {
     view.error.textContent = asMessage(error);
     view.swatches.replaceChildren();
     view.readout.replaceChildren();
+    delete view.pointerPosition;
+    view.hit = null;
     this.#hideTooltip(view, true);
   }
 

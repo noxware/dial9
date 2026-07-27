@@ -12,6 +12,31 @@ export interface Rectangle {
   readonly bottom: number;
 }
 
+export function normalizeValue(
+  value: number,
+  start: number,
+  end: number,
+): number {
+  const scale = Math.max(
+    1,
+    Math.abs(value),
+    Math.abs(start),
+    Math.abs(end),
+  );
+  return (
+    (value / scale - start / scale) /
+    (end / scale - start / scale)
+  );
+}
+
+export function interpolateValue(
+  start: number,
+  end: number,
+  ratio: number,
+): number {
+  return (1 - ratio) * start + ratio * end;
+}
+
 export function pointToSegmentDistance(
   x: number,
   y: number,
@@ -42,32 +67,56 @@ export function clipSegment(
 ): Segment | undefined {
   let start = 0;
   let end = 1;
-  const dx = segment.x2 - segment.x1;
-  const dy = segment.y2 - segment.y1;
-  const tests: readonly (readonly [number, number])[] = [
-    [-dx, segment.x1 - rectangle.left],
-    [dx, rectangle.right - segment.x1],
-    [-dy, segment.y1 - rectangle.top],
-    [dy, rectangle.bottom - segment.y1],
-  ];
-  for (const [direction, distance] of tests) {
-    if (direction === 0) {
-      if (distance < 0) return undefined;
-      continue;
-    }
-    const ratio = distance / direction;
-    if (direction < 0) {
-      if (ratio > end) return undefined;
-      start = Math.max(start, ratio);
-    } else {
-      if (ratio < start) return undefined;
-      end = Math.min(end, ratio);
-    }
+  const clipAxis = (
+    first: number,
+    second: number,
+    minimum: number,
+    maximum: number,
+  ): boolean => {
+    if (first === second) return first >= minimum && first <= maximum;
+    let enter = normalizeValue(minimum, first, second);
+    let leave = normalizeValue(maximum, first, second);
+    if (enter > leave) [enter, leave] = [leave, enter];
+    start = Math.max(start, enter);
+    end = Math.min(end, leave);
+    return start <= end;
+  };
+  if (
+    !clipAxis(segment.x1, segment.x2, rectangle.left, rectangle.right) ||
+    !clipAxis(segment.y1, segment.y2, rectangle.top, rectangle.bottom)
+  ) {
+    return undefined;
   }
+  const clamp = (value: number, minimum: number, maximum: number): number => {
+    const clamped = Math.max(minimum, Math.min(maximum, value));
+    const tolerance =
+      Number.EPSILON *
+      8 *
+      Math.max(1, Math.abs(minimum), Math.abs(maximum));
+    if (Math.abs(clamped - minimum) <= tolerance) return minimum;
+    if (Math.abs(clamped - maximum) <= tolerance) return maximum;
+    return clamped;
+  };
   return {
-    x1: segment.x1 + start * dx,
-    y1: segment.y1 + start * dy,
-    x2: segment.x1 + end * dx,
-    y2: segment.y1 + end * dy,
+    x1: clamp(
+      interpolateValue(segment.x1, segment.x2, start),
+      rectangle.left,
+      rectangle.right,
+    ),
+    y1: clamp(
+      interpolateValue(segment.y1, segment.y2, start),
+      rectangle.top,
+      rectangle.bottom,
+    ),
+    x2: clamp(
+      interpolateValue(segment.x1, segment.x2, end),
+      rectangle.left,
+      rectangle.right,
+    ),
+    y2: clamp(
+      interpolateValue(segment.y1, segment.y2, end),
+      rectangle.top,
+      rectangle.bottom,
+    ),
   };
 }

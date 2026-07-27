@@ -13,11 +13,13 @@ class FakeContext {
   readonly fills: readonly unknown[][] = [];
   readonly strokes: readonly unknown[][] = [];
   readonly texts: string[] = [];
+  readonly operations: readonly unknown[][] = [];
   #path: unknown[][] = [];
 
   clearRect(): void {}
   fillRect(...args: unknown[]): void {
     (this.fills as unknown[][]).push([this.fillStyle, this.globalAlpha, ...args]);
+    (this.operations as unknown[][]).push(["fill", this.fillStyle, ...args]);
   }
   fillText(text: string): void {
     this.texts.push(text);
@@ -37,6 +39,7 @@ class FakeContext {
       this.lineWidth,
       ...this.#path,
     ]);
+    (this.operations as unknown[][]).push(["stroke", this.strokeStyle]);
   }
   setLineDash(): void {}
   save(): void {}
@@ -276,13 +279,34 @@ describe("extension panel components", () => {
   });
 
   it("preserves decreasing and repeated polyline coordinates for a dinosaur", () => {
-    const text = utf8(["💩", "❤️", ""]);
+    const body = [
+      [10, 3], [18, 4], [28, 5.8], [40, 7], [52, 6.8], [59, 7.8],
+      [66, 8.4], [76, 8.2], [78, 7], [69, 6.7], [63, 5.4], [68, 4.8],
+      [62, 5.1], [56, 3.8], [56, 1.2], [50, 1.2], [48, 3.5],
+      [38, 3.6], [38, 1.1], [32, 1.1], [34, 4.1], [25, 4.4], [10, 3],
+    ] as const;
+    const flames = [
+      [78, 7.6], [84, 8.5], [82, 7.5], [90, 7.8], [84, 6.8], [78, 7.2],
+    ] as const;
+    const bodyText = utf8([
+      "💩", "💩", "", "", "", "❤️", "❤️", "❤️", "❤️", "❤️", "", "",
+      "", "", "", "", "", "", "", "", "", "💩", "💩",
+    ]);
+    const flameText = utf8(flames.map(() => "🔥"));
     const manifest = parseExtensionManifestJson(
       JSON.stringify({
         version: 1,
         tables: [
           {
-            name: "dino",
+            name: "dino_body",
+            columns: [
+              { name: "x", type: "f64" },
+              { name: "y", type: "f64" },
+              { name: "message", type: "utf8" },
+            ],
+          },
+          {
+            name: "dino_flames",
             columns: [
               { name: "x", type: "f64" },
               { name: "y", type: "f64" },
@@ -304,17 +328,31 @@ describe("extension panel components", () => {
               { name: "background/v1", color: "#15351f" },
               {
                 name: "polyline/v1",
-                table: "dino",
+                table: "dino_body",
                 x: "x",
                 y: "y",
                 scale: "body",
                 color: "#66d17a",
               },
               {
+                name: "polyline/v1",
+                table: "dino_flames",
+                x: "x",
+                y: "y",
+                scale: "body",
+                color: "#ff7043",
+              },
+              {
                 name: "tooltip/v1",
-                table: "dino",
+                table: "dino_body",
                 match: { x: "x", y: "y" },
                 items: [{ label: "Dino says", column: "message" }],
+              },
+              {
+                name: "tooltip/v1",
+                table: "dino_flames",
+                match: { x: "x", y: "y" },
+                items: [{ label: "Science", column: "message" }],
               },
             ],
           },
@@ -324,11 +362,20 @@ describe("extension panel components", () => {
     const store = new ExtensionStore(manifest);
     store.append({
       table_id: 0,
-      rows: 3,
+      rows: body.length,
       columns: [
-        { type: "f64", values: new Float64Array([10, 18, 10]).buffer },
-        { type: "f64", values: new Float64Array([3, 4, 3]).buffer },
-        { type: "utf8", ...text },
+        { type: "f64", values: new Float64Array(body.map(([x]) => x)).buffer },
+        { type: "f64", values: new Float64Array(body.map(([, y]) => y)).buffer },
+        { type: "utf8", ...bodyText },
+      ],
+    });
+    store.append({
+      table_id: 1,
+      rows: flames.length,
+      columns: [
+        { type: "f64", values: new Float64Array(flames.map(([x]) => x)).buffer },
+        { type: "f64", values: new Float64Array(flames.map(([, y]) => y)).buffer },
+        { type: "utf8", ...flameText },
       ],
     });
     const panel = new ExtensionPanel(
@@ -343,10 +390,25 @@ describe("extension panel components", () => {
 
     expect(panel.error).toBeUndefined();
     expect(context.fills[1]?.[0]).toBe("#15351f");
-    const hit = panel.hitTest(171, 75, viewport);
-    expect(hit?.row).toBe(1);
-    expect(panel.tooltip(hit!)).toEqual([
+    expect(
+      context.strokes.filter((stroke) => stroke[0] === "#66d17a"),
+    ).toHaveLength(body.length - 1);
+    expect(
+      context.strokes.filter((stroke) => stroke[0] === "#ff7043"),
+    ).toHaveLength(flames.length - 1);
+
+    const tail = panel.hitTest(140, 84.4, viewport);
+    expect(panel.tooltip(tail!)).toEqual([
+      { label: "Dino says", value: "💩" },
+    ]);
+    const head = panel.hitTest(404, 36.56, viewport);
+    expect(panel.tooltip(head!)).toEqual([
       { label: "Dino says", value: "❤️" },
+    ]);
+    const flame = panel.hitTest(436, 33.8, viewport);
+    expect(flame?.table).toBe("dino_flames");
+    expect(panel.tooltip(flame!)).toEqual([
+      { label: "Science", value: "🔥" },
     ]);
   });
 
@@ -410,6 +472,187 @@ describe("extension panel components", () => {
     expect(context.fills.filter((fill) => fill[0] === "cyan")).toHaveLength(2);
   });
 
+  it("derives a visible domain from a line crossing the viewport", () => {
+    const manifest = parseExtensionManifestJson(
+      JSON.stringify({
+        version: 1,
+        tables: [
+          {
+            name: "points",
+            columns: [
+              { name: "x", type: "f64" },
+              { name: "y", type: "f64" },
+            ],
+          },
+        ],
+        panels: [
+          {
+            title: "Crossing",
+            scales: [
+              { name: "y", domain: { mode: "visible" } },
+            ],
+            components: [
+              {
+                name: "line/v1",
+                table: "points",
+                x: "x",
+                y: "y",
+                scale: "y",
+                color: "red",
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const store = new ExtensionStore(manifest);
+    store.append({
+      table_id: 0,
+      rows: 2,
+      columns: [
+        { type: "f64", values: new Float64Array([0, 10]).buffer },
+        { type: "f64", values: new Float64Array([100, 200]).buffer },
+      ],
+    });
+    const panel = new ExtensionPanel(
+      "crossing",
+      store,
+      manifest.panels[0]!,
+      0,
+    );
+    const context = new FakeContext();
+    panel.render(
+      context as unknown as CanvasRenderingContext2D,
+      { ...VIEWPORT, start: 4, end: 6 },
+    );
+
+    expect(context.texts).toContain("160");
+    expect(context.texts).toContain("140");
+  });
+
+  it("keeps backgrounds in component order and hits isolated points", () => {
+    const manifest = parseExtensionManifestJson(
+      JSON.stringify({
+        version: 1,
+        tables: [
+          {
+            name: "point",
+            columns: [
+              { name: "x", type: "f64" },
+              { name: "y", type: "f64" },
+            ],
+          },
+        ],
+        panels: [
+          {
+            title: "Ordered",
+            x_axis: { type: "linear", domain: [0, 10] },
+            scales: [
+              { name: "y", domain: { mode: "fixed", min: 0, max: 10 } },
+            ],
+            components: [
+              {
+                name: "line/v1",
+                table: "point",
+                x: "x",
+                y: "y",
+                scale: "y",
+                color: "red",
+              },
+              { name: "background/v1", color: "#123456" },
+            ],
+          },
+        ],
+      }),
+    );
+    const store = new ExtensionStore(manifest);
+    store.append({
+      table_id: 0,
+      rows: 1,
+      columns: [
+        { type: "f64", values: new Float64Array([5]).buffer },
+        { type: "f64", values: new Float64Array([5]).buffer },
+      ],
+    });
+    const panel = new ExtensionPanel(
+      "ordered",
+      store,
+      manifest.panels[0]!,
+      0,
+    );
+    const context = new FakeContext();
+    panel.render(context as unknown as CanvasRenderingContext2D, VIEWPORT);
+    const pointDraw = context.operations.findIndex(
+      (operation) => operation[0] === "fill" && operation[1] === "red",
+    );
+    const backgroundDraw = context.operations.findIndex(
+      (operation) =>
+        operation[0] === "fill" && operation[1] === "#123456",
+    );
+
+    expect(pointDraw).toBeGreaterThanOrEqual(0);
+    expect(backgroundDraw).toBeGreaterThan(pointDraw);
+    expect(panel.hitTest(300, 52, VIEWPORT)).toMatchObject({ row: 0 });
+  });
+
+  it("does not draw intervals that only touch a viewport boundary", () => {
+    const manifest = parseExtensionManifestJson(
+      JSON.stringify({
+        version: 1,
+        tables: [
+          {
+            name: "intervals",
+            columns: [
+              { name: "start", type: "f64" },
+              { name: "end", type: "f64" },
+              { name: "y", type: "f64" },
+            ],
+          },
+        ],
+        panels: [
+          {
+            title: "Boundaries",
+            x_axis: { type: "time" },
+            scales: [
+              { name: "y", domain: { mode: "fixed", min: 0, max: 10 } },
+            ],
+            components: [
+              {
+                name: "interval-area/v1",
+                table: "intervals",
+                start: "start",
+                end: "end",
+                y: "y",
+                scale: "y",
+                color: "magenta",
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const store = new ExtensionStore(manifest);
+    store.append({
+      table_id: 0,
+      rows: 2,
+      columns: [
+        { type: "f64", values: new Float64Array([-1, 30]).buffer },
+        { type: "f64", values: new Float64Array([0, 31]).buffer },
+        { type: "f64", values: new Float64Array([5, 5]).buffer },
+      ],
+    });
+    const panel = new ExtensionPanel(
+      "boundaries",
+      store,
+      manifest.panels[0]!,
+      0,
+    );
+    const context = new FakeContext();
+    panel.render(context as unknown as CanvasRenderingContext2D, VIEWPORT);
+
+    expect(context.fills.some((fill) => fill[0] === "magenta")).toBe(false);
+  });
+
   it("rejects unsorted line data with a useful polyline hint", () => {
     const manifest = parseExtensionManifestJson(
       JSON.stringify({
@@ -441,6 +684,23 @@ describe("extension panel components", () => {
               },
             ],
           },
+          {
+            title: "Broken intervals",
+            scales: [
+              { name: "y", domain: { mode: "visible", include: [0] } },
+            ],
+            components: [
+              {
+                name: "interval-area/v1",
+                table: "points",
+                start: "x",
+                end: "y",
+                y: "y",
+                scale: "y",
+                color: "red",
+              },
+            ],
+          },
         ],
       }),
     );
@@ -460,6 +720,91 @@ describe("extension panel components", () => {
       0,
     );
     expect(panel.error).toContain("use polyline/v1");
+    const intervalPanel = new ExtensionPanel(
+      "broken-intervals",
+      store,
+      manifest.panels[1]!,
+      1,
+    );
+    expect(intervalPanel.error).toContain(
+      "interval-area/v1 requires x to be nondecreasing",
+    );
+  });
+
+  it("reports invalid scalar cardinality and fixed scalar values locally", () => {
+    const manifest = parseExtensionManifestJson(
+      JSON.stringify({
+        version: 1,
+        tables: [
+          {
+            name: "bounds",
+            columns: [
+              { name: "min", type: "f64", nullable: true },
+              { name: "max", type: "f64", nullable: true },
+            ],
+          },
+        ],
+        panels: [
+          {
+            title: "Scalar bounds",
+            scales: [
+              {
+                name: "y",
+                domain: {
+                  mode: "fixed",
+                  min: { table: "bounds", column: "min" },
+                  max: { table: "bounds", column: "max" },
+                },
+              },
+            ],
+            components: [],
+          },
+        ],
+      }),
+    );
+    const tooMany = new ExtensionStore(manifest);
+    tooMany.append({
+      table_id: 0,
+      rows: 2,
+      columns: [
+        { type: "f64", values: new Float64Array([0, 0]).buffer },
+        { type: "f64", values: new Float64Array([1, 1]).buffer },
+      ],
+    });
+    expect(
+      new ExtensionPanel(
+        "scalar-cardinality",
+        tooMany,
+        manifest.panels[0]!,
+        0,
+      ).error,
+    ).toContain("requires exactly one row; got 2");
+
+    const nullMaximum = new ExtensionStore(manifest);
+    nullMaximum.append({
+      table_id: 0,
+      rows: 1,
+      columns: [
+        {
+          type: "f64",
+          values: new Float64Array([0]).buffer,
+          validity: new Uint8Array([1]).buffer,
+        },
+        {
+          type: "f64",
+          values: new Float64Array([0]).buffer,
+          validity: new Uint8Array([0]).buffer,
+        },
+      ],
+    });
+    expect(
+      new ExtensionPanel(
+        "scalar-value",
+        nullMaximum,
+        manifest.panels[0]!,
+        0,
+      ).error,
+    ).toBe("Fixed scale y requires finite min less than max");
   });
 
   it("bounds dense sorted Canvas paths by horizontal pixels", () => {
@@ -533,7 +878,7 @@ describe("extension panel components", () => {
 
   it("hit-tests overlaid line and step layers in reverse Z order", () => {
     const labels = utf8(["line", "line", "line"]);
-    const stepLabels = utf8(["step", "step", "step"]);
+    const stepLabels = utf8(["step-0", "step-1", "step-2"]);
     const manifest = parseExtensionManifestJson(
       JSON.stringify({
         version: 1,
@@ -588,11 +933,15 @@ describe("extension panel components", () => {
               {
                 name: "readout/v1",
                 table: "points",
-                match: { x: "x", y: "line_y" },
+                match: { x: "x", y: "step_y" },
                 items: [
                   {
+                    label: "sample",
+                    column: "step_label",
+                  },
+                  {
                     label: "visible max",
-                    column: "line_y",
+                    column: "step_y",
                     reduce: "max",
                   },
                 ],
@@ -624,9 +973,13 @@ describe("extension panel components", () => {
     const hit = panel.hitTest(300, 52, viewport);
     expect(hit?.channels["y"]).toBe("step_y");
     expect(panel.tooltip(hit!)).toEqual([
-      { label: "Series", value: "step" },
+      { label: "Series", value: "step-1" },
     ]);
     expect(panel.presentation(viewport, null).readout).toEqual([
+      { label: "visible max", value: "5" },
+    ]);
+    expect(panel.presentation(viewport, 3, hit).readout).toEqual([
+      { label: "sample", value: "step-1" },
       { label: "visible max", value: "5" },
     ]);
   });
@@ -756,6 +1109,18 @@ describe("extension panel components", () => {
       manifest.panels[0]!,
       0,
     );
+    const zoomedViewport = { ...VIEWPORT, start: 12, end: 18 };
+    const context = new FakeContext();
+    panel.render(
+      context as unknown as CanvasRenderingContext2D,
+      zoomedViewport,
+    );
+    expect(context.texts).toContain("4");
+    expect(context.texts).toContain("tasks 10");
+    expect(panel.presentation(zoomedViewport, 18).readout).toContainEqual({
+      label: "visible max",
+      value: "4",
+    });
 
     expect(panel.presentation(VIEWPORT, 18)).toEqual({
       swatches: [
@@ -764,9 +1129,9 @@ describe("extension panel components", () => {
         { label: "Active tasks", color: "#81c784", sample: "line" },
       ],
       readout: [
-        { label: "Global Q", value: "2" },
-        { label: "Local max", value: "5" },
-        { label: "Active tasks", value: "9" },
+        { label: "Global Q", value: "4" },
+        { label: "Local max", value: "3" },
+        { label: "Active tasks", value: "10" },
         { label: "visible max", value: "4" },
       ],
     });

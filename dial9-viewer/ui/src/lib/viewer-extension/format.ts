@@ -46,7 +46,9 @@ export function formatExtensionValue(
 ): string {
   if (value === null) return "";
   if (unit === undefined || unit.length === 0) {
-    return formatDecimal(value);
+    const raw =
+      typeof value === "number" && Object.is(value, -0) ? 0 : value;
+    return String(raw);
   }
   const numeric = typeof value === "bigint" ? Number(value) : Number(value);
   switch (unit) {
