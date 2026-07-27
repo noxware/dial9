@@ -262,13 +262,13 @@ function summarizeWasm(tables: ExtensionTableStore): Summary {
   const cpu = tables.table("cpu_intervals");
   const context = tables.table("context_switches");
   if (
-    context.value(0, "voluntary_rate") !== null ||
-    context.value(0, "involuntary_rate") !== null
+    numberAt(context, 0, "start_ns") !== numberAt(cpu, 0, "start_ns") ||
+    !(numberAt(context, 0, "end_ns") > numberAt(context, 0, "start_ns"))
   ) {
-    throw new Error("first context-switch sample must be a gap");
+    throw new Error("first context-switch rate must cover its sample interval");
   }
   return {
-    rows: [cpu.rowCount, context.rowCount - 1],
+    rows: [cpu.rowCount, context.rowCount],
     bounds: [
       numberAt(cpu, 0, "start_ns"),
       numberAt(cpu, cpu.rowCount - 1, "end_ns"),
@@ -279,11 +279,11 @@ function summarizeWasm(tables: ExtensionTableStore): Summary {
       numberAt(cpu, cpu.rowCount - 1, "cores"),
     ],
     voluntaryRate: [
-      numberAt(context, 1, "voluntary_rate"),
+      numberAt(context, 0, "voluntary_rate"),
       numberAt(context, context.rowCount - 1, "voluntary_rate"),
     ],
     involuntaryRate: [
-      numberAt(context, 1, "involuntary_rate"),
+      numberAt(context, 0, "involuntary_rate"),
       numberAt(context, context.rowCount - 1, "involuntary_rate"),
     ],
   };

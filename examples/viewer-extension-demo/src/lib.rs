@@ -35,7 +35,8 @@ dial9_viewer_extension::manifest!(
         {
           "name": "context_switches",
           "columns": [
-            { "name": "time_ns", "type": "u64" },
+            { "name": "start_ns", "type": "u64" },
+            { "name": "end_ns", "type": "u64" },
             { "name": "voluntary_rate", "type": "f64", "nullable": true },
             { "name": "involuntary_rate", "type": "f64", "nullable": true }
           ]
@@ -163,16 +164,17 @@ dial9_viewer_extension::manifest!(
           "title": "WASM · Context Switch Rate",
           "components": [
             {
-              "name": "step-line/v1",
+              "name": "interval-line/v1",
               "table": "context_switches",
-              "x": "time_ns",
+              "start": "start_ns",
+              "end": "end_ns",
               "y": "voluntary_rate",
               "color": "#81c784"
             },
             {
               "name": "line/v1",
               "table": "context_switches",
-              "x": "time_ns",
+              "x": "start_ns",
               "y": "involuntary_rate",
               "color": "#ffb74d"
             },
@@ -192,24 +194,25 @@ dial9_viewer_extension::manifest!(
               "name": "tooltip/v1",
               "table": "context_switches",
               "match": {
-                "x": "time_ns",
+                "start": "start_ns",
+                "end": "end_ns",
                 "y": "voluntary_rate"
               },
               "items": [
                 { "label": "Voluntary", "column": "voluntary_rate", "unit": "switches/s" },
-                { "label": "Time", "column": "time_ns", "unit": "ns" }
+                { "label": "Time", "column": "start_ns", "unit": "ns" }
               ]
             },
             {
               "name": "tooltip/v1",
               "table": "context_switches",
               "match": {
-                "x": "time_ns",
+                "x": "start_ns",
                 "y": "involuntary_rate"
               },
               "items": [
                 { "label": "Involuntary", "column": "involuntary_rate", "unit": "switches/s" },
-                { "label": "Time", "column": "time_ns", "unit": "ns" }
+                { "label": "Time", "column": "start_ns", "unit": "ns" }
               ]
             },
             {
@@ -387,7 +390,8 @@ impl CpuBatch {
 
 #[derive(Default)]
 struct ContextBatch {
-    time_ns: Vec<u64>,
+    start_ns: Vec<u64>,
+    end_ns: Vec<u64>,
     voluntary_rate: Vec<f64>,
     voluntary_valid: Vec<bool>,
     involuntary_rate: Vec<f64>,
@@ -395,28 +399,26 @@ struct ContextBatch {
 }
 
 impl ContextBatch {
-    fn push(&mut self, previous: Option<ResourceSample>, current: ResourceSample) {
-        let wall_ns = previous.and_then(|previous| {
-            current
-                .timestamp_ns
-                .checked_sub(previous.timestamp_ns)
-                .filter(|wall| *wall > 0)
-                .map(|wall| (previous, wall))
-        });
-        let voluntary = wall_ns.and_then(|(previous, wall)| {
+    fn push(&mut self, previous: ResourceSample, current: ResourceSample) {
+        let wall_ns = current
+            .timestamp_ns
+            .checked_sub(previous.timestamp_ns)
+            .filter(|wall| *wall > 0);
+        let voluntary = wall_ns.and_then(|wall| {
             current
                 .voluntary_context_switches
                 .checked_sub(previous.voluntary_context_switches)
                 .map(|delta| delta as f64 * 1_000_000_000.0 / wall as f64)
         });
-        let involuntary = wall_ns.and_then(|(previous, wall)| {
+        let involuntary = wall_ns.and_then(|wall| {
             current
                 .involuntary_context_switches
                 .checked_sub(previous.involuntary_context_switches)
                 .map(|delta| delta as f64 * 1_000_000_000.0 / wall as f64)
         });
 
-        self.time_ns.push(current.timestamp_ns);
+        self.start_ns.push(previous.timestamp_ns);
+        self.end_ns.push(current.timestamp_ns);
         push_nullable(
             &mut self.voluntary_rate,
             &mut self.voluntary_valid,
@@ -430,18 +432,22 @@ impl ContextBatch {
     }
 
     fn len(&self) -> usize {
-        self.time_ns.len()
+        self.start_ns.len()
     }
 
     fn flush(&mut self, output: &mut OutputSink) -> Result<(), ExtensionError> {
-        if self.time_ns.is_empty() {
+        if self.start_ns.is_empty() {
             return Ok(());
         }
         output.emit(
             CONTEXT_SWITCHES,
             vec![
                 Column::U64 {
-                    values: mem::take(&mut self.time_ns),
+                    values: mem::take(&mut self.start_ns),
+                    validity: None,
+                },
+                Column::U64 {
+                    values: mem::take(&mut self.end_ns),
                     validity: None,
                 },
                 nullable_f64(&mut self.voluntary_rate, &mut self.voluntary_valid),
@@ -466,9 +472,9 @@ impl DemoExtension {
         sample: ResourceSample,
         output: &mut OutputSink,
     ) -> Result<(), ExtensionError> {
-        self.context.push(self.previous, sample);
         if let Some(previous) = self.previous {
             self.cpu.push(previous, sample, self.capacity);
+            self.context.push(previous, sample);
         }
         self.previous = Some(sample);
 
@@ -703,6 +709,32 @@ mod tests {
         assert_eq!(batch.cores, [0.8]);
         assert_eq!(batch.total_percent, [20.0]);
         assert_eq!(batch.load, [0.2]);
+    }
+
+    #[test]
+    fn context_switch_rate_covers_the_sample_interval() {
+        let previous = ResourceSample {
+            timestamp_ns: 1_000,
+            user_cpu_ns: 0,
+            system_cpu_ns: 0,
+            voluntary_context_switches: 10,
+            involuntary_context_switches: 4,
+        };
+        let current = ResourceSample {
+            timestamp_ns: 1_000_001_000,
+            user_cpu_ns: 0,
+            system_cpu_ns: 0,
+            voluntary_context_switches: 298,
+            involuntary_context_switches: 9,
+        };
+        let mut batch = ContextBatch::default();
+        batch.push(previous, current);
+        assert_eq!(batch.start_ns, [1_000]);
+        assert_eq!(batch.end_ns, [1_000_001_000]);
+        assert_eq!(batch.voluntary_rate, [288.0]);
+        assert_eq!(batch.involuntary_rate, [5.0]);
+        assert_eq!(batch.voluntary_valid, [true]);
+        assert_eq!(batch.involuntary_valid, [true]);
     }
 
     #[test]
