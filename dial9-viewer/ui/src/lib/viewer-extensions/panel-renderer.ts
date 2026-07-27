@@ -100,6 +100,7 @@ interface TooltipComponent {
 interface ReadoutComponent {
   readonly name: "readout/v1";
   readonly table: string;
+  readonly match?: Readonly<Record<string, string>>;
   readonly items: readonly ReadoutItem[];
 }
 
@@ -564,10 +565,7 @@ export class SemanticPanelRenderer {
     const channels = Object.freeze({ x: xColumn, y: yColumn });
     const runs = splitLineRuns(points);
     for (const originalRun of runs) {
-      const run =
-        component.name === "line/v1"
-          ? downsampleLine(originalRun, projector)
-          : originalRun;
+      const run = downsampleLine(originalRun, projector);
       if (run.length === 1) {
         const point = run[0]!;
         const x = projector.x(point.x);
@@ -757,7 +755,12 @@ export class SemanticPanelRenderer {
       const readout = component as unknown as ReadoutComponent;
       const table = this.#extension.tables.table(readout.table);
       for (const item of readout.items) {
-        const value = this.#readoutValue(table, readout.table, item);
+        const value = this.#readoutValue(
+          table,
+          readout.table,
+          readout.match,
+          item,
+        );
         if (value === null) continue;
         values.push(`${item.label} ${formatValue(value, item.unit)}`);
       }
@@ -769,14 +772,20 @@ export class SemanticPanelRenderer {
   #readoutValue(
     table: TableStore,
     tableName: string,
+    match: Readonly<Record<string, string>> | undefined,
     item: ReadoutItem,
   ): CellValue {
     if (item.sample !== undefined || item.reduce === undefined) {
       if (item.sample === "cursor") {
-        const row = this.#rowAtCursor(tableName);
+        const row = this.#rowAtCursor(tableName, match);
         return row === null ? null : table.value(row, item.column);
       }
-      if (this.#currentHit?.table !== tableName) return null;
+      if (
+        this.#currentHit?.table !== tableName ||
+        !channelsMatch(this.#currentHit.channels, match)
+      ) {
+        return null;
+      }
       return table.value(this.#currentHit.row, item.column);
     }
     const viewport = this.#viewport;
@@ -785,7 +794,14 @@ export class SemanticPanelRenderer {
       this.#panel.x_axis.kind === "time"
         ? ([viewport.start, viewport.end] as const)
         : this.#xDomain(viewport);
-    return this.#reduceViewport(tableName, table, item.column, item.reduce, range);
+    return this.#reduceViewport(
+      tableName,
+      table,
+      item.column,
+      item.reduce,
+      range,
+      match,
+    );
   }
 
   #reduceViewport(
@@ -794,9 +810,10 @@ export class SemanticPanelRenderer {
     column: string,
     reducer: Reducer,
     range: readonly [number, number],
+    match: Readonly<Record<string, string>> | undefined,
   ): number | null {
     const cacheKey =
-      `${tableName}:${column}:${JSON.stringify(reducer)}:${range[0]}:${range[1]}`;
+      `${tableName}:${column}:${JSON.stringify(reducer)}:${JSON.stringify(match)}:${range[0]}:${range[1]}`;
     if (this.#reductionCache.has(cacheKey)) {
       return this.#reductionCache.get(cacheKey) ?? null;
     }
@@ -819,7 +836,7 @@ export class SemanticPanelRenderer {
       }
       result = weight > 0 ? weighted / weight : null;
     } else {
-      const rows = this.#rowsForTableRange(tableName, range);
+      const rows = this.#rowsForTableRange(tableName, range, match);
       let count = 0;
       let sum = 0;
       let min = Infinity;
@@ -857,8 +874,10 @@ export class SemanticPanelRenderer {
   #rowsForTableRange(
     tableName: string,
     range: readonly [number, number],
+    match?: Readonly<Record<string, string>>,
   ): readonly number[] {
-    const mapping = this.#tableChannels(tableName);
+    const mapping = this.#matchedTableChannels(tableName, match);
+    if (match !== undefined && mapping === null) return [];
     if (mapping?.start !== undefined && mapping.end !== undefined) {
       return this.#intervalIndex(tableName, mapping.start, mapping.end)
         .rowsInRange(range[0], range[1]);
@@ -870,9 +889,12 @@ export class SemanticPanelRenderer {
     return allRows(this.#extension.tables.table(tableName));
   }
 
-  #rowAtCursor(tableName: string): number | null {
+  #rowAtCursor(
+    tableName: string,
+    match?: Readonly<Record<string, string>>,
+  ): number | null {
     if (this.#pointerX === null) return null;
-    const mapping = this.#tableChannels(tableName);
+    const mapping = this.#matchedTableChannels(tableName, match);
     if (mapping?.start !== undefined && mapping.end !== undefined) {
       const rows = this.#intervalIndex(tableName, mapping.start, mapping.end)
         .entriesInRange(this.#pointerX, this.#pointerX);
@@ -880,6 +902,30 @@ export class SemanticPanelRenderer {
     }
     if (mapping?.x !== undefined) {
       return this.#numericIndex(tableName, mapping.x).nearestRow(this.#pointerX);
+    }
+    return null;
+  }
+
+  #matchedTableChannels(
+    tableName: string,
+    match: Readonly<Record<string, string>> | undefined,
+  ): Readonly<Record<string, string>> | null {
+    if (match === undefined) return this.#tableChannels(tableName);
+    for (const component of this.#panel.components) {
+      if (!GRAPH_COMPONENTS.has(component.name)) continue;
+      const record = componentRecord(component);
+      if (record.table !== tableName) continue;
+      const channels = component.name.startsWith("interval-")
+        ? {
+            start: stringProperty(record, "start"),
+            end: stringProperty(record, "end"),
+            y: stringProperty(record, "y"),
+          }
+        : {
+            x: stringProperty(record, "x"),
+            y: stringProperty(record, "y"),
+          };
+      if (channelsMatch(channels, match)) return channels;
     }
     return null;
   }
@@ -1015,14 +1061,7 @@ export class SemanticPanelRenderer {
       if (component.name !== "tooltip/v1") continue;
       const tooltip = component as unknown as TooltipComponent;
       if (tooltip.table !== hit.table) continue;
-      if (
-        tooltip.match !== undefined &&
-        Object.entries(tooltip.match).some(
-          ([channel, column]) => hit.channels[channel] !== column,
-        )
-      ) {
-        continue;
-      }
+      if (!channelsMatch(hit.channels, tooltip.match)) continue;
       return tooltip;
     }
     return null;
@@ -1240,6 +1279,16 @@ function splitLineRuns(points: readonly LinePoint[]): LinePoint[][] {
   }
   if (run.length > 0) runs.push(run);
   return runs;
+}
+
+function channelsMatch(
+  channels: Readonly<Record<string, string>>,
+  match: Readonly<Record<string, string>> | undefined,
+): boolean {
+  return (
+    match === undefined ||
+    Object.entries(match).every(([channel, column]) => channels[channel] === column)
+  );
 }
 
 function downsampleLine(

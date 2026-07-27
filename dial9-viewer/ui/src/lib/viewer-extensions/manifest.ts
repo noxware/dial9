@@ -251,16 +251,7 @@ function parseComponent(
       exactKeys(component, ["name", "table", "match", "items"], path, ["match"]);
       const table = tableFor(component, path, tables);
       if (component.match !== undefined) {
-        const match = record(component.match, `${path}.match`);
-        exactKeys(match, ["x", "start", "end", "y"], `${path}.match`, [
-          "x",
-          "start",
-          "end",
-          "y",
-        ]);
-        for (const [channel, column] of Object.entries(match)) {
-          columnIn(table, column, `${path}.match.${channel}`, true);
-        }
+        validateMatch(component.match, `${path}.match`, table);
       }
       validateItems(component.items, `${path}.items`, table, false);
       break;
@@ -286,8 +277,11 @@ function parseComponent(
       }
       break;
     case "readout/v1": {
-      exactKeys(component, ["name", "table", "items"], path);
+      exactKeys(component, ["name", "table", "match", "items"], path, ["match"]);
       const table = tableFor(component, path, tables);
+      if (component.match !== undefined) {
+        validateMatch(component.match, `${path}.match`, table);
+      }
       validateItems(component.items, `${path}.items`, table, true);
       break;
     }
@@ -335,6 +329,22 @@ function validateItems(
       throw new ManifestError(`${itemPath}.sample must be "hit" or "cursor"`);
     }
     if (item.reduce !== undefined) validateReducer(item.reduce, `${itemPath}.reduce`, table, column);
+  }
+}
+
+function validateMatch(value: unknown, path: string, table: TableManifest): void {
+  const match = record(value, path);
+  exactKeys(match, ["x", "start", "end", "y"], path, [
+    "x",
+    "start",
+    "end",
+    "y",
+  ]);
+  if (Object.keys(match).length === 0) {
+    throw new ManifestError(`${path} must not be empty`);
+  }
+  for (const [channel, column] of Object.entries(match)) {
+    columnIn(table, column, `${path}.${channel}`, true);
   }
 }
 

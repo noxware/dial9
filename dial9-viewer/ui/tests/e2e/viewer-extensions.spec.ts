@@ -121,6 +121,18 @@ test("resolves overlaid line hits in reverse drawing order", async ({ page }) =>
                 match: { x: "x", y: "line" },
                 items: [{ label: "Line", column: "line" }],
               },
+              {
+                name: "readout/v1",
+                table: "series",
+                match: { x: "x", y: "step" },
+                items: [{ label: "Step", column: "step", sample: "hit" }],
+              },
+              {
+                name: "readout/v1",
+                table: "series",
+                match: { x: "x", y: "line" },
+                items: [{ label: "Line", column: "line", sample: "hit" }],
+              },
             ],
           },
         ],
@@ -193,9 +205,11 @@ test("resolves overlaid line hits in reverse drawing order", async ({ page }) =>
 
   await page.mouse.move(box.x + 100 + drawWidth * 0.25, box.y + 20);
   await expect(page.locator("#tooltip")).toHaveText("Line: 2");
+  await expect(panel.locator(".d9-extension-readout")).toHaveText("Line 2");
 
   await page.mouse.move(box.x + 100 + drawWidth * 0.75, box.y + 52);
   await expect(page.locator("#tooltip")).toHaveText("Step: 1");
+  await expect(panel.locator(".d9-extension-readout")).toHaveText("Step 1");
 });
 
 async function waitForRuntime(page: Page): Promise<void> {

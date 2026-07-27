@@ -239,7 +239,8 @@ A swatch's `shape` is `line`, `area`, or `reference`. It may show a formatted
 scalar `value`. Multiple swatches compose beside the title; reference labels
 stay outside the canvas so guides cannot overlap text.
 
-Readout items use either:
+Like tooltips, a readout may use `match` to select one channel mapping when a
+table drives multiple overlaid graphs. Readout items use either:
 
 - `sample: "hit"` or `sample: "cursor"`;
 - `reduce: "min" | "max" | "sum" | "count" | "mean"` over visible rows; or
