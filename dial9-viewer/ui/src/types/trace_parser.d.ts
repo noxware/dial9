@@ -346,6 +346,11 @@ declare module "*/trace_parser.js" {
     options?: ParseOptions
   ): Promise<ParsedTrace>;
 
+  /** Return raw D9TF bytes, decompressing gzip input when necessary. */
+  export function normalizeTraceBuffer(
+    buffer: ArrayBuffer | Uint8Array
+  ): Promise<ArrayBuffer | Uint8Array>;
+
   export interface FetchOptions {
     signal?: AbortSignal;
     /**

@@ -68,6 +68,16 @@
     }
 
     /**
+     * Return raw D9TF bytes, decompressing gzip input when necessary.
+     *
+     * This is the common normalization boundary for consumers that need to
+     * retain or fan out the exact byte stream consumed by the parser.
+     */
+    async function normalizeTraceBuffer(buffer) {
+        return maybeGunzip(buffer);
+    }
+
+    /**
      * Whether `url` resolves to the same origin as the current page.
      *
      * Security-critical: credential headers (see `fetchTraces`) must never be
@@ -1915,6 +1925,7 @@
             parseTrace,
             parseTraceStream,
             parseOne,
+            normalizeTraceBuffer,
             fetchTraces,
             fetchTraceStream,
             fetchTracesStream,
@@ -1930,6 +1941,7 @@
             OFF_WORKER_WORKER_ID,
             parseTrace,
             parseTraceStream,
+            normalizeTraceBuffer,
             fetchTraces,
             fetchTraceStream,
             fetchTracesStream,

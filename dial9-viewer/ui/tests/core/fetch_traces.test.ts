@@ -24,7 +24,13 @@ interface ParsedTraceLike {
   events: unknown[];
 }
 
-const { fetchTraces, fetchTracesStream, parseTrace, parseTraceStream } =
+const {
+  fetchTraces,
+  fetchTracesStream,
+  normalizeTraceBuffer,
+  parseTrace,
+  parseTraceStream,
+} =
   require("../../trace_parser.js") as {
     fetchTraces: (
       urls: string | string[],
@@ -34,6 +40,9 @@ const { fetchTraces, fetchTracesStream, parseTrace, parseTraceStream } =
       urls: string[],
       opts?: FetchOpts,
     ) => AsyncIterable<Uint8Array>;
+    normalizeTraceBuffer: (
+      buffer: ByteSource,
+    ) => Promise<ArrayBuffer | Uint8Array>;
     parseTrace: (buf: ByteSource) => Promise<ParsedTraceLike>;
     parseTraceStream: (
       chunks: AsyncIterable<Uint8Array>,
@@ -142,6 +151,15 @@ beforeAll(async () => {
   // Reference parse of a single raw trace.
   const single = await parseTrace(rawTrace);
   singleEvents = single.events.length;
+});
+
+describe("normalizeTraceBuffer", () => {
+  it("normalizes raw and gzip inputs to identical D9TF bytes", async () => {
+    const raw = await normalizeTraceBuffer(rawTrace);
+    const gzip = await normalizeTraceBuffer(gzTrace);
+    expectBytesEqual(bytesOf(raw), bytesOf(rawTrace));
+    expectBytesEqual(bytesOf(gzip), bytesOf(rawTrace));
+  });
 });
 
 describe("fetchTraces", { timeout: 60_000 }, () => {

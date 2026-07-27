@@ -120,11 +120,10 @@ function frozenCoreDevInterop(): Plugin {
 // Scaffolding config (docs/ui-inventory/02-architecture.md section 2.1,
 // docs/adr/0004-viewer-ui-migration.md section 3).
 //
-// No page has migrated yet: the four legacy HTML pages and every file they
-// reference via <script src> ship into dist/ VERBATIM through the static-copy
-// list below, so the served pages stay byte-identical to serving ui/ from
-// disk. As pages convert to real Vite entries (the viewer
-// slices), their lines are removed from this list until it is empty.
+// Remaining static legacy HTML pages and their classic-script dependencies
+// ship into dist/ through the copy list. viewer.html is now a Vite HTML entry
+// solely to bundle its thin TypeScript extension adapter; its existing classic
+// scripts remain on the copied dependency list.
 //
 // The frozen core files (decode.js, trace_parser.js, ... - see AGENTS.md)
 // stay at the ui/ root in their browser-global + CommonJS-guard form; they
@@ -138,12 +137,11 @@ function frozenCoreDevInterop(): Plugin {
 // Vite-entry ticket in chunk 1 but must keep being served).
 const legacyPages = [
   "index.html",
-  "viewer.html",
   "flamegraph.html",
   "tokio_stats.html",
 ];
 
-// Everything the four legacy pages reference by root-relative path
+// Everything the legacy pages reference by root-relative path
 // (<script src> / <link>): the frozen core plus the post-freeze page modules
 // (url_state.js, flamegraph_api.js, ui-switch.js). Derived from the pages'
 // actual tags; re-derive with:
@@ -255,6 +253,10 @@ export default defineConfig({
       // placeholder inputs: the dev-probe module was retired when
       // the first real entry landed, as its header said it would be).
       input: {
+        // The legacy viewer remains a classic-script page, but is a Vite HTML
+        // entry so its thin TypeScript extension adapter and Worker graph are
+        // bundled without migrating the rest of the page.
+        viewer: "viewer.html",
         // The migrated flamegraph page, served at /new/flamegraph.html
         // (HTML inputs keep their project-root-relative path in dist/).
         flamegraph: "new/flamegraph.html",

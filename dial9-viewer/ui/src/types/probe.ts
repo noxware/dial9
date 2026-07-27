@@ -12,6 +12,7 @@ import {
   parseTrace,
   parseTraceStream,
   parseOne,
+  normalizeTraceBuffer,
   fetchTraces,
   fetchTraceStream,
   fetchTracesStream,
@@ -171,6 +172,9 @@ export async function probeParser(list: string[]): Promise<ParsedTrace> {
   void iter;
   const one: Promise<ParsedTrace> = parseOne(new Uint8Array());
   void one;
+  const normalized: Promise<ArrayBuffer | Uint8Array> =
+    normalizeTraceBuffer(new Uint8Array());
+  void normalized;
 
   // Block-in-place gap nullability, encoded and consumed explicitly.
   const gaps: BlockInPlaceGap[] = trace.blockInPlaceGaps;

@@ -29,6 +29,7 @@ import {
   deriveBlockInPlaceGaps,
   fetchTraces,
   formatFrame,
+  normalizeTraceBuffer,
   parseTrace,
   symbolizeChain,
 } from "../../../trace_parser.js";
@@ -57,6 +58,7 @@ export {
   deduplicateSamples,
   deriveBlockInPlaceGaps,
   formatFrame,
+  normalizeTraceBuffer,
   symbolizeChain,
 };
 export type {

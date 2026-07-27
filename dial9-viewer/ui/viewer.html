@@ -628,6 +628,85 @@
                 height: 100%;
                 display: block;
             }
+            .viewer-extension-panel {
+                display: block;
+                height: 92px;
+                background: #111b2e;
+                border-top: 1px solid #333;
+                flex-shrink: 0;
+                position: relative;
+                overflow: hidden;
+            }
+            .viewer-extension-panel .chart-label {
+                position: absolute;
+                top: 4px;
+                left: 8px;
+                right: 12px;
+                display: flex;
+                align-items: center;
+                min-width: 0;
+                white-space: nowrap;
+                font-size: 0.75em;
+                color: #888;
+                z-index: 2;
+            }
+            .viewer-extension-title {
+                flex-shrink: 0;
+            }
+            .viewer-extension-swatches {
+                display: inline-flex;
+                align-items: center;
+                gap: 10px;
+                margin-left: 10px;
+                min-width: 0;
+                overflow: hidden;
+                font-weight: 400;
+            }
+            .viewer-extension-swatch-item {
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+                flex-shrink: 0;
+            }
+            .viewer-extension-swatch {
+                width: 12px;
+                display: inline-block;
+                flex-shrink: 0;
+            }
+            .viewer-extension-swatch.is-rule {
+                border-top: 1px dashed currentColor;
+            }
+            .viewer-extension-swatch.is-line {
+                height: 2px;
+                background: currentColor;
+            }
+            .viewer-extension-swatch.is-area {
+                height: 6px;
+                border: 1px solid currentColor;
+                background: currentColor;
+                opacity: 0.55;
+            }
+            .viewer-extension-readout {
+                margin-left: auto;
+                padding-left: 12px;
+                flex-shrink: 0;
+                color: #aaa;
+                font-weight: 400;
+            }
+            .viewer-extension-canvas {
+                width: 100%;
+                height: 100%;
+                display: block;
+            }
+            .viewer-extension-error {
+                position: absolute;
+                top: 31px;
+                left: 100px;
+                right: 12px;
+                color: #ff8a80;
+                font: 12px/1.4 monospace;
+                white-space: pre-wrap;
+            }
             #task-detail .chart-label {
                 position: absolute;
                 top: 4px;
@@ -823,15 +902,15 @@
     <body>
         <div id="drag-overlay">
             <div class="drag-overlay-msg">
-                Drop trace file to load
-                <small>Replaces the current trace</small>
+                Drop a trace or WASM viewer extension
+                <small>Traces replace the current load; extensions add panels</small>
             </div>
         </div>
         <div id="drop-zone">
             <div>
                 <div style="font-size: 2em; margin-bottom: 12px">📊</div>
                 <div>
-                    Drop a <code>.bin</code> or <code>.bin.gz</code> trace file here or click to open
+                    Drop a trace or <code>.wasm</code> viewer extension here or click to open
                 </div>
                 <div style="font-size: 0.8em; margin-top: 8px; color: #666">
                     Expects D9TF binary format
@@ -840,7 +919,7 @@
                     <a href="#" id="load-demo" style="color: #6c63ff; font-size: 0.9em">or load demo trace</a>
                 </div>
             </div>
-            <input type="file" id="file-input" accept=".bin,.gz" />
+            <input type="file" id="file-input" accept=".bin,.gz,.wasm" multiple />
         </div>
 
         <div id="viewer">
@@ -1014,6 +1093,12 @@
         <script src="flamegraph_export.js"></script>
         <script src="flamegraph.js"></script>
         <script src="panel_layout.js"></script>
+        <script>
+            window.dial9ViewerExtensionsReady = new Promise((resolve) => {
+                window.__resolveDial9ViewerExtensions = resolve;
+            });
+        </script>
+        <script type="module" src="/src/legacy-viewer-extensions.ts"></script>
         <script>
             const { EVENT_TYPES: ET, parseTrace, formatFrame, symbolizeChain, deduplicateSamples } = TraceParser;
             const { buildWorkerSpans, attachCpuSamples, buildActiveTaskTimeline, computeSchedulingDelays, filterPointsOfInterest, buildSpanData, collectDescendants, selectSpanRenderSet, enclosingSpans, computeSpanLayout, getTraceTimeRange, hasCpuProfileSamples, buildProcessCpuUsageSeries, computeRuntimeGroups } = TraceAnalysis;
@@ -1409,6 +1494,62 @@
             const taskDetailPanel = document.getElementById("task-detail");
             const clearRangeBtn = document.getElementById("btn-clear-range");
             const tooltip = document.getElementById("tooltip");
+            let viewerExtensionAdapter = null;
+            let viewerExtensionAdapterPromise = null;
+            let viewerExtensionTraceGeneration = null;
+
+            function getViewerExtensionAdapter() {
+                if (!viewerExtensionAdapterPromise) {
+                    viewerExtensionAdapterPromise =
+                        window.dial9ViewerExtensionsReady.then((adapter) => {
+                            adapter.configure({
+                                // Insert custom panels after CPU and immediately
+                                // before the task-detail panel.
+                                panelAnchor: taskDetailPanel,
+                                tooltip,
+                                placeTooltip(clientX, clientY) {
+                                    placeTooltip({ clientX, clientY });
+                                },
+                                requestRender: scheduleRenderAll,
+                                setTimePointer(timestamp) {
+                                    mouseNs = timestamp;
+                                    scheduleCrosshairRedraw();
+                                },
+                                devicePixelRatio: () => window.devicePixelRatio || 1,
+                            });
+                            viewerExtensionAdapter = adapter;
+                            return adapter;
+                        });
+                }
+                return viewerExtensionAdapterPromise;
+            }
+
+            async function beginViewerExtensionTrace() {
+                const adapter = await getViewerExtensionAdapter();
+                const generation = adapter.beginTrace();
+                viewerExtensionTraceGeneration = generation;
+                return generation;
+            }
+
+            function feedViewerExtensionBuffer(buffer, generation) {
+                const bytes = buffer instanceof Uint8Array
+                    ? buffer
+                    : new Uint8Array(buffer);
+                const chunkBytes = 256 * 1024;
+                for (let offset = 0; offset < bytes.length; offset += chunkBytes) {
+                    viewerExtensionAdapter?.feed(
+                        bytes.subarray(offset, Math.min(bytes.length, offset + chunkBytes)),
+                        generation,
+                    );
+                }
+            }
+
+            function abortViewerExtensionTrace(generation = viewerExtensionTraceGeneration) {
+                viewerExtensionAdapter?.abortTrace(generation);
+                if (generation === viewerExtensionTraceGeneration) {
+                    viewerExtensionTraceGeneration = null;
+                }
+            }
 
             const FOLDABLE_PANEL_KEYS = ["spans", "events", "cpu", "queue"];
             const PANEL_COLLAPSE_STORAGE_PREFIX = "dial9.viewer.panelCollapsed.";
@@ -1541,17 +1682,20 @@
                 e.preventDefault();
                 dragCounter = 0;
                 hideDragFeedback();
-                const file = e.dataTransfer.files[0];
-                if (file) loadFile(file);
+                void loadFiles([...e.dataTransfer.files]);
             });
 
             fileInput.addEventListener("change", (e) => {
-                if (e.target.files[0]) loadFile(e.target.files[0]);
+                void loadFiles([...e.target.files]);
+                e.target.value = "";
             });
             document.getElementById("btn-reset").addEventListener("click", () => {
                 resetTraceState({ clearUrlRange: true });
                 currentTraceBuffer = null;
                 currentTraceName = null;
+                viewerExtensionTraceGeneration = null;
+                if (viewerExtensionAdapter) viewerExtensionAdapter.clear();
+                else void getViewerExtensionAdapter().then((adapter) => adapter.clear());
                 viewer.style.display = "none";
                 resetDropZone();
             });
@@ -1612,7 +1756,13 @@
 
             /** Finish loading: analyze the parsed trace, retain the buffer for
              *  in-memory re-parse (Set/Clear Range), and show the viewer. */
-            async function showParsedTrace(parsed, buffer, name) {
+            async function showParsedTrace(parsed, buffer, name, extensionGeneration) {
+                if (
+                    extensionGeneration != null &&
+                    extensionGeneration !== viewerExtensionTraceGeneration
+                ) {
+                    return;
+                }
                 trace = parsed;
                 updateLoadProgress(`Analyzing ${trace.events.length.toLocaleString()} events…`);
                 // processTrace() runs synchronously and hogs the main thread for
@@ -1623,6 +1773,9 @@
                 // shown, and the spinner appears stuck on the last parse line.
                 await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
                 if (!processTrace()) {
+                    if (extensionGeneration != null) {
+                        abortViewerExtensionTrace(extensionGeneration);
+                    }
                     resetDropZone();
                     return;
                 }
@@ -1678,15 +1831,18 @@
             }
 
             /** Parse an already-fetched buffer and show the viewer. */
-            async function parseAndShowTrace(buffer, name, opts = {}) {
+            async function parseAndShowTrace(buffer, name, opts = {}, extensionGeneration) {
                 try {
                     const fullOpts = { ...opts, onParseProgress: makeParseProgress() };
                     updateLoadProgress("Decompressing…");
                     const parsed = await parseTrace(buffer, fullOpts);
                     if (loadPerf) loadPerf.parseDoneMs = performance.now();
-                    await showParsedTrace(parsed, buffer, name);
+                    await showParsedTrace(parsed, buffer, name, extensionGeneration);
                 } catch (err) {
                     if (err.name === "AbortError") return;
+                    if (extensionGeneration != null) {
+                        abortViewerExtensionTrace(extensionGeneration);
+                    }
                     alert("Error: " + err.message);
                     resetDropZone();
                 }
@@ -1702,7 +1858,7 @@
              * the full buffer is still available afterwards for in-memory
              * Set/Clear-Range re-parsing (which never re-fetches).
              */
-            async function streamAndShowTrace(urls, name, opts = {}) {
+            async function streamAndShowTrace(urls, name, opts = {}, extensionGeneration) {
                 const list = Array.isArray(urls) ? urls : [urls];
                 try {
                     const credHeaders = window.Dial9Creds ? Dial9Creds.headers() : {};
@@ -1720,6 +1876,7 @@
                         async *[Symbol.asyncIterator]() {
                             for await (const chunk of stream) {
                                 captured.push(chunk);
+                                viewerExtensionAdapter?.feed(chunk, extensionGeneration);
                                 yield chunk;
                             }
                         },
@@ -1737,20 +1894,105 @@
                     const buffer = new Uint8Array(total);
                     let off = 0;
                     for (const c of captured) { buffer.set(c, off); off += c.length; }
-                    await showParsedTrace(parsed, buffer.buffer, name);
+                    viewerExtensionAdapter?.finish(buffer, extensionGeneration);
+                    await showParsedTrace(
+                        parsed,
+                        buffer.buffer,
+                        name,
+                        extensionGeneration,
+                    );
                 } catch (err) {
                     if (err.name === "AbortError") return;
                     throw err;
                 }
             }
 
-            function loadFile(file) {
+            function isWasmExtensionFile(file) {
+                return file.name.toLowerCase().endsWith(".wasm");
+            }
+
+            function showViewerExtensionStatus(message, type = "info") {
+                if (viewer.style.display === "flex") {
+                    showToast("viewer-extension-load", message, type, 3500);
+                    return;
+                }
+                let status = document.getElementById("viewer-extension-load-status");
+                if (!status) {
+                    status = document.createElement("div");
+                    status.id = "viewer-extension-load-status";
+                    status.style.cssText = "margin-top:10px;font-size:0.85em;color:#aaa";
+                    dropZone.firstElementChild?.appendChild(status);
+                }
+                status.textContent = message;
+            }
+
+            async function loadFiles(files) {
+                if (!files.length) return;
+                const extensions = files.filter(isWasmExtensionFile);
+                const traceFile = files.find((file) => !isWasmExtensionFile(file));
+
+                // A mixed drop means “use these modules for this trace”, not
+                // “run them briefly against the trace being replaced”.
+                if (traceFile && extensions.length) {
+                    const adapter = await getViewerExtensionAdapter();
+                    adapter.clear();
+                    viewerExtensionTraceGeneration = null;
+                    for (const extension of extensions) {
+                        await adapter.loadWasm(extension);
+                    }
+                    await loadFile(traceFile);
+                    return;
+                }
+
+                if (extensions.length) {
+                    for (const extension of extensions) {
+                        await loadFile(extension);
+                    }
+                    return;
+                }
+                if (traceFile) await loadFile(traceFile);
+            }
+
+            async function loadFile(file) {
+                if (isWasmExtensionFile(file)) {
+                    try {
+                        const adapter = await getViewerExtensionAdapter();
+                        const state = await adapter.loadWasm(file);
+                        showViewerExtensionStatus(
+                            state === "pending"
+                                ? `${file.name} queued — load a trace to run it`
+                                : `${file.name} is processing the current trace`,
+                        );
+                    } catch (err) {
+                        showViewerExtensionStatus(
+                            `Could not load ${file.name}: ${err.message}`,
+                            "error",
+                        );
+                    }
+                    return;
+                }
+
                 resetTraceState();
                 enterLoadingView(`Loading ${file.name}…`);
-                const reader = new FileReader();
-                reader.onload = (e) =>
-                    parseAndShowTrace(e.target.result, file.name, getParseOptions());
-                reader.readAsArrayBuffer(file);
+                const generation = await beginViewerExtensionTrace();
+                try {
+                    const input = await file.arrayBuffer();
+                    const buffer = await TraceParser.normalizeTraceBuffer(input);
+                    if (generation !== viewerExtensionTraceGeneration) return;
+                    feedViewerExtensionBuffer(buffer, generation);
+                    viewerExtensionAdapter.finish(buffer, generation);
+                    await parseAndShowTrace(
+                        buffer,
+                        file.name,
+                        getParseOptions(),
+                        generation,
+                    );
+                } catch (err) {
+                    if (generation !== viewerExtensionTraceGeneration) return;
+                    abortViewerExtensionTrace(generation);
+                    alert("Error: " + err.message);
+                    resetDropZone();
+                }
             }
 
             let loadAbortController = null;
@@ -1846,6 +2088,7 @@
             function cancelLoad() {
                 stopLoadTimer();
                 if (loadAbortController) { loadAbortController.abort(); loadAbortController = null; }
+                abortViewerExtensionTrace();
                 resetDropZone();
             }
 
@@ -1859,8 +2102,8 @@
                 dropZone.innerHTML = `
                     <div>
                         <div style="font-size: 2em; margin-bottom: 12px">📊</div>
-                        <div>Drop a <code>.bin</code> or <code>.bin.gz</code> trace file here or click to open</div>
-                        <div style="font-size: 0.8em; margin-top: 8px; color: #666">Expects D9TF binary format</div>
+                        <div>Drop a trace or <code>.wasm</code> viewer extension here or click to open</div>
+                        <div style="font-size: 0.8em; margin-top: 8px; color: #666">Traces use D9TF binary format</div>
                         <div style="margin-top: 12px">
                             <a href="#" id="load-demo" style="color: #6c63ff; font-size: 0.9em">or load demo trace</a>
                         </div>
@@ -1882,13 +2125,20 @@
             // independently, then concatenated into one trace; see fetchTraces).
             async function loadTraceFromUrl(urls) {
                 const list = Array.isArray(urls) ? urls : [urls];
+                let extensionGeneration = null;
                 try {
+                    extensionGeneration = await beginViewerExtensionTrace();
                     const name = urlParams.get('svc')
                         || list[0].split('/').pop()?.split('?')[0]
                         || 'trace.bin';
                     if (TraceParser.canStreamDecode()) {
                         updateLoadProgress(list.length > 1 ? `Loading ${list.length} traces…` : "Loading…");
-                        await streamAndShowTrace(list, name, getParseOptions());
+                        await streamAndShowTrace(
+                            list,
+                            name,
+                            getParseOptions(),
+                            extensionGeneration,
+                        );
                         return;
                     }
                     updateLoadProgress(list.length > 1 ? `Fetching ${list.length} traces…` : "Fetching…");
@@ -1904,8 +2154,18 @@
                     // fetch and parse are separate phases (unlike streaming).
                     if (loadPerf) { loadPerf.mode = "buffered"; loadPerf.fetchDoneMs = performance.now(); }
                     loadAbortController = null;
-                    await parseAndShowTrace(arrayBuffer, name, getParseOptions());
+                    feedViewerExtensionBuffer(arrayBuffer, extensionGeneration);
+                    viewerExtensionAdapter.finish(arrayBuffer, extensionGeneration);
+                    await parseAndShowTrace(
+                        arrayBuffer,
+                        name,
+                        getParseOptions(),
+                        extensionGeneration,
+                    );
                 } catch (err) {
+                    if (extensionGeneration != null) {
+                        abortViewerExtensionTrace(extensionGeneration);
+                    }
                     if (err.name === 'AbortError') return;
                     if (/HTTP 401/.test(err.message) && window.Dial9Creds && !Dial9Creds.has()) {
                         alert(
@@ -2061,7 +2321,16 @@
 
             function processTrace() {
                 const evts = trace.events;
-                const timeRange = getTraceTimeRange(evts, trace.cpuSamples, trace.customEvents);
+                let timeRange = getTraceTimeRange(evts, trace.cpuSamples, trace.customEvents);
+                if (
+                    !timeRange &&
+                    Number.isFinite(trace.recordMinTs) &&
+                    Number.isFinite(trace.recordMaxTs)
+                ) {
+                    const min = trace.recordMinTs;
+                    const max = trace.recordMaxTs === min ? min + 1 : trace.recordMaxTs;
+                    timeRange = { minTs: min, maxTs: max, durationNs: max - min };
+                }
                 if (!timeRange) {
                     alert("No runtime events, CPU profile samples, or process resource usage samples in trace");
                     return false;
@@ -2961,6 +3230,13 @@
                 renderCustomEventsPanel(scrollbarW);
                 renderProcessCpuPanel(scrollbarW);
                 if (prof) _t = _profMark(prof, `customEvents(${genericCustomEvents.length})`, _t);
+                viewerExtensionAdapter?.render({
+                    start: viewStart,
+                    end: viewEnd,
+                    labelWidth: LABEL_W,
+                    rightInset: scrollbarW,
+                });
+                if (prof) _t = _profMark(prof, "viewerExtensions", _t);
                 renderTaskDetail(scrollbarW);
                 if (prof) _t = _profMark(prof, "taskDetail", _t);
                 renderQueueChart(drawW, scrollbarW);
@@ -6547,6 +6823,12 @@
                     if (dragging) {
                         tooltip.style.display = "none";
                         mouseNs = null;
+                        return;
+                    }
+                    // Extension panels own their hit testing, tooltip and
+                    // pointer-dependent readout.
+                    if (e.target.closest && e.target.closest(".viewer-extension-panel")) {
+                        lanesContainer.style.cursor = "";
                         return;
                     }
                     // Over the span panel: it owns its own tooltip, but we
