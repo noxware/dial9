@@ -1,4 +1,4 @@
-//! Rust SDK for sandboxed, trace-bundled dial9 viewer extensions.
+//! Rust SDK for sandboxed dial9 viewer extensions.
 //!
 //! Extensions decode D9TF directly inside WebAssembly and emit typed columnar
 //! batches consumed by reusable viewer components.

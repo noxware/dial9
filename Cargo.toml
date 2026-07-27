@@ -38,3 +38,12 @@ assert2 = "0.4"
 
 [profile.release]
 debug = 1
+
+[profile.viewer-extension]
+inherits = "release"
+codegen-units = 1
+debug = 0
+lto = true
+opt-level = "z"
+panic = "abort"
+strip = "symbols"

@@ -411,10 +411,15 @@ dial9_viewer_extension::manifest!(
 );
 
 #[derive(Clone, Copy)]
-struct ResourceSample {
+struct CpuSample {
     timestamp_ns: u64,
     user_cpu_ns: u64,
     system_cpu_ns: u64,
+}
+
+#[derive(Clone, Copy)]
+struct ContextSample {
+    timestamp_ns: u64,
     voluntary_context_switches: u64,
     involuntary_context_switches: u64,
 }
@@ -444,7 +449,7 @@ impl Default for CpuBatch {
 }
 
 impl CpuBatch {
-    fn push(&mut self, previous: ResourceSample, current: ResourceSample, capacity: Option<f64>) {
+    fn push(&mut self, previous: CpuSample, current: CpuSample, capacity: Option<f64>) {
         let Some(window_ns) = current.timestamp_ns.checked_sub(previous.timestamp_ns) else {
             return;
         };
@@ -551,7 +556,7 @@ impl Default for ContextBatch {
 }
 
 impl ContextBatch {
-    fn push(&mut self, previous: ResourceSample, current: ResourceSample) {
+    fn push(&mut self, previous: ContextSample, current: ContextSample) {
         let Some(window_ns) = current.timestamp_ns.checked_sub(previous.timestamp_ns) else {
             return;
         };
@@ -661,7 +666,7 @@ impl Default for ContextSampleBatch {
 }
 
 impl ContextSampleBatch {
-    fn push(&mut self, sample: ResourceSample) {
+    fn push(&mut self, sample: ContextSample) {
         self.time_ns.push(sample.timestamp_ns);
         self.voluntary_total.push(sample.voluntary_context_switches);
         self.involuntary_total
@@ -696,7 +701,8 @@ impl ContextSampleBatch {
 #[derive(Default)]
 struct DemoExtension {
     capacity: Option<f64>,
-    previous: Option<ResourceSample>,
+    previous_cpu: Option<CpuSample>,
+    previous_context: Option<ContextSample>,
     cpu: CpuBatch,
     context: ContextBatch,
     context_samples: ContextSampleBatch,
@@ -725,22 +731,38 @@ impl Extension for DemoExtension {
                 }
             }
             "ProcessResourceUsageEvent" => {
-                let Some(sample) = resource_sample(&event) else {
-                    return Ok(());
-                };
-                self.context_samples.push(sample);
-                if let Some(previous) = self.previous.replace(sample) {
-                    self.cpu.push(previous, sample, self.capacity);
-                    self.context.push(previous, sample);
+                if let Some(sample) = cpu_sample(&event) {
+                    match self.previous_cpu {
+                        Some(previous) if sample.timestamp_ns >= previous.timestamp_ns => {
+                            self.cpu.push(previous, sample, self.capacity);
+                            self.previous_cpu = Some(sample);
+                        }
+                        None => self.previous_cpu = Some(sample),
+                        Some(_) => {}
+                    }
                     if self.cpu.start_ns.len() >= BATCH_ROWS {
                         self.cpu.flush(output)?;
+                    }
+                }
+                if let Some(sample) = context_sample(&event) {
+                    match self.previous_context {
+                        Some(previous) if sample.timestamp_ns >= previous.timestamp_ns => {
+                            self.context_samples.push(sample);
+                            self.context.push(previous, sample);
+                            self.previous_context = Some(sample);
+                        }
+                        None => {
+                            self.context_samples.push(sample);
+                            self.previous_context = Some(sample);
+                        }
+                        Some(_) => {}
                     }
                     if self.context.start_ns.len() >= BATCH_ROWS {
                         self.context.flush(output)?;
                     }
-                }
-                if self.context_samples.time_ns.len() >= BATCH_ROWS {
-                    self.context_samples.flush(output)?;
+                    if self.context_samples.time_ns.len() >= BATCH_ROWS {
+                        self.context_samples.flush(output)?;
+                    }
                 }
             }
             _ => {}
@@ -765,11 +787,17 @@ impl Extension for DemoExtension {
     }
 }
 
-fn resource_sample(event: &Event<'_, '_>) -> Option<ResourceSample> {
-    Some(ResourceSample {
+fn cpu_sample(event: &Event<'_, '_>) -> Option<CpuSample> {
+    Some(CpuSample {
         timestamp_ns: event.timestamp_ns()?,
         user_cpu_ns: event.field("user_cpu_ns")?.as_u64()?,
         system_cpu_ns: event.field("system_cpu_ns")?.as_u64()?,
+    })
+}
+
+fn context_sample(event: &Event<'_, '_>) -> Option<ContextSample> {
+    Some(ContextSample {
+        timestamp_ns: event.timestamp_ns()?,
         voluntary_context_switches: event.field("voluntary_context_switches")?.as_u64()?,
         involuntary_context_switches: event.field("involuntary_context_switches")?.as_u64()?,
     })
@@ -892,17 +920,17 @@ dial9_viewer_extension::export_extension!(DemoExtension);
 mod tests {
     use super::*;
 
-    fn sample(
-        timestamp_ns: u64,
-        user_cpu_ns: u64,
-        system_cpu_ns: u64,
-        voluntary: u64,
-        involuntary: u64,
-    ) -> ResourceSample {
-        ResourceSample {
+    fn cpu_sample(timestamp_ns: u64, user_cpu_ns: u64, system_cpu_ns: u64) -> CpuSample {
+        CpuSample {
             timestamp_ns,
             user_cpu_ns,
             system_cpu_ns,
+        }
+    }
+
+    fn context_sample(timestamp_ns: u64, voluntary: u64, involuntary: u64) -> ContextSample {
+        ContextSample {
+            timestamp_ns,
             voluntary_context_switches: voluntary,
             involuntary_context_switches: involuntary,
         }
@@ -910,13 +938,15 @@ mod tests {
 
     #[test]
     fn computes_cpu_and_context_deltas_from_adjacent_samples() {
-        let previous = sample(10, 100, 50, 20, 4);
-        let current = sample(20, 106, 54, 25, 5);
+        let previous_cpu = cpu_sample(10, 100, 50);
+        let current_cpu = cpu_sample(20, 106, 54);
+        let previous_context = context_sample(10, 20, 4);
+        let current_context = context_sample(20, 25, 5);
         let mut cpu = CpuBatch::default();
         let mut context = ContextBatch::default();
 
-        cpu.push(previous, current, Some(2.0));
-        context.push(previous, current);
+        cpu.push(previous_cpu, current_cpu, Some(2.0));
+        context.push(previous_context, current_context);
 
         assert_eq!(cpu.start_ns, [10]);
         assert_eq!(cpu.cpu_ns, [10]);
@@ -930,13 +960,15 @@ mod tests {
 
     #[test]
     fn counter_decreases_create_independent_context_gaps() {
-        let previous = sample(10, 100, 50, 20, 4);
-        let current = sample(20, 90, 60, 19, 7);
+        let previous_cpu = cpu_sample(10, 100, 50);
+        let current_cpu = cpu_sample(20, 90, 60);
+        let previous_context = context_sample(10, 20, 4);
+        let current_context = context_sample(20, 19, 7);
         let mut cpu = CpuBatch::default();
         let mut context = ContextBatch::default();
 
-        cpu.push(previous, current, None);
-        context.push(previous, current);
+        cpu.push(previous_cpu, current_cpu, None);
+        context.push(previous_context, current_context);
 
         assert!(cpu.start_ns.is_empty());
         assert_eq!(context.voluntary_delta_validity, [0]);
@@ -948,12 +980,14 @@ mod tests {
     fn backward_or_equal_timestamps_do_not_emit_rows() {
         let mut cpu = CpuBatch::default();
         let mut context = ContextBatch::default();
-        let previous = sample(20, 100, 50, 2, 3);
+        let previous_cpu = cpu_sample(20, 100, 50);
+        let previous_context = context_sample(20, 2, 3);
 
         for timestamp in [20, 10] {
-            let current = sample(timestamp, 110, 60, 4, 5);
-            cpu.push(previous, current, Some(1.0));
-            context.push(previous, current);
+            let current_cpu = cpu_sample(timestamp, 110, 60);
+            let current_context = context_sample(timestamp, 4, 5);
+            cpu.push(previous_cpu, current_cpu, Some(1.0));
+            context.push(previous_context, current_context);
         }
 
         assert!(cpu.start_ns.is_empty());

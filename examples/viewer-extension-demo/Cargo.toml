@@ -6,8 +6,26 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+trace-fixture = [
+    "dep:dial9-perf-self-profile",
+    "dep:dial9-trace-format",
+]
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 dial9-viewer-extension = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+dial9-perf-self-profile = { workspace = true, optional = true, features = [
+    "process-resource",
+    "unstable-events",
+] }
+dial9-trace-format = { workspace = true, optional = true }
+
+[[bin]]
+name = "make_trace"
+path = "src/bin/make_trace.rs"
+required-features = ["trace-fixture"]
