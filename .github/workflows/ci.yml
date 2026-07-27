@@ -215,7 +215,7 @@ jobs:
       - run: scripts/e2e-trace-tests.sh
 
   ui:
-    name: UI (tsc, vitest, vite build)
+    name: UI (tsc, vitest, vite build, Playwright)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -227,7 +227,14 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: dial9-viewer/ui/package-lock.json
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: ${{ env.STABLE_TOOLCHAIN }}
+          targets: wasm32-unknown-unknown
       - run: npm ci
+      - name: Build reference viewer extension
+        run: cargo build -p viewer-extension-demo --target wasm32-unknown-unknown --profile viewer-extension
+        working-directory: ${{ github.workspace }}
       - run: npx tsc --noEmit
       # Re-checks src/types/*.d.ts with skipLibCheck OFF: the main config's
       # skipLibCheck (for node_modules) also skips our hand-written frozen-core
@@ -235,6 +242,8 @@ jobs:
       - run: npm run check:types
       - run: npm run test
       - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
 
   asan:
     name: AddressSanitizer (perf-self-profile)
