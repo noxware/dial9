@@ -270,7 +270,11 @@ export class ExtensionCoordinator {
     if (run.result !== undefined) return;
     run.result = result;
     run.worker.terminate();
-    this.#onResult?.(result);
+    try {
+      this.#onResult?.(result);
+    } catch (error) {
+      console.error("Viewer extension result observer failed", error);
+    }
     this.#settleIfComplete();
   }
 

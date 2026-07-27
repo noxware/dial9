@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ColumnarBatch } from "./columnar.js";
 import {
   ExtensionCoordinator,
@@ -200,6 +200,55 @@ describe("ExtensionCoordinator", () => {
       "push",
       "finish",
     ]);
+  });
+
+  it("isolates result observer failures from coordinator completion", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const workers: FakeWorker[] = [];
+    let nextId = 1;
+    let publications = 0;
+    const coordinator = new ExtensionCoordinator(
+      [
+        { fileName: "first.wasm", wasm: new Uint8Array() },
+        { fileName: "second.wasm", wasm: new Uint8Array() },
+      ],
+      {
+        createInstanceId: () => `instance-${nextId++}`,
+        workerFactory: () => {
+          const worker = new FakeWorker();
+          workers.push(worker);
+          return worker;
+        },
+        onResult: () => {
+          publications += 1;
+          throw new Error("observer failed");
+        },
+      },
+    );
+    workers.forEach((worker, index) => {
+      worker.respond({
+        kind: "ready",
+        instance_id: `instance-${index + 1}`,
+        file_name: index === 0 ? "first.wasm" : "second.wasm",
+        manifest: MANIFEST,
+      });
+    });
+
+    try {
+      const finished = coordinator.finish();
+      expect(() => workers[0]!.respond({ kind: "complete" })).not.toThrow();
+      expect(() => workers[1]!.respond({ kind: "complete" })).not.toThrow();
+
+      await expect(finished).resolves.toMatchObject([
+        { status: "complete" },
+        { status: "complete" },
+      ]);
+      expect(publications).toBe(2);
+      expect(workers.every((worker) => worker.terminated)).toBe(true);
+      expect(errors).toHaveBeenCalledTimes(2);
+    } finally {
+      errors.mockRestore();
+    }
   });
 
   it("aborts every unfinished worker and resolves immediately", async () => {
