@@ -55,6 +55,10 @@ changelog_update = false
 version_group = "trace-format"
 
 [[package]]
+name = "dial9-viewer-extension"
+changelog_update = false
+
+[[package]]
 name = "dial9-viewer"
 changelog_update = false
 # ui/dist is gitignored but force-included in the package, so the

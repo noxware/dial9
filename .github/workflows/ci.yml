@@ -236,6 +236,84 @@ jobs:
       - run: npm run test
       - run: npm run build
 
+  viewer-extension:
+    name: Viewer extension (WASM, UI, Playwright)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dial9-viewer/ui
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: ${{ env.STABLE_TOOLCHAIN }}
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: dial9-viewer/ui/package-lock.json
+      - run: npm ci
+      - name: Test the Rust SDK and reference extension
+        working-directory: ${{ github.workspace }}
+        run: >
+          cargo test
+          -p dial9-viewer-extension
+          -p dial9-viewer-extension-demo
+          --lib
+      - name: Build the reference extension
+        working-directory: ${{ github.workspace }}
+        run: >
+          cargo build
+          --target wasm32-unknown-unknown
+          --profile viewer-extension
+          -p dial9-viewer-extension-demo
+          --lib
+      - name: Verify the release WASM artifact
+        run: >
+          node scripts/verify-viewer-extension-wasm.mjs
+          "$GITHUB_WORKSPACE/target/wasm32-unknown-unknown/viewer-extension/dial9_viewer_extension_demo.wasm"
+      - run: npx tsc --noEmit
+      - run: npm run check:types
+      - name: Test viewer extension modules
+        env:
+          DIAL9_EXTENSION_WASM: ${{ github.workspace }}/target/wasm32-unknown-unknown/viewer-extension/dial9_viewer_extension_demo.wasm
+        run: >
+          npx vitest run
+          src/lib/viewer-extension
+          tests/core/fetch_traces.test.ts
+      - run: npm run build
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Test the reference extension in the legacy viewer
+        run: |
+          preview_log="$RUNNER_TEMP/viewer-extension-vite-preview.log"
+          npx vite preview --host 127.0.0.1 --port 4173 >"$preview_log" 2>&1 &
+          preview_pid=$!
+          trap 'kill "$preview_pid" 2>/dev/null || true' EXIT
+
+          ready=false
+          for _ in {1..30}; do
+            if curl --fail --silent --show-error \
+              http://127.0.0.1:4173/viewer.html >/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$ready" != true ]]; then
+            cat "$preview_log"
+            exit 1
+          fi
+
+          node parity/viewer-extension.mjs \
+            --url http://127.0.0.1:4173/viewer.html \
+            --wasm "$GITHUB_WORKSPACE/target/wasm32-unknown-unknown/viewer-extension/dial9_viewer_extension_demo.wasm" \
+            --trace "$GITHUB_WORKSPACE/dial9-viewer/ui/public/demo-trace.bin"
+
   asan:
     name: AddressSanitizer (perf-self-profile)
     runs-on: ubuntu-latest
@@ -369,6 +447,7 @@ jobs:
             -p dial9-core \
             -p dial9-utils \
             -p dial9-perf-self-profile \
+            -p dial9-viewer-extension \
             -p dial9-macro \
             -p dial9-tokio-telemetry \
             -p dial9-viewer
@@ -392,7 +471,7 @@ jobs:
   ci-pass:
     name: CI Pass
     runs-on: ubuntu-latest
-    needs: [fmt, clippy, build, android-aarch64-build, feature-check, check-docs, trace-integrity, ui, asan, ecs-sim, shuttle, package, doctests]
+    needs: [fmt, clippy, build, android-aarch64-build, feature-check, check-docs, trace-integrity, ui, viewer-extension, asan, ecs-sim, shuttle, package, doctests]
     if: always()
     steps:
       - run: |
