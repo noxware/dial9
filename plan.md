@@ -32,22 +32,20 @@ Main thread JS
 - CPU exacto y dragón son las validaciones visibles; los paneles originales
   permanecen para compararlos.
 
+## Alcance inicial
+
+- La primera implementación carga extensiones únicamente mediante drag and
+  drop de archivos `.wasm`.
+- No modifica D9TF, sus encoders, decoders ni recorder. El bundling dentro del
+  trace conserva su diseño más abajo como trabajo diferido.
+- Una extensión cargada antes del trace queda pendiente y procesa la próxima
+  carga. Una extensión cargada después reprocesa el buffer descomprimido
+  retenido por el viewer.
+- SDK, ABI, manifest, tablas y componentes no dependen del mecanismo de carga,
+  por lo que incorporar extensiones al trace posteriormente no cambia esos
+  contratos.
+
 ## Contratos públicos
-
-### Embedded files en D9TF
-
-- Agregar un frame genérico `EmbeddedFile` (`0x07`): `name_len:u16`,
-  `data_len:u32`, nombre UTF-8 y bytes.
-- Los frames forman un preámbulo contiguo inmediatamente después del header.
-- `SegmentWriter` difiere `ClockSyncEvent` hasta escribir el preámbulo y lo
-  repite en cada segmento físico para que cualquiera pueda abrirse solo.
-- API Rust:
-  - `EmbeddedFile::borrowed(name, &'static [u8])`
-  - `EmbeddedFile::owned(name, Vec<u8>)`
-  - `RecorderBuilder::embedded_file(file)`
-- El nombre es una etiqueta opaca, no una identidad global.
-- El viewer autoejecuta los archivos `.wasm` del primer segmento de la carga
-  lógica. Attachments de segmentos agregados posteriormente se ignoran en v1.
 
 ### SDK y ABI WASM
 
@@ -373,8 +371,7 @@ Referencia visual:
 - Test de line y step-line superpuestos, orden Z y tooltips independientes.
 - Tests del macro con espacios dentro de strings, escapes y Unicode, y
   extracción de la custom section del `.wasm` compilado.
-- Tests de attachments partidos en cualquier byte boundary y repetidos por
-  rotación; batches múltiples, gaps, nullability y UTF-8 lazy.
+- Tests de batches múltiples, gaps, nullability y UTF-8 lazy.
 - Tests de imports, traps, pointers fuera de memoria, manifests/batches
   inválidos, múltiples módulos y drops antes/después del trace.
 - Benchmark reproducible con los 250k eventos de `p8` y un trace generado
@@ -392,12 +389,42 @@ Referencia visual:
 
 ## Diferido
 
+### Bundling dentro de D9TF
+
+El objetivo final sigue siendo que una librería Rust pueda incluir la extensión
+en el trace. Este transporte se implementa después de validar mediante drag and
+drop el SDK, ABI, manifest, componentes y presentación.
+
+Diseño preservado:
+
+- Agregar un frame genérico `EmbeddedFile` (`0x07`): `name_len:u16`,
+  `data_len:u32`, nombre UTF-8 y bytes.
+- Los frames forman un preámbulo contiguo inmediatamente después del header.
+- `SegmentWriter` difiere `ClockSyncEvent` hasta escribir el preámbulo y lo
+  repite en cada segmento físico para que cualquiera pueda abrirse solo.
+- API Rust:
+  - `EmbeddedFile::borrowed(name, &'static [u8])`
+  - `EmbeddedFile::owned(name, Vec<u8>)`
+  - `RecorderBuilder::embedded_file(file)`
+- El nombre es una etiqueta opaca, no una identidad global.
+- El viewer autoejecuta los archivos `.wasm` del primer segmento de la carga
+  lógica. Attachments de segmentos agregados posteriormente se ignoran
+  inicialmente.
+- Probar attachments partidos en cualquier byte boundary, repetidos por
+  rotación y presentes en múltiples segmentos.
+- Evaluar políticas alternativas para activar attachments de traces agregados
+  después del primero.
+
+La incorporación de este transporte no crea una segunda API de extensiones:
+descubre los mismos bytes `.wasm` que hoy llegan por drag and drop y los entrega
+al mismo loader.
+
+### Otros
+
 - Adaptador para el viewer nuevo.
 - Callbacks WASM reactivos.
 - Cuotas y policy estática de recursos WASM.
 - Builders tipados, domain types y proc macros ergonómicas para batches.
-- Activación manual o políticas alternativas para attachments de traces
-  agregados después del primero.
 - Hosts CLI/server-side.
 - Reemplazo de queue depth y componentes especializados como heatmap, slices,
   spans y flamegraph.
