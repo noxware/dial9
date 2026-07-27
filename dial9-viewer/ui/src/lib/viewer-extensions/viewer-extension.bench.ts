@@ -12,7 +12,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { bench, describe } from "vitest";
-import { parseTrace } from "../../../trace_parser.js";
+import { parseTraceBuffer } from "../trace/index.js";
 import { ExtensionTableStore, type TableStore } from "./tables.js";
 import type { RecordBatch } from "./types.js";
 import {
@@ -36,7 +36,7 @@ const wasmBytes = available ? readFileSync(WASM_PATH) : null;
 const compiled =
   wasmBytes === null ? null : await WebAssembly.compile(arrayBuffer(wasmBytes));
 const referenceTrace =
-  traceBytes === null ? null : await parseTrace(arrayBuffer(traceBytes));
+  traceBytes === null ? null : await parseTraceBuffer(arrayBuffer(traceBytes));
 
 interface ResourceEvent {
   readonly name: string;
@@ -232,7 +232,7 @@ async function executeWasm(options: {
 
 async function deriveEndToEndJs(): Promise<ResourceOutput> {
   if (traceBytes === null) throw new Error("benchmark trace is missing");
-  const trace = await parseTrace(arrayBuffer(traceBytes));
+  const trace = await parseTraceBuffer(arrayBuffer(traceBytes));
   return deriveWithFor(trace.customEvents as ResourceEvent[]);
 }
 
