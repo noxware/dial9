@@ -266,6 +266,9 @@ Contrato común:
   readout hacen match por tabla y, opcionalmente, por mapping de canal; esto
   permite presentaciones independientes sin IDs de componentes.
 - `background/v1` acepta un color literal o un scalar producido en una tabla.
+- Un scalar requerido con valor null vuelve inerte al componente. En
+  `swatch/v1`, omitir `value` crea un label sin valor; `value: null` omite el
+  swatch.
 - `polyline/v1` preserva el orden de rows, incluidos valores X repetidos o hacia
   atrás.
 - Tooltip muestra items de la row alcanzada y omite valores null.
@@ -274,7 +277,7 @@ Contrato común:
   sin separadores.
 - `readout/v1` vive a la derecha y une sus items con `·`. Admite sampling del
   hit/cursor y reducers sobre el viewport: `min`, `max`, `sum`, `count`, `mean`
-  y `time_weighted_mean`.
+  y `time_weighted_mean`; omite items sin valores válidos.
 - Paneles admiten ejes X temporales o lineales, múltiples escalas Y y dominios
   visibles o fijos que incluyan cero, constantes o scalars de otras tablas.
 - Colores pueden ser literales o ramps basados en una columna y una escala.

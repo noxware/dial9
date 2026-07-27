@@ -62,6 +62,19 @@ describe("panel runtime data operations", () => {
     expect(reduce(item, data, { ...viewport, start: 11, end: 19 })).toBe(3);
   });
 
+  it("returns null when a readout has no valid values", () => {
+    const empty = intervalData(
+      arrayColumn([0]),
+      arrayColumn([10]),
+      arrayColumn<number>([null]),
+    );
+    expect(reduce(
+      { label: "max", values: empty.y, reduce: "max" },
+      empty,
+      { start: 0, end: 10, scrollbarWidth: 0 },
+    )).toBeNull();
+  });
+
   it("matches the compact formatting used by the reference panels", () => {
     expect(formatNumber(0.4821)).toBe("0.48");
     expect(formatNumber(11)).toBe("11");

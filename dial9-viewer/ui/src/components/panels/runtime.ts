@@ -212,6 +212,7 @@ function updatePanelChrome(dom: PanelDom): void {
   dom.legend.replaceChildren(
     ...dom.panel.components
       .filter((component): component is SwatchComponent => component.name === "swatch/v1")
+      .filter((component) => component.value !== null)
       .map(swatchElement),
   );
 }
@@ -319,6 +320,7 @@ function panelProjection(panel: ResolvedPanel, viewport: PanelViewport): Project
   }
   for (const component of panel.components) {
     if (component.name === "horizontal-rule/v1") {
+      if (component.value === null || !Number.isFinite(component.value)) continue;
       min = Math.min(min, component.value);
       max = Math.max(max, component.value);
       sawValue = true;
@@ -434,6 +436,7 @@ function drawGraph(
     case "background/v1":
       return null;
     case "horizontal-rule/v1": {
+      if (component.value === null || !Number.isFinite(component.value)) return null;
       const y = projection.y(component.value);
       context.strokeStyle = component.color;
       context.lineWidth = 1;
@@ -687,7 +690,10 @@ function updateReadout(dom: PanelDom, viewport: PanelViewport): void {
     return;
   }
   dom.readout.textContent = component.items
-    .map((item) => `${item.label} ${formatValue(reduce(item, component.data, viewport), item.unit)}`)
+    .flatMap((item) => {
+      const value = reduce(item, component.data, viewport);
+      return value === null ? [] : [`${item.label} ${formatValue(value, item.unit)}`];
+    })
     .join(" · ");
 }
 
@@ -695,7 +701,7 @@ export function reduce(
   item: ReadoutItem,
   data: PanelData,
   viewport: PanelViewport,
-): number {
+): number | null {
   if (typeof item.reduce === "object") {
     let weighted = 0;
     let duration = 0;
@@ -710,7 +716,7 @@ export function reduce(
       weighted += overlap * value;
       duration += overlap;
     }
-    return duration > 0 ? weighted / duration : 0;
+    return duration > 0 ? weighted / duration : null;
   }
 
   let count = 0;
@@ -727,12 +733,13 @@ export function reduce(
     min = Math.min(min, value);
     max = Math.max(max, value);
   }
+  if (count === 0) return null;
   switch (item.reduce) {
     case "count": return count;
     case "sum": return sum;
-    case "mean": return count > 0 ? sum / count : 0;
-    case "min": return count > 0 ? min : 0;
-    case "max": return count > 0 ? max : 0;
+    case "mean": return sum / count;
+    case "min": return min;
+    case "max": return max;
   }
 }
 

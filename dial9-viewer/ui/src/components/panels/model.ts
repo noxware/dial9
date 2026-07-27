@@ -28,7 +28,7 @@ export interface PolylineComponent {
 
 export interface HorizontalRuleComponent {
   readonly name: "horizontal-rule/v1";
-  readonly value: number;
+  readonly value: number | null;
   readonly color: string;
 }
 
@@ -49,7 +49,7 @@ export interface SwatchComponent {
   readonly label: string;
   readonly color: string;
   readonly kind: SwatchKind;
-  readonly value?: number;
+  readonly value?: number | null;
   readonly unit?: string;
 }
 

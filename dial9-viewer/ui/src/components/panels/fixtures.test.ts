@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { cpuPanel } from "./fixtures.js";
 import type {
+  HorizontalRuleComponent,
   ReadoutComponent,
   SwatchComponent,
   TooltipComponent,
@@ -56,5 +57,41 @@ describe("CPU component fixture", () => {
       ["avg", "%"],
       ["max", "cores"],
     ]);
+  });
+
+  it("keeps a static component shape when capacity is unavailable", () => {
+    const withoutCapacity = cpuPanel({
+      capacity: null,
+      intervals: [{
+        start: 0,
+        end: 10,
+        wallDeltaNs: 10,
+        cpuDeltaNs: 5,
+        cores: 0.5,
+      }],
+    })!;
+    expect(withoutCapacity.components.map((component) => component.name)).toEqual(
+      panel.components.map((component) => component.name),
+    );
+
+    const rule = withoutCapacity.components.find(
+      (component): component is HorizontalRuleComponent =>
+        component.name === "horizontal-rule/v1",
+    )!;
+    const swatch = withoutCapacity.components.find(
+      (component): component is SwatchComponent => component.name === "swatch/v1",
+    )!;
+    const tooltip = withoutCapacity.components.find(
+      (component): component is TooltipComponent => component.name === "tooltip/v1",
+    )!;
+    const readout = withoutCapacity.components.find(
+      (component): component is ReadoutComponent => component.name === "readout/v1",
+    )!;
+
+    expect(rule.value).toBeNull();
+    expect(swatch.value).toBeNull();
+    expect(tooltip.items.find((item) => item.label === "Total CPU")?.values.get(0))
+      .toBeNull();
+    expect(readout.items.find((item) => item.unit === "%")?.values.get(0)).toBeNull();
   });
 });
