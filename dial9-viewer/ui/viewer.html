@@ -1014,6 +1014,7 @@
         <script src="flamegraph_export.js"></script>
         <script src="flamegraph.js"></script>
         <script src="panel_layout.js"></script>
+        <script type="module" src="/src/pages/viewer/composable-panels-legacy.ts"></script>
         <script>
             const { EVENT_TYPES: ET, parseTrace, formatFrame, symbolizeChain, deduplicateSamples } = TraceParser;
             const { buildWorkerSpans, attachCpuSamples, buildActiveTaskTimeline, computeSchedulingDelays, filterPointsOfInterest, buildSpanData, collectDescendants, selectSpanRenderSet, enclosingSpans, computeSpanLayout, getTraceTimeRange, hasCpuProfileSamples, buildProcessCpuUsageSeries, computeRuntimeGroups } = TraceAnalysis;
@@ -1294,6 +1295,7 @@
                 maxCores: 0,
                 avgCores: 0,
             };
+            let composablePanels = null;
             // Points of interest for navigation
             let pointsOfInterest = [];
             let currentPoiIndex = -1;
@@ -1466,8 +1468,9 @@
                 if (redraw) renderAll();
             }
 
-            for (const panel of document.querySelectorAll(".foldable-panel")) {
+            function attachFoldablePanel(panel) {
                 const key = panel.dataset.panelKey;
+                if (!FOLDABLE_PANEL_KEYS.includes(key)) FOLDABLE_PANEL_KEYS.push(key);
                 const label = panel.querySelector(".chart-label");
                 if (label) {
                     label.setAttribute("role", "button");
@@ -1485,7 +1488,48 @@
                     setPanelCollapsed(key, !isPanelCollapsed(key));
                 });
             }
+            for (const panel of document.querySelectorAll(".foldable-panel")) {
+                attachFoldablePanel(panel);
+            }
             syncFoldablePanels();
+
+            const composablePanelDemo = new URLSearchParams(window.location.search).get("demo") === "1";
+
+            function ensureComposablePanels() {
+                if (!composablePanelDemo || composablePanels || !window.Dial9ComposablePanels) {
+                    return composablePanels;
+                }
+                composablePanels = window.Dial9ComposablePanels.mount({
+                    container: taskDetailPanel.parentElement,
+                    before: taskDetailPanel,
+                    tooltip,
+                    isCollapsed: isPanelCollapsed,
+                    onPanelCreated: attachFoldablePanel,
+                    onPointerTime: (timestamp) => {
+                        mouseNs = timestamp;
+                        scheduleCrosshairRedraw();
+                    },
+                });
+                return composablePanels;
+            }
+
+            function updateComposablePanels() {
+                const panels = ensureComposablePanels();
+                if (!panels || !trace) return;
+                panels.setData({
+                    cpu: {
+                        intervals: processCpuUsage.intervals,
+                        capacity: processCpuUsage.availableParallelism,
+                    },
+                });
+                syncFoldablePanels();
+            }
+
+            window.addEventListener("dial9-composable-panels-ready", () => {
+                if (!trace) return;
+                updateComposablePanels();
+                renderAll();
+            });
 
             // Position the (already-populated, display:block) tooltip near the
             // cursor, clamped to the viewport on both axes. Flips above the cursor
@@ -1572,6 +1616,7 @@
                 relatedItems = [];
                 hoveredWakerTaskId = null;
                 processCpuUsage = { samples: [], intervals: [], availableParallelism: null, maxCores: 0, avgCores: 0 };
+                composablePanels?.clear();
                 hideStackPopup();
                 taskDetailPanel.style.display = "none";
                 document.getElementById("cpu-panel").style.display = "none";
@@ -2158,6 +2203,7 @@
                         : ", available_parallelism=unknown";
                     console.log(`Process CPU usage: ${processCpuUsage.intervals.length} intervals${cap}`);
                 }
+                updateComposablePanels();
 
                 // Build span data from custom events.  Reset span state
                 // unconditionally here so a trace with no spans doesn't
@@ -2960,6 +3006,11 @@
                 if (prof) _t = _profMark(prof, `spanPanel(allSpans=${allSpans.length})`, _t);
                 renderCustomEventsPanel(scrollbarW);
                 renderProcessCpuPanel(scrollbarW);
+                composablePanels?.render({
+                    start: viewStart,
+                    end: viewEnd,
+                    scrollbarWidth: scrollbarW,
+                });
                 if (prof) _t = _profMark(prof, `customEvents(${genericCustomEvents.length})`, _t);
                 renderTaskDetail(scrollbarW);
                 if (prof) _t = _profMark(prof, "taskDetail", _t);
