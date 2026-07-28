@@ -61,6 +61,21 @@ test("recreates CPU and keeps the dinosaur fully interactive", async ({
   const contextTooltip = await hoverContextSwitchTail(page, contextSwitches);
   expect(contextTooltip).toMatch(/^Involuntary: .* switches\/s\nTime: \+\d/);
 
+  const cumulativeContextSwitches = extensionPanel(
+    page,
+    "WASM · Context Switches (Cumulative)",
+  );
+  await expect(
+    cumulativeContextSwitches.locator(".d9-extension-legend-item"),
+  ).toHaveText([
+    "Voluntary",
+    "Involuntary",
+    "warning (8,000 switches)",
+    "critical (10,000 switches)",
+  ]);
+  await expect(cumulativeContextSwitches.locator(".d9-extension-readout"))
+    .toHaveText(/^max [\d,]+ switches$/);
+
   const dinosaur = extensionPanel(
     page,
     "WASM · Extremely Scientific Dinosaur",
@@ -252,7 +267,7 @@ async function dropWasm(page: Page): Promise<void> {
 async function expectExtensionPanels(page: Page): Promise<void> {
   await expect(
     page.locator(".d9-extension-title").filter({ hasText: /^WASM ·/ }),
-  ).toHaveCount(3);
+  ).toHaveCount(4);
 }
 
 function extensionPanel(page: Page, title: string) {

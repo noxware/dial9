@@ -4,9 +4,13 @@ use std::mem;
 const CPU_INTERVALS: TableId = TableId::new(0);
 const SCALARS: TableId = TableId::new(1);
 const CONTEXT_SWITCHES: TableId = TableId::new(2);
-const DINO_BODY: TableId = TableId::new(3);
-const DINO_FLAMES: TableId = TableId::new(4);
+const CUMULATIVE_CONTEXT_SWITCHES: TableId = TableId::new(3);
+const CONTEXT_LIMITS: TableId = TableId::new(4);
+const DINO_BODY: TableId = TableId::new(5);
+const DINO_FLAMES: TableId = TableId::new(6);
 const BATCH_ROWS: usize = 1_024;
+const CONTEXT_WARNING: u64 = 8_000;
+const CONTEXT_CRITICAL: u64 = 10_000;
 
 dial9_viewer_extension::manifest!(
     r##"
@@ -39,6 +43,21 @@ dial9_viewer_extension::manifest!(
             { "name": "end_ns", "type": "u64" },
             { "name": "voluntary_rate", "type": "f64", "nullable": true },
             { "name": "involuntary_rate", "type": "f64", "nullable": true }
+          ]
+        },
+        {
+          "name": "cumulative_context_switches",
+          "columns": [
+            { "name": "timestamp_ns", "type": "u64" },
+            { "name": "voluntary", "type": "u64" },
+            { "name": "involuntary", "type": "u64" }
+          ]
+        },
+        {
+          "name": "context_limits",
+          "columns": [
+            { "name": "warning", "type": "u64" },
+            { "name": "critical", "type": "u64" }
           ]
         },
         {
@@ -223,6 +242,110 @@ dial9_viewer_extension::manifest!(
               "items": [
                 { "label": "voluntary max", "column": "voluntary_rate", "reduce": "max", "unit": "switches/s" },
                 { "label": "involuntary max", "column": "involuntary_rate", "reduce": "max", "unit": "switches/s" }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "WASM · Context Switches (Cumulative)",
+          "components": [
+            {
+              "name": "line/v1",
+              "table": "cumulative_context_switches",
+              "x": "timestamp_ns",
+              "y": "voluntary",
+              "color": "#81c784"
+            },
+            {
+              "name": "line/v1",
+              "table": "cumulative_context_switches",
+              "x": "timestamp_ns",
+              "y": "involuntary",
+              "color": "#ffb74d"
+            },
+            {
+              "name": "horizontal-rule/v1",
+              "value": {
+                "table": "context_limits",
+                "column": "warning",
+                "select": "first"
+              },
+              "color": "#ffb74d"
+            },
+            {
+              "name": "horizontal-rule/v1",
+              "value": {
+                "table": "context_limits",
+                "column": "critical",
+                "select": "first"
+              },
+              "color": "#ff5252"
+            },
+            {
+              "name": "swatch/v1",
+              "label": "Voluntary",
+              "color": "#81c784",
+              "shape": "line"
+            },
+            {
+              "name": "swatch/v1",
+              "label": "Involuntary",
+              "color": "#ffb74d",
+              "shape": "line"
+            },
+            {
+              "name": "swatch/v1",
+              "label": "warning",
+              "color": "#ffb74d",
+              "shape": "reference",
+              "value": {
+                "table": "context_limits",
+                "column": "warning",
+                "select": "first",
+                "unit": "switches"
+              }
+            },
+            {
+              "name": "swatch/v1",
+              "label": "critical",
+              "color": "#ff5252",
+              "shape": "reference",
+              "value": {
+                "table": "context_limits",
+                "column": "critical",
+                "select": "first",
+                "unit": "switches"
+              }
+            },
+            {
+              "name": "tooltip/v1",
+              "table": "cumulative_context_switches",
+              "match": {
+                "x": "timestamp_ns",
+                "y": "voluntary"
+              },
+              "items": [
+                { "label": "Voluntary", "column": "voluntary", "unit": "switches" },
+                { "label": "Time", "column": "timestamp_ns", "unit": "timestamp" }
+              ]
+            },
+            {
+              "name": "tooltip/v1",
+              "table": "cumulative_context_switches",
+              "match": {
+                "x": "timestamp_ns",
+                "y": "involuntary"
+              },
+              "items": [
+                { "label": "Involuntary", "column": "involuntary", "unit": "switches" },
+                { "label": "Time", "column": "timestamp_ns", "unit": "timestamp" }
+              ]
+            },
+            {
+              "name": "readout/v1",
+              "table": "cumulative_context_switches",
+              "items": [
+                { "label": "max", "column": "voluntary", "reduce": "max", "unit": "switches" }
               ]
             }
           ]
@@ -461,11 +584,55 @@ impl ContextBatch {
 }
 
 #[derive(Default)]
+struct CumulativeContextBatch {
+    timestamp_ns: Vec<u64>,
+    voluntary: Vec<u64>,
+    involuntary: Vec<u64>,
+}
+
+impl CumulativeContextBatch {
+    fn push(&mut self, sample: ResourceSample) {
+        self.timestamp_ns.push(sample.timestamp_ns);
+        self.voluntary.push(sample.voluntary_context_switches);
+        self.involuntary.push(sample.involuntary_context_switches);
+    }
+
+    fn len(&self) -> usize {
+        self.timestamp_ns.len()
+    }
+
+    fn flush(&mut self, output: &mut OutputSink) -> Result<(), ExtensionError> {
+        if self.timestamp_ns.is_empty() {
+            return Ok(());
+        }
+        output.emit(
+            CUMULATIVE_CONTEXT_SWITCHES,
+            vec![
+                Column::U64 {
+                    values: mem::take(&mut self.timestamp_ns),
+                    validity: None,
+                },
+                Column::U64 {
+                    values: mem::take(&mut self.voluntary),
+                    validity: None,
+                },
+                Column::U64 {
+                    values: mem::take(&mut self.involuntary),
+                    validity: None,
+                },
+            ],
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Default)]
 pub struct DemoExtension {
     previous: Option<ResourceSample>,
     capacity: Option<f64>,
     cpu: CpuBatch,
     context: ContextBatch,
+    cumulative_context: CumulativeContextBatch,
 }
 
 impl DemoExtension {
@@ -474,6 +641,7 @@ impl DemoExtension {
         sample: ResourceSample,
         output: &mut OutputSink,
     ) -> Result<(), ExtensionError> {
+        self.cumulative_context.push(sample);
         if let Some(previous) = self.previous {
             self.cpu.push(previous, sample, self.capacity);
             self.context.push(previous, sample);
@@ -485,6 +653,9 @@ impl DemoExtension {
         }
         if self.context.len() >= BATCH_ROWS {
             self.context.flush(output)?;
+        }
+        if self.cumulative_context.len() >= BATCH_ROWS {
+            self.cumulative_context.flush(output)?;
         }
         Ok(())
     }
@@ -524,6 +695,7 @@ impl Extension for DemoExtension {
     fn finish(mut self, output: &mut OutputSink) -> Result<(), ExtensionError> {
         self.cpu.flush(output)?;
         self.context.flush(output)?;
+        self.cumulative_context.flush(output)?;
         if let Some(capacity) = self.capacity {
             output.emit(
                 SCALARS,
@@ -533,6 +705,19 @@ impl Extension for DemoExtension {
                 }],
             )?;
         }
+        output.emit(
+            CONTEXT_LIMITS,
+            vec![
+                Column::U64 {
+                    values: vec![CONTEXT_WARNING],
+                    validity: None,
+                },
+                Column::U64 {
+                    values: vec![CONTEXT_CRITICAL],
+                    validity: None,
+                },
+            ],
+        )?;
         emit_dinosaur(output)?;
         Ok(())
     }
@@ -737,6 +922,33 @@ mod tests {
         assert_eq!(batch.involuntary_rate, [5.0]);
         assert_eq!(batch.voluntary_valid, [true]);
         assert_eq!(batch.involuntary_valid, [true]);
+    }
+
+    #[test]
+    fn cumulative_context_switches_preserve_every_sample() {
+        let samples = [
+            ResourceSample {
+                timestamp_ns: 1_000,
+                user_cpu_ns: 0,
+                system_cpu_ns: 0,
+                voluntary_context_switches: 10,
+                involuntary_context_switches: 4,
+            },
+            ResourceSample {
+                timestamp_ns: 2_000,
+                user_cpu_ns: 0,
+                system_cpu_ns: 0,
+                voluntary_context_switches: 298,
+                involuntary_context_switches: 9,
+            },
+        ];
+        let mut batch = CumulativeContextBatch::default();
+        for sample in samples {
+            batch.push(sample);
+        }
+        assert_eq!(batch.timestamp_ns, [1_000, 2_000]);
+        assert_eq!(batch.voluntary, [10, 298]);
+        assert_eq!(batch.involuntary, [4, 9]);
     }
 
     #[test]
