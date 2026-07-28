@@ -17,6 +17,7 @@ members = [
     "examples/simple-local",
     "examples/memory-local",
     "examples/viewer-extension-demo",
+    "examples/viewer-extension-context-switches",
 ]
 exclude = [
     "dial9-trace-format/fuzz",

@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "tables": [
+    {
+      "name": "context_switches",
+      "columns": [
+        { "name": "start_ns", "type": "u64" },
+        { "name": "end_ns", "type": "u64" },
+        { "name": "voluntary_per_second", "type": "f64" },
+        { "name": "involuntary_per_second", "type": "f64" }
+      ]
+    }
+  ],
+  "panels": [
+    {
+      "title": "Context Switch Rate",
+      "components": [
+        {
+          "name": "interval-area/v1",
+          "table": "context_switches",
+          "start": "start_ns",
+          "end": "end_ns",
+          "y": "voluntary_per_second",
+          "color": "#81c784"
+        },
+        {
+          "name": "interval-area/v1",
+          "table": "context_switches",
+          "start": "start_ns",
+          "end": "end_ns",
+          "y": "involuntary_per_second",
+          "color": "#ffb74d"
+        },
+        {
+          "name": "swatch/v1",
+          "label": "Voluntary",
+          "color": "#81c784",
+          "shape": "area"
+        },
+        {
+          "name": "swatch/v1",
+          "label": "Involuntary",
+          "color": "#ffb74d",
+          "shape": "area"
+        },
+        {
+          "name": "tooltip/v1",
+          "table": "context_switches",
+          "items": [
+            {
+              "label": "Voluntary",
+              "column": "voluntary_per_second",
+              "unit": "switches/s"
+            },
+            {
+              "label": "Involuntary",
+              "column": "involuntary_per_second",
+              "unit": "switches/s"
+            },
+            {
+              "label": "Time",
+              "column": "start_ns",
+              "unit": "timestamp"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
