@@ -50,6 +50,7 @@ export async function prepareExtension(bytes: BufferSource): Promise<PreparedExt
 export async function prepareCompiledExtension(
   module: WebAssembly.Module,
 ): Promise<PreparedExtension> {
+  requireLittleEndianTypedArrays();
   const imports = WebAssembly.Module.imports(module);
   if (imports.length !== 0) {
     throw new Error(`WASM extension imports ${imports.length} host capability/capabilities`);
@@ -358,4 +359,13 @@ function validateInstanceExports(exports: WebAssembly.Exports): ExtensionExports
 
 function unsigned(value: number): number {
   return value >>> 0;
+}
+
+function requireLittleEndianTypedArrays(): void {
+  const word = new Uint16Array([1]);
+  if (new Uint8Array(word.buffer)[0] !== 1) {
+    throw new Error(
+      "WASM viewer extensions require a little-endian host because column buffers use typed arrays",
+    );
+  }
 }

@@ -275,8 +275,13 @@ multi-layer dinosaur. The queue-depth composition fixture is
 
 ## Guest ABI
 
-All integers are little-endian `u32`. ABI version 1 requires exported memory
-and these functions:
+Descriptor words and numeric column values are little-endian. The host maps
+copied column buffers directly into JavaScript typed arrays for efficiency, so
+viewer extensions require a platform whose typed arrays are little-endian. On
+an unsupported big-endian platform, loading an extension fails without
+disabling the rest of the viewer.
+
+ABI version 1 requires exported memory and these functions:
 
 | Export | Contract |
 | --- | --- |
