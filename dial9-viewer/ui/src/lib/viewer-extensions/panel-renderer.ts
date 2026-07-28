@@ -1572,7 +1572,10 @@ export function formatValue(value: CellValue, unit?: string): string {
   if (typeof value === "string") return value;
   const number = typeof value === "bigint" ? Number(value) : value;
   if (unit === "ns") return formatDuration(number);
+  if (unit === "s/s") return `${formatDuration(number * 1e9)}/s`;
+  if (unit === "/s") return `${formatNumber(number)}/s`;
   if (unit === "%") return `${trimFixed(number, 1)}%`;
+  if (unit === "%/s") return `${trimFixed(number, 1)}%/s`;
   const formatted = formatNumber(number);
   return unit === undefined ? formatted : `${formatted} ${unit}`;
 }

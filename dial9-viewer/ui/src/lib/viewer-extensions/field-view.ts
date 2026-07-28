@@ -10,7 +10,10 @@ import type {
 const TABLE_NAME = "field_values";
 const SERIES_COLOR = "#4fc3f7";
 
-export type FieldViewInterpretation = "intervals" | "points";
+export type FieldViewInterpretation =
+  | "gauge"
+  | "counter"
+  | "up-down-counter";
 
 export interface FieldViewRequest {
   readonly eventName: string;
@@ -24,6 +27,20 @@ export interface MaterializedFieldView {
   readonly tables: ExtensionTableStore;
 }
 
+type FieldViewPreset =
+  | {
+      readonly kind: "gauge";
+      readonly label: "Gauge";
+      readonly unit?: string;
+    }
+  | {
+      readonly kind: "rate";
+      readonly label: "Counter rate" | "Up/down counter rate";
+      readonly monotonic: boolean;
+      readonly scale: number;
+      readonly unit: string;
+    };
+
 /**
  * Materialize one numeric custom-event field into the same immutable column
  * store consumed by WASM-backed semantic panels.
@@ -32,16 +49,23 @@ export function materializeFieldView(
   events: readonly CustomTraceEvent[],
   request: FieldViewRequest,
 ): MaterializedFieldView {
-  const manifest = fieldViewManifest(request);
+  const preset = fieldViewPreset(request);
+  const manifest = fieldViewManifest(request, preset);
   const tables = new ExtensionTableStore(manifest);
   const batch =
-    request.interpretation === "intervals"
-      ? intervalBatch(events, request.eventName, request.field)
+    preset.kind === "rate"
+      ? intervalRateBatch(
+          events,
+          request.eventName,
+          request.field,
+          preset.monotonic,
+          preset.scale,
+        )
       : pointBatch(events, request.eventName, request.field);
 
   if (batch.rows === 0) {
     const requirement =
-      request.interpretation === "intervals"
+      preset.kind === "rate"
         ? "two events at increasing timestamps"
         : "one timestamped event";
     throw new Error(
@@ -50,7 +74,7 @@ export function materializeFieldView(
   }
   if (!batchHasValue(batch.columns[batch.columns.length - 1]!)) {
     throw new Error(
-      `${request.eventName}.${request.field} has no finite numeric values`,
+      `${request.eventName}.${request.field} has no valid ${preset.label} values`,
     );
   }
 
@@ -63,16 +87,11 @@ export function materializeFieldView(
 
 function fieldViewManifest(
   request: FieldViewRequest,
+  preset: FieldViewPreset,
 ): ViewerExtensionManifest {
-  const intervals = request.interpretation === "intervals";
-  const interpretation = intervals ? "Intervals" : "Points";
-  const unit =
-    request.unit === undefined || request.unit.length === 0
-      ? undefined
-      : request.unit;
-  const itemUnit = unit === undefined ? {} : { unit };
-  const timeColumn = intervals ? "start" : "timestamp";
-  const graphs = intervals
+  const itemUnit = preset.unit === undefined ? {} : { unit: preset.unit };
+  const timeColumn = preset.kind === "rate" ? "start" : "timestamp";
+  const graphs = preset.kind === "rate"
     ? [
         {
           name: "interval-area/v1",
@@ -100,7 +119,7 @@ function fieldViewManifest(
           color: SERIES_COLOR,
         },
       ];
-  const average = intervals
+  const average = preset.kind === "rate"
     ? {
         name: "time_weighted_mean",
         start: "start",
@@ -150,7 +169,7 @@ function fieldViewManifest(
         {
           name: TABLE_NAME,
           columns:
-            intervals
+            preset.kind === "rate"
               ? [
                   { name: "start", type: "f64" },
                   { name: "end", type: "f64" },
@@ -164,7 +183,7 @@ function fieldViewManifest(
       ],
       panels: [
         {
-          title: `${request.eventName} · ${request.field} · ${interpretation}`,
+          title: `${request.eventName} · ${request.field} · ${preset.label}`,
           components,
         },
       ],
@@ -214,10 +233,12 @@ function pointBatch(
   } as const;
 }
 
-function intervalBatch(
+function intervalRateBatch(
   events: readonly CustomTraceEvent[],
   eventName: string,
   field: string,
+  monotonic: boolean,
+  scale: number,
 ) {
   let rows = 0;
   let previousTimestamp: number | null = null;
@@ -250,9 +271,15 @@ function intervalBatch(
     }
     starts[row] = previous.timestamp;
     ends[row] = event.timestamp;
-    const value = fieldViewNumber(previous.fields[field]);
-    if (value !== null) {
-      values[row] = value;
+    const previousValue = fieldViewNumber(previous.fields[field]);
+    const value = fieldViewNumber(event.fields[field]);
+    const delta =
+      previousValue === null || value === null
+        ? null
+        : value - previousValue;
+    if (delta !== null && (!monotonic || delta >= 0)) {
+      const elapsedSeconds = (event.timestamp - previous.timestamp) / 1e9;
+      values[row] = (delta * scale) / elapsedSeconds;
       setValid(validity, row);
       valid++;
     }
@@ -269,6 +296,31 @@ function intervalBatch(
       numericColumn(values, rows, valid === rows ? null : validity),
     ],
   } as const;
+}
+
+function fieldViewPreset(request: FieldViewRequest): FieldViewPreset {
+  const unit =
+    request.unit === undefined || request.unit.length === 0
+      ? undefined
+      : request.unit;
+  if (request.interpretation === "gauge") {
+    return {
+      kind: "gauge",
+      label: "Gauge",
+      ...(unit === undefined ? {} : { unit }),
+    };
+  }
+  const seconds = unit === "ns" || unit === "s";
+  return {
+    kind: "rate",
+    label:
+      request.interpretation === "counter"
+        ? "Counter rate"
+        : "Up/down counter rate",
+    monotonic: request.interpretation === "counter",
+    scale: unit === "ns" ? 1e-9 : 1,
+    unit: seconds ? "s/s" : unit === undefined ? "/s" : `${unit}/s`,
+  };
 }
 
 function numericColumn(

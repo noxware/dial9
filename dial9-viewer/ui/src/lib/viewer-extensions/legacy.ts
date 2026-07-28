@@ -297,8 +297,9 @@ class FieldViewDialog {
     this.#select = document.createElement("select");
     this.#select.name = "interpretation";
     for (const [value, text] of [
-      ["intervals", "Intervals"],
-      ["points", "Points"],
+      ["gauge", "Gauge"],
+      ["counter", "Counter rate"],
+      ["up-down-counter", "Up/down counter rate"],
     ] as const) {
       const option = document.createElement("option");
       option.value = value;
@@ -357,7 +358,7 @@ class FieldViewDialog {
   open(request: PendingFieldView): void {
     this.#pending = request;
     this.#title.textContent = `${request.event.name} · ${request.field}`;
-    this.#select.value = "intervals";
+    this.#select.value = "gauge";
     this.#error.hidden = true;
     this.#error.textContent = "";
     if (!this.#dialog.open) this.#dialog.showModal();

@@ -165,7 +165,10 @@
 }
 
 .d9-field-view-dialog {
+  position: fixed;
+  inset: 0;
   min-width: 280px;
+  margin: auto;
   border: 1px solid #4c4c72;
   border-radius: 7px;
   padding: 0;

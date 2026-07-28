@@ -88,7 +88,7 @@ test("recreates CPU and keeps the dinosaur fully interactive", async ({
   await expect(page.locator("#tooltip")).toHaveText("Science: 🔥");
 });
 
-test("creates and closes a point view from a custom-event field", async ({
+test("creates and closes a counter-rate view from a custom-event field", async ({
   page,
 }) => {
   await page.goto("/viewer.html?ui=legacy&trace=demo-trace.bin");
@@ -115,7 +115,9 @@ test("creates and closes a point view from a custom-event field", async ({
   const canvasBox = await boundingBox(canvas);
   await page.mouse.click(canvasBox.x + markerX, canvasBox.y + canvasBox.height / 2);
 
-  const graph = page.locator("#stack-sidebar-body .kv-graph").first();
+  const graph = page.locator(
+    '#stack-sidebar-body .kv-graph[data-field="user_cpu_ns"]',
+  );
   await expect(graph).toBeVisible();
   const eventName = (await page.locator("#stack-sidebar-title").innerText()).trim();
   const field = await graph.getAttribute("data-field");
@@ -124,12 +126,21 @@ test("creates and closes a point view from a custom-event field", async ({
 
   const dialog = page.locator(".d9-field-view-dialog");
   await expect(dialog).toBeVisible();
-  await dialog.locator("select").selectOption("points");
+  const dialogBox = await boundingBox(dialog);
+  const viewport = page.viewportSize();
+  if (viewport === null) throw new Error("expected a fixed test viewport");
+  expect(
+    Math.abs(dialogBox.x + dialogBox.width / 2 - viewport.width / 2),
+  ).toBeLessThan(2);
+  expect(
+    Math.abs(dialogBox.y + dialogBox.height / 2 - viewport.height / 2),
+  ).toBeLessThan(2);
+  await dialog.locator("select").selectOption("counter");
   await dialog.getByRole("button", { name: "Create" }).click();
 
-  const panel = extensionPanel(page, `${eventName} · ${field} · Points`);
+  const panel = extensionPanel(page, `${eventName} · ${field} · Counter rate`);
   await expect(panel).toBeVisible();
-  await expect(panel.locator(".d9-extension-readout")).not.toBeEmpty();
+  await expect(panel.locator(".d9-extension-readout")).toContainText("ms/s");
   await panel.getByRole("button", { name: /^Close / }).click();
   await expect(panel).toHaveCount(0);
 });

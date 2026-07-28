@@ -11,6 +11,9 @@ describe("semantic panel presentation", () => {
     expect(formatValue(4.44, "%")).toBe("4.4%");
     expect(formatValue(1.234, "cores")).toBe("1.23 cores");
     expect(formatValue(1.234)).toBe("1.23");
+    expect(formatValue(0.4945, "s/s")).toBe("494.5ms/s");
+    expect(formatValue(3_444.9, "/s")).toBe("3444.9/s");
+    expect(formatValue(4.44, "%/s")).toBe("4.4%/s");
   });
 
   it("delegates timestamps to the host viewer formatter", () => {

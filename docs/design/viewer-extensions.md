@@ -270,19 +270,25 @@ error naming the missing component. Other panels and extensions continue.
 ### Interactive field views
 
 The legacy viewer can graph a numeric field directly from a selected custom
-event. `Interpret as` offers `Intervals` and `Points`. The viewer scans events
-in timestamp order without sorting or constructing row objects, materializes
-only the matching schema name into host-native typed columns, and feeds them to
-the same table store and semantic components used by extensions. This path does
-not instantiate WASM or encode the guest ABI.
+event. `Interpret as` offers three semantic presets:
 
-Point views map each event timestamp to its field value. Interval views apply a
-value from its event timestamp until the next event of that type. Missing or
-non-numeric values are encoded through the validity bitmap and create gaps.
+- `Gauge` maps each raw observation to its timestamp and renders the points as
+  a line.
+- `Counter rate` emits one rate interval between consecutive observations.
+  Counter decreases are gaps.
+- `Up/down counter rate` emits the same intervals and permits negative rates.
+
+The viewer scans events in timestamp order without sorting or constructing row
+objects, materializes only the matching schema name into host-native typed
+columns, and feeds them to the same table store and semantic components used by
+extensions. Missing or non-numeric operands are encoded through the validity
+bitmap and create gaps. Nanosecond counters are normalized to seconds per
+second and presented as a duration per second, such as `494.5ms/s`.
+
 The generated panel composes the corresponding graph, tooltip, and visible
 `avg`/`min`/`max` readout. Closing it drops the renderer, table store, and all
 references to its typed buffers; replacing the trace closes every interactive
-view.
+view. This path does not instantiate WASM or encode the guest ABI.
 
 Local typed columns are produced and consumed on the same JavaScript host, so
 the guest ABI's little-endian transport requirement does not apply to them.
