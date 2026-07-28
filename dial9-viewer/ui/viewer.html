@@ -494,7 +494,8 @@
                 word-break: break-word;
             }
             #stack-sidebar .sidebar-body .kv-copy,
-            #stack-sidebar .sidebar-body .kv-corr {
+            #stack-sidebar .sidebar-body .kv-corr,
+            #stack-sidebar .sidebar-body .kv-graph {
                 background: none;
                 border: 1px solid #555;
                 color: #aaa;
@@ -508,8 +509,13 @@
                 border-color: #6c63ff;
                 color: #b9b4ff;
             }
+            #stack-sidebar .sidebar-body .kv-graph {
+                border-color: #4f8fb0;
+                color: #8dd8ff;
+            }
             #stack-sidebar .sidebar-body .kv-copy:hover,
-            #stack-sidebar .sidebar-body .kv-corr:hover {
+            #stack-sidebar .sidebar-body .kv-corr:hover,
+            #stack-sidebar .sidebar-body .kv-graph:hover {
                 background: #333;
                 color: #fff;
             }
@@ -4187,18 +4193,26 @@
 
             // One styled k/v row with a copy button — same visual language as
             // the span metadata panel. `copyVal` defaults to the displayed val.
-            function kvRow(key, val, copyVal = val) {
+            function graphFieldButton(field) {
+                if (field == null) return "";
+                return `<button class="kv-graph" data-field="${esc(field)}" ` +
+                    `title="Graph ${esc(field)}" aria-label="Graph ${esc(field)}">⌁</button>`;
+            }
+
+            function kvRow(key, val, copyVal = val, graphField = null) {
                 return `<div class="kv-row">${kvKeyVal(key, val)}` +
+                    graphFieldButton(graphField) +
                     `<button class="kv-copy" data-val="${esc(copyVal)}">⎘</button></div>`;
             }
 
             // Like kvRow, plus a "↔" button that opens the Related tab filtered to
             // other events sharing this field value. `corrVal` is the raw value to
             // match on (the displayed `val` may be formatted).
-            function kvRowCorrelate(key, val, corrVal) {
+            function kvRowCorrelate(key, val, corrVal, graphField = null) {
                 return `<div class="kv-row">${kvKeyVal(key, val)}` +
                     `<button class="kv-corr" data-corr-key="${esc(key)}" data-corr-val="${esc(corrVal)}" ` +
                     `title="Find events with ${esc(key)}=${esc(corrVal)}">↔</button>` +
+                    graphFieldButton(graphField) +
                     `<button class="kv-copy" data-val="${esc(val)}">⎘</button></div>`;
             }
 
@@ -4223,11 +4237,13 @@
                     for (const [k, v] of Object.entries(ev.fields || {})) {
                         const corrVal = String(v);
                         const display = formatFieldValue(v, ev.units?.[k]);
+                        const graphField =
+                            window.Dial9ViewerExtensions?.canGraphField(v) ? k : null;
                         // Only offer correlation when another event shares the value;
                         // a value unique to this event leads nowhere.
                         html += eventsWithField(k, corrVal).length > 1
-                            ? kvRowCorrelate(k, display, corrVal)
-                            : kvRow(k, display);
+                            ? kvRowCorrelate(k, display, corrVal, graphField)
+                            : kvRow(k, display, display, graphField);
                     }
                     html += kvRow("@", fmtTs(ev.timestamp));
                 } else {
@@ -5807,6 +5823,20 @@
             // Delegated on the stable container so it survives re-renders.
             document.getElementById("stack-sidebar-body").addEventListener("click", (e) => {
                 if (copyFromKvButton(e)) return;
+                const graph = e.target.closest(".kv-graph");
+                if (graph) {
+                    if (!selectedEventRef || !window.Dial9ViewerExtensions) return;
+                    try {
+                        window.Dial9ViewerExtensions.openFieldView(
+                            selectedEventRef,
+                            graph.dataset.field,
+                            genericCustomEvents,
+                        );
+                    } catch (err) {
+                        alert("Unable to create field view: " + err.message);
+                    }
+                    return;
+                }
                 // Field "↔": correlate by this field value in the Related tab.
                 const corr = e.target.closest(".kv-corr");
                 if (corr) {
@@ -6632,7 +6662,7 @@
                         scheduleCrosshairRedraw();
                         return;
                     }
-                    // WASM extension panels own their component hit testing and
+                    // Semantic panels own their component hit testing and
                     // tooltip while sharing the viewer's time-axis crosshair.
                     if (e.target.closest && e.target.closest(".d9-extension-panel")) {
                         const panel = e.target.closest(".d9-extension-panel");

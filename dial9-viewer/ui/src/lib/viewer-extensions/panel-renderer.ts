@@ -2,6 +2,7 @@ import { KNOWN_COMPONENT_NAMES } from "./manifest.js";
 import {
   chunkValue,
   type CellValue,
+  type ExtensionTableStore,
   type TableStore,
 } from "./tables.js";
 import type {
@@ -9,7 +10,6 @@ import type {
   ColorSpec,
   ComponentManifest,
   DomainValue,
-  LoadedExtension,
   PanelManifest,
   ReadoutItem,
   Reducer,
@@ -117,6 +117,19 @@ interface ReadoutComponent {
   readonly items: readonly ReadoutItem[];
 }
 
+export interface SemanticPanelSource {
+  readonly identity: {
+    readonly id: string;
+    readonly name: string;
+  };
+  readonly tables: ExtensionTableStore;
+}
+
+export interface SemanticPanelRendererOptions {
+  readonly onClose?: () => void;
+  readonly persistCollapse?: boolean;
+}
+
 /**
  * One manifest panel rendered with viewer-owned layout and visual policy.
  *
@@ -126,7 +139,7 @@ interface ReadoutComponent {
 export class SemanticPanelRenderer {
   readonly element: HTMLDivElement;
 
-  readonly #extension: LoadedExtension;
+  readonly #source: SemanticPanelSource;
   readonly #panel: PanelManifest;
   readonly #panelIndex: number;
   readonly #tooltip: HTMLElement;
@@ -138,6 +151,7 @@ export class SemanticPanelRenderer {
   readonly #indexCache = new Map<string, NumericRowIndex | IntervalRowIndex>();
   readonly #reductionCache = new Map<string, number | null>();
   readonly #collapseKey: string;
+  readonly #persistCollapse: boolean;
   #hits: ComponentHit[] = [];
   #viewport: PanelViewport | null = null;
   #reductionViewportKey = "";
@@ -146,21 +160,23 @@ export class SemanticPanelRenderer {
   #collapsed = false;
 
   constructor(
-    extension: LoadedExtension,
+    source: SemanticPanelSource,
     panel: PanelManifest,
     panelIndex: number,
     tooltip: HTMLElement,
+    options: SemanticPanelRendererOptions = {},
   ) {
-    this.#extension = extension;
+    this.#source = source;
     this.#panel = panel;
     this.#panelIndex = panelIndex;
     this.#tooltip = tooltip;
+    this.#persistCollapse = options.persistCollapse !== false;
     this.#collapseKey =
-      `dial9.viewer.extensionPanelCollapsed.${extension.identity.name}.${panelIndex}`;
+      `dial9.viewer.extensionPanelCollapsed.${source.identity.name}.${panelIndex}`;
 
     this.element = document.createElement("div");
     this.element.className = "d9-extension-panel foldable-panel";
-    this.element.dataset.panelKey = `${extension.identity.id}-${panelIndex}`;
+    this.element.dataset.panelKey = `${source.identity.id}-${panelIndex}`;
     this.element.dataset.xAxis = panel.x_axis.kind;
 
     const label = document.createElement("div");
@@ -188,6 +204,20 @@ export class SemanticPanelRenderer {
     this.#canvas.setAttribute("aria-label", panel.title);
 
     this.element.append(label, this.#readout, this.#error, this.#canvas);
+    if (options.onClose !== undefined) {
+      this.element.classList.add("is-closable");
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "d9-extension-close";
+      close.setAttribute("aria-label", `Close ${panel.title}`);
+      close.title = "Close panel";
+      close.textContent = "×";
+      close.addEventListener("click", (event) => {
+        event.stopPropagation();
+        options.onClose?.();
+      });
+      this.element.append(close);
+    }
 
     const toggle = (): void => {
       this.#setCollapsed(!this.#collapsed);
@@ -213,7 +243,11 @@ export class SemanticPanelRenderer {
     this.#canvas.addEventListener("mousemove", (event) => this.#onMouseMove(event));
     this.#canvas.addEventListener("mouseleave", () => this.#onMouseLeave());
 
-    this.#setCollapsed(readStorage(this.#collapseKey) === "collapsed", false);
+    this.#setCollapsed(
+      this.#persistCollapse &&
+        readStorage(this.#collapseKey) === "collapsed",
+      false,
+    );
     this.#renderLegend();
     this.#showCompatibilityError();
   }
@@ -337,7 +371,9 @@ export class SemanticPanelRenderer {
     this.element.classList.toggle("is-collapsed", collapsed);
     const label = this.element.querySelector(".chart-label");
     label?.setAttribute("aria-expanded", collapsed ? "false" : "true");
-    if (persist) writeStorage(this.#collapseKey, collapsed ? "collapsed" : "expanded");
+    if (persist && this.#persistCollapse) {
+      writeStorage(this.#collapseKey, collapsed ? "collapsed" : "expanded");
+    }
   }
 
   #showCompatibilityError(): void {
@@ -391,7 +427,7 @@ export class SemanticPanelRenderer {
       if (!GRAPH_COMPONENTS.has(component.name)) continue;
       const record = componentRecord(component);
       const tableName = stringProperty(record, "table");
-      const table = this.#extension.tables.table(tableName);
+      const table = this.#source.tables.table(tableName);
       let visible: readonly number[];
       if (hasIntervalChannels(component)) {
         visible = this.#intervalIndex(
@@ -482,7 +518,7 @@ export class SemanticPanelRenderer {
     const endColumn = stringProperty(record, "end");
     const yColumn = stringProperty(record, "y");
     const scale = optionalString(record.scale) ?? "default";
-    const table = this.#extension.tables.table(tableName);
+    const table = this.#source.tables.table(tableName);
     let intervals = this.#intervalIndex(tableName, startColumn, endColumn)
       .entriesInRange(xDomain[0], xDomain[1])
       .flatMap((entry): IndexedInterval[] => {
@@ -579,7 +615,7 @@ export class SemanticPanelRenderer {
     const endColumn = stringProperty(record, "end");
     const yColumn = stringProperty(record, "y");
     const scale = optionalString(record.scale) ?? "default";
-    const table = this.#extension.tables.table(tableName);
+    const table = this.#source.tables.table(tableName);
     let intervals = this.#intervalIndex(tableName, startColumn, endColumn)
       .entriesInRange(xDomain[0], xDomain[1])
       .flatMap((entry): IntervalLineDatum[] => {
@@ -635,7 +671,7 @@ export class SemanticPanelRenderer {
     const xColumn = stringProperty(record, "x");
     const yColumn = stringProperty(record, "y");
     const scale = optionalString(record.scale) ?? "default";
-    const table = this.#extension.tables.table(tableName);
+    const table = this.#source.tables.table(tableName);
     const rows = this.#numericIndex(tableName, xColumn).rowsInRange(
       xDomain[0],
       xDomain[1],
@@ -715,7 +751,7 @@ export class SemanticPanelRenderer {
     const xColumn = stringProperty(record, "x");
     const yColumn = stringProperty(record, "y");
     const scale = optionalString(record.scale) ?? "default";
-    const table = this.#extension.tables.table(tableName);
+    const table = this.#source.tables.table(tableName);
     const channels = Object.freeze({ x: xColumn, y: yColumn });
     let previous: LinePoint | null = null;
     table.forEachRow((row) => {
@@ -837,7 +873,7 @@ export class SemanticPanelRenderer {
     for (const component of this.#panel.components) {
       if (component.name !== "readout/v1") continue;
       const readout = component as unknown as ReadoutComponent;
-      const table = this.#extension.tables.table(readout.table);
+      const table = this.#source.tables.table(readout.table);
       for (const item of readout.items) {
         const value = this.#readoutValue(
           table,
@@ -970,7 +1006,7 @@ export class SemanticPanelRenderer {
       return this.#numericIndex(tableName, mapping.x)
         .rowsInRange(range[0], range[1]);
     }
-    return allRows(this.#extension.tables.table(tableName));
+    return allRows(this.#source.tables.table(tableName));
   }
 
   #rowAtCursor(
@@ -1041,7 +1077,7 @@ export class SemanticPanelRenderer {
   }
 
   #scalar(reference: ScalarRef): CellValue {
-    const table = this.#extension.tables.table(reference.table);
+    const table = this.#source.tables.table(reference.table);
     if (table.rowCount === 0) return null;
     if (reference.select === "last") {
       return table.value(table.rowCount - 1, reference.column);
@@ -1079,7 +1115,7 @@ export class SemanticPanelRenderer {
     const key = `point:${table}:${column}`;
     const cached = this.#indexCache.get(key);
     if (cached instanceof NumericRowIndex) return cached;
-    const index = new NumericRowIndex(this.#extension.tables.table(table), column);
+    const index = new NumericRowIndex(this.#source.tables.table(table), column);
     this.#indexCache.set(key, index);
     return index;
   }
@@ -1088,7 +1124,7 @@ export class SemanticPanelRenderer {
     const key = `interval:${table}:${start}:${end}`;
     const cached = this.#indexCache.get(key);
     if (cached instanceof IntervalRowIndex) return cached;
-    const index = new IntervalRowIndex(this.#extension.tables.table(table), start, end);
+    const index = new IntervalRowIndex(this.#source.tables.table(table), start, end);
     this.#indexCache.set(key, index);
     return index;
   }
@@ -1156,7 +1192,7 @@ export class SemanticPanelRenderer {
     hit: ComponentHit,
     event: MouseEvent,
   ): void {
-    const table = this.#extension.tables.table(hit.table);
+    const table = this.#source.tables.table(hit.table);
     const fragment = document.createDocumentFragment();
     let rendered = 0;
     for (const item of component.items) {

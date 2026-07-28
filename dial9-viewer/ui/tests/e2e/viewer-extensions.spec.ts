@@ -88,6 +88,52 @@ test("recreates CPU and keeps the dinosaur fully interactive", async ({
   await expect(page.locator("#tooltip")).toHaveText("Science: 🔥");
 });
 
+test("creates and closes a point view from a custom-event field", async ({
+  page,
+}) => {
+  await page.goto("/viewer.html?ui=legacy&trace=demo-trace.bin");
+  await expect(page.locator("#custom-events-panel")).toBeVisible();
+  await waitForRuntime(page);
+
+  await page.locator("#ce-panel-label").click();
+  await page
+    .locator('.ce-chip[data-name="ProcessResourceUsageEvent"]')
+    .click();
+  const canvas = page.locator("#ce-panel-canvas");
+  const markerX = await canvas.evaluate((element: HTMLCanvasElement) => {
+    const context = element.getContext("2d");
+    if (context === null) throw new Error("custom-event canvas has no context");
+    const y = Math.floor(element.height / 2);
+    const pixels = context.getImageData(0, y, element.width, 1).data;
+    for (let x = 0; x < element.width; x++) {
+      if (pixels[x * 4 + 3]! > 0) {
+        return (x / element.width) * element.clientWidth;
+      }
+    }
+    throw new Error("custom-event canvas has no visible marker");
+  });
+  const canvasBox = await boundingBox(canvas);
+  await page.mouse.click(canvasBox.x + markerX, canvasBox.y + canvasBox.height / 2);
+
+  const graph = page.locator("#stack-sidebar-body .kv-graph").first();
+  await expect(graph).toBeVisible();
+  const eventName = (await page.locator("#stack-sidebar-title").innerText()).trim();
+  const field = await graph.getAttribute("data-field");
+  if (field === null) throw new Error("graph button is missing its field");
+  await graph.click();
+
+  const dialog = page.locator(".d9-field-view-dialog");
+  await expect(dialog).toBeVisible();
+  await dialog.locator("select").selectOption("points");
+  await dialog.getByRole("button", { name: "Create" }).click();
+
+  const panel = extensionPanel(page, `${eventName} · ${field} · Points`);
+  await expect(panel).toBeVisible();
+  await expect(panel.locator(".d9-extension-readout")).not.toBeEmpty();
+  await panel.getByRole("button", { name: /^Close / }).click();
+  await expect(panel).toHaveCount(0);
+});
+
 test("resolves overlaid line hits in reverse drawing order", async ({ page }) => {
   await page.goto("/viewer.html?ui=legacy");
   await page.evaluate(async () => {

@@ -8,3 +8,6 @@
 - The UI's frozen-core boundary check includes benchmark sources. The extension
   benchmark must consume D9TF through the typed `lib/trace` barrel rather than
   importing `trace_parser.js` directly.
+- Legacy custom-event `u64`/varint fields are decimal strings to preserve wire
+  precision. Interactive field views therefore accept finite numeric strings
+  in addition to JavaScript numbers and bigints.

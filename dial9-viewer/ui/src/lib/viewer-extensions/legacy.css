@@ -93,6 +93,28 @@
   pointer-events: none;
 }
 
+.d9-extension-panel.is-closable .d9-extension-readout {
+  right: 34px;
+}
+
+.d9-extension-close {
+  position: absolute;
+  top: 2px;
+  right: 6px;
+  z-index: 3;
+  border: 0;
+  padding: 0 3px;
+  background: transparent;
+  color: #777;
+  font: 18px/18px sans-serif;
+  cursor: pointer;
+}
+
+.d9-extension-close:hover,
+.d9-extension-close:focus-visible {
+  color: #ddd;
+}
+
 .d9-extension-error {
   position: absolute;
   inset: 27px 12px 8px 100px;
@@ -140,4 +162,74 @@
 .d9-extension-status.is-error {
   border-color: #b45252;
   color: #ffab91;
+}
+
+.d9-field-view-dialog {
+  min-width: 280px;
+  border: 1px solid #4c4c72;
+  border-radius: 7px;
+  padding: 0;
+  background: #171d31;
+  color: #ccc;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55);
+  font: 13px/1.4 sans-serif;
+}
+
+.d9-field-view-dialog::backdrop {
+  background: rgba(4, 8, 18, 0.7);
+}
+
+.d9-field-view-dialog form {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+}
+
+.d9-field-view-dialog h2 {
+  max-width: 440px;
+  margin: 0;
+  overflow: hidden;
+  color: #ddd;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.d9-field-view-dialog label {
+  display: grid;
+  gap: 5px;
+  color: #999;
+}
+
+.d9-field-view-dialog select,
+.d9-field-view-dialog button {
+  border: 1px solid #4c4c72;
+  border-radius: 4px;
+  padding: 6px 9px;
+  background: #11182a;
+  color: #ddd;
+  font: inherit;
+}
+
+.d9-field-view-dialog button {
+  cursor: pointer;
+}
+
+.d9-field-view-dialog button.is-primary {
+  border-color: #6c63ff;
+  background: #39346f;
+}
+
+.d9-field-view-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.d9-field-view-error {
+  color: #ffab91;
+}
+
+.d9-field-view-error[hidden] {
+  display: none;
 }
