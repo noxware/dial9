@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "tables": [
+    {
+      "name": "samples",
+      "columns": [
+        { "name": "timestamp_ns", "type": "u64" },
+        { "name": "value", "type": "f64", "nullable": true },
+        { "name": "label", "type": "utf8" },
+        { "name": "note", "type": "utf8", "nullable": true },
+        { "name": "type", "type": "u8" }
+      ]
+    }
+  ],
+  "panels": []
+}

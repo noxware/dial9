@@ -1,0 +1,401 @@
+{
+  "version": 1,
+  "tables": [
+    {
+      "name": "cpu_intervals",
+      "columns": [
+        { "name": "start_ns", "type": "u64" },
+        { "name": "end_ns", "type": "u64" },
+        { "name": "wall_ns", "type": "u64" },
+        { "name": "cpu_ns", "type": "u64" },
+        { "name": "cores", "type": "f64", "nullable": true },
+        { "name": "total_percent", "type": "f64", "nullable": true },
+        { "name": "percent", "type": "f64", "nullable": true },
+        { "name": "load", "type": "f64", "nullable": true }
+      ]
+    },
+    {
+      "name": "scalars",
+      "columns": [
+        { "name": "capacity", "type": "f64" }
+      ]
+    },
+    {
+      "name": "context_switches",
+      "columns": [
+        { "name": "start_ns", "type": "u64" },
+        { "name": "end_ns", "type": "u64" },
+        { "name": "voluntary_rate", "type": "f64", "nullable": true },
+        { "name": "involuntary_rate", "type": "f64", "nullable": true }
+      ]
+    },
+    {
+      "name": "cumulative_context_switches",
+      "columns": [
+        { "name": "timestamp_ns", "type": "u64" },
+        { "name": "voluntary", "type": "u64" },
+        { "name": "involuntary", "type": "u64" }
+      ]
+    },
+    {
+      "name": "context_limits",
+      "columns": [
+        { "name": "warning", "type": "u64" },
+        { "name": "critical", "type": "u64" }
+      ]
+    },
+    {
+      "name": "dino_body",
+      "columns": [
+        { "name": "x", "type": "u8" },
+        { "name": "value", "type": "f64" },
+        { "name": "tooltip", "type": "utf8" }
+      ]
+    },
+    {
+      "name": "dino_flames",
+      "columns": [
+        { "name": "x", "type": "u8" },
+        { "name": "value", "type": "f64" },
+        { "name": "tooltip", "type": "utf8" }
+      ]
+    }
+  ],
+  "panels": [
+    {
+      "title": "WASM · CPU Usage",
+      "components": [
+        {
+          "name": "interval-area/v1",
+          "table": "cpu_intervals",
+          "start": "start_ns",
+          "end": "end_ns",
+          "y": "cores",
+          "color": {
+            "column": "load",
+            "stops": [
+              { "value": 0, "color": "#4fc3f7" },
+              { "value": 1, "color": "#ff7361" }
+            ]
+          }
+        },
+        {
+          "name": "interval-line/v1",
+          "table": "cpu_intervals",
+          "start": "start_ns",
+          "end": "end_ns",
+          "y": "cores",
+          "color": {
+            "column": "load",
+            "stops": [
+              { "value": 0, "color": "#4fc3f7" },
+              { "value": 1, "color": "#ff7361" }
+            ]
+          }
+        },
+        {
+          "name": "horizontal-rule/v1",
+          "value": {
+            "table": "scalars",
+            "column": "capacity",
+            "select": "first"
+          },
+          "color": "#ffcf99"
+        },
+        {
+          "name": "swatch/v1",
+          "label": "available parallelism",
+          "color": "#ffcf99",
+          "shape": "reference",
+          "value": {
+            "table": "scalars",
+            "column": "capacity",
+            "select": "first",
+            "unit": "cores"
+          }
+        },
+        {
+          "name": "tooltip/v1",
+          "table": "cpu_intervals",
+          "match": {
+            "start": "start_ns",
+            "end": "end_ns",
+            "y": "cores"
+          },
+          "items": [
+            { "label": "Window", "column": "wall_ns", "unit": "ns" },
+            { "label": "CPU time", "column": "cpu_ns", "unit": "ns" },
+            { "label": "Cores", "column": "cores" },
+            { "label": "Total CPU", "column": "total_percent", "unit": "%" }
+          ]
+        },
+        {
+          "name": "readout/v1",
+          "table": "cpu_intervals",
+          "items": [
+            {
+              "label": "avg",
+              "column": "cores",
+              "reduce": {
+                "name": "time_weighted_mean",
+                "start": "start_ns",
+                "end": "end_ns"
+              },
+              "unit": "cores"
+            },
+            {
+              "label": "avg",
+              "column": "percent",
+              "reduce": {
+                "name": "time_weighted_mean",
+                "start": "start_ns",
+                "end": "end_ns"
+              },
+              "unit": "%"
+            },
+            {
+              "label": "max",
+              "column": "cores",
+              "reduce": "max",
+              "unit": "cores"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "WASM · Context Switch Rate",
+      "components": [
+        {
+          "name": "interval-line/v1",
+          "table": "context_switches",
+          "start": "start_ns",
+          "end": "end_ns",
+          "y": "voluntary_rate",
+          "color": "#81c784"
+        },
+        {
+          "name": "line/v1",
+          "table": "context_switches",
+          "start": "start_ns",
+          "end": "end_ns",
+          "y": "involuntary_rate",
+          "color": "#ffb74d"
+        },
+        {
+          "name": "swatch/v1",
+          "label": "Voluntary",
+          "color": "#81c784",
+          "shape": "line"
+        },
+        {
+          "name": "swatch/v1",
+          "label": "Involuntary",
+          "color": "#ffb74d",
+          "shape": "line"
+        },
+        {
+          "name": "tooltip/v1",
+          "table": "context_switches",
+          "match": {
+            "start": "start_ns",
+            "end": "end_ns",
+            "y": "voluntary_rate"
+          },
+          "items": [
+            { "label": "Voluntary", "column": "voluntary_rate", "unit": "switches/s" },
+            { "label": "Time", "column": "start_ns", "unit": "timestamp" }
+          ]
+        },
+        {
+          "name": "tooltip/v1",
+          "table": "context_switches",
+          "match": {
+            "start": "start_ns",
+            "end": "end_ns",
+            "y": "involuntary_rate"
+          },
+          "items": [
+            { "label": "Involuntary", "column": "involuntary_rate", "unit": "switches/s" },
+            { "label": "Time", "column": "start_ns", "unit": "timestamp" }
+          ]
+        },
+        {
+          "name": "readout/v1",
+          "table": "context_switches",
+          "items": [
+            { "label": "voluntary max", "column": "voluntary_rate", "reduce": "max", "unit": "switches/s" },
+            { "label": "involuntary max", "column": "involuntary_rate", "reduce": "max", "unit": "switches/s" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "WASM · Context Switches (Cumulative)",
+      "components": [
+        {
+          "name": "line/v1",
+          "table": "cumulative_context_switches",
+          "x": "timestamp_ns",
+          "y": "voluntary",
+          "color": "#81c784"
+        },
+        {
+          "name": "line/v1",
+          "table": "cumulative_context_switches",
+          "x": "timestamp_ns",
+          "y": "involuntary",
+          "color": "#ffb74d"
+        },
+        {
+          "name": "horizontal-rule/v1",
+          "value": {
+            "table": "context_limits",
+            "column": "warning",
+            "select": "first"
+          },
+          "color": "#ffb74d"
+        },
+        {
+          "name": "horizontal-rule/v1",
+          "value": {
+            "table": "context_limits",
+            "column": "critical",
+            "select": "first"
+          },
+          "color": "#ff5252"
+        },
+        {
+          "name": "swatch/v1",
+          "label": "Voluntary",
+          "color": "#81c784",
+          "shape": "line"
+        },
+        {
+          "name": "swatch/v1",
+          "label": "Involuntary",
+          "color": "#ffb74d",
+          "shape": "line"
+        },
+        {
+          "name": "swatch/v1",
+          "label": "warning",
+          "color": "#ffb74d",
+          "shape": "reference",
+          "value": {
+            "table": "context_limits",
+            "column": "warning",
+            "select": "first",
+            "unit": "switches"
+          }
+        },
+        {
+          "name": "swatch/v1",
+          "label": "critical",
+          "color": "#ff5252",
+          "shape": "reference",
+          "value": {
+            "table": "context_limits",
+            "column": "critical",
+            "select": "first",
+            "unit": "switches"
+          }
+        },
+        {
+          "name": "tooltip/v1",
+          "table": "cumulative_context_switches",
+          "match": {
+            "x": "timestamp_ns",
+            "y": "voluntary"
+          },
+          "items": [
+            { "label": "Voluntary", "column": "voluntary", "unit": "switches" },
+            { "label": "Time", "column": "timestamp_ns", "unit": "timestamp" }
+          ]
+        },
+        {
+          "name": "tooltip/v1",
+          "table": "cumulative_context_switches",
+          "match": {
+            "x": "timestamp_ns",
+            "y": "involuntary"
+          },
+          "items": [
+            { "label": "Involuntary", "column": "involuntary", "unit": "switches" },
+            { "label": "Time", "column": "timestamp_ns", "unit": "timestamp" }
+          ]
+        },
+        {
+          "name": "readout/v1",
+          "table": "cumulative_context_switches",
+          "items": [
+            { "label": "max", "column": "voluntary", "reduce": "max", "unit": "switches" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "WASM · Extremely Scientific Dinosaur",
+      "x_axis": { "kind": "linear", "min": 0, "max": 100 },
+      "y_scales": [
+        { "name": "dino", "include_zero": true, "min": 0, "max": 10 }
+      ],
+      "components": [
+        {
+          "name": "background/v1",
+          "color": "#0b2818"
+        },
+        {
+          "name": "polyline/v1",
+          "table": "dino_body",
+          "x": "x",
+          "y": "value",
+          "scale": "dino",
+          "color": "#66d17a"
+        },
+        {
+          "name": "polyline/v1",
+          "table": "dino_flames",
+          "x": "x",
+          "y": "value",
+          "scale": "dino",
+          "color": "#ff7043"
+        },
+        {
+          "name": "swatch/v1",
+          "label": "Dino",
+          "color": "#66d17a",
+          "shape": "line"
+        },
+        {
+          "name": "swatch/v1",
+          "label": "Flames",
+          "color": "#ff7043",
+          "shape": "line"
+        },
+        {
+          "name": "tooltip/v1",
+          "table": "dino_body",
+          "match": {
+            "x": "x",
+            "y": "value"
+          },
+          "items": [
+            { "label": "Dino says", "column": "tooltip" }
+          ]
+        },
+        {
+          "name": "tooltip/v1",
+          "table": "dino_flames",
+          "match": {
+            "x": "x",
+            "y": "value"
+          },
+          "items": [
+            { "label": "Science", "column": "tooltip" }
+          ]
+        }
+      ]
+    }
+  ]
+}

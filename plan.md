@@ -90,21 +90,20 @@ pub trait Extension: Default {
   alineadas con el schema.
 - `TableId` y `Column` son API Rust del guest; el ABI transmite descriptores
   numéricos explícitos, nunca su layout Rust.
-- Sólo habrá macros declarativas pequeñas para el manifest y los exports ABI;
-  no proc macros, domain types generados ni serializers automáticos.
-- Cualquier codegen futuro construirá los mismos `TableId` y `Vec<Column>` y
-  delegará al mismo `emit`, sin una segunda ruta de transporte.
+- `include_manifest!` parsea las tablas desde un JSON y genera módulos con
+  `Row`, `Batch` e `ID`. Nullability y UTF-8 se codifican dentro del batch.
+- El codegen construye los mismos `TableId` y `Vec<Column>` y delega al mismo
+  `emit`, sin una segunda ruta de transporte ni dependencias JSON en el WASM.
 
 ```rust
-output.emit(
-    TableId::new(0),
-    vec![
-        Column::U64 { values: start_ns, validity: None },
-        Column::U64 { values: end_ns, validity: None },
-        Column::F64 { values: cores, validity: Some(cores_validity) },
-        Column::F64 { values: percent, validity: Some(percent_validity) },
-    ],
-)?;
+let mut cpu = tables::cpu_intervals::Batch::new();
+cpu.push(tables::cpu_intervals::Row {
+    start_ns,
+    end_ns,
+    cores: Some(cores),
+    percent: Some(percent),
+})?;
+cpu.emit(output)?;
 ```
 
 - ABI numérico versionado: reserva/push de input, finish, next/ack de output,
@@ -122,19 +121,14 @@ componentes. Es un contrato semántico: describe qué representar y de dónde
 obtener los datos, no cómo ejecutar primitivas Canvas o CSS.
 
 ```rust
-dial9_viewer_extension::manifest!(r#"
-{
-  "version": 1,
-  "tables": [],
-  "panels": []
-}
-"#);
+dial9_viewer_extension::include_manifest!("viewer-extension.json");
 ```
 
-`manifest!` compacta en compile time quitando únicamente whitespace JSON fuera
-de strings, preserva strings y escapes exactamente, y coloca los bytes en la
-custom section. El SDK no requiere `serde_json` para esto. El host extrae,
-parsea y valida exactamente un manifest antes de instanciar el módulo.
+`include_manifest!` resuelve el path desde `CARGO_MANIFEST_DIR`, parsea tablas,
+compacta quitando únicamente whitespace JSON fuera de strings y coloca los
+bytes en la custom section. `serde_json` existe sólo en el proc macro del host,
+no en el WASM. El host extrae, parsea y valida exactamente un manifest antes de
+instanciar el módulo.
 
 Ejemplo orientativo:
 

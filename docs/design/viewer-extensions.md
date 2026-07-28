@@ -28,12 +28,52 @@ dial9-viewer-extension = "0.5.0-rc0"
 
 ```rust
 use dial9_viewer_extension::{
-    Column, Event, Extension, ExtensionError, OutputSink, TableId,
+    Event, Extension, ExtensionError, OutputSink,
 };
 
-const POINTS: TableId = TableId::new(0);
+dial9_viewer_extension::include_manifest!("viewer-extension.json");
 
-dial9_viewer_extension::manifest!(r#"
+#[derive(Default)]
+struct MyExtension {
+    points: tables::points::Batch,
+}
+
+impl Extension for MyExtension {
+    fn on_event(
+        &mut self,
+        event: Event<'_, '_>,
+        output: &mut OutputSink<'_>,
+    ) -> Result<(), ExtensionError> {
+        if event.name() != "MyEvent" {
+            return Ok(());
+        }
+        let Some((time_ns, value)) =
+            event.timestamp_ns().zip(event.field("value").and_then(|v| v.as_f64()))
+        else {
+            return Ok(());
+        };
+        self.points.push(tables::points::Row {
+            time_ns,
+            value: Some(value),
+        })?;
+        if self.points.len() == 1024 {
+            self.points.emit(output)?;
+        }
+        Ok(())
+    }
+
+    fn finish(mut self, output: &mut OutputSink<'_>) -> Result<(), ExtensionError> {
+        self.points.emit(output)?;
+        Ok(())
+    }
+}
+
+dial9_viewer_extension::export_extension!(MyExtension);
+```
+
+`viewer-extension.json` contains both the output schemas and their panels:
+
+```json
 {
   "version": 1,
   "tables": [{
@@ -53,63 +93,6 @@ dial9_viewer_extension::manifest!(r#"
     }]
   }]
 }
-"#);
-
-#[derive(Default)]
-struct MyExtension {
-    time_ns: Vec<u64>,
-    values: Vec<f64>,
-}
-
-impl Extension for MyExtension {
-    fn on_event(
-        &mut self,
-        event: Event<'_, '_>,
-        output: &mut OutputSink<'_>,
-    ) -> Result<(), ExtensionError> {
-        if event.name() != "MyEvent" {
-            return Ok(());
-        }
-        let Some((time_ns, value)) =
-            event.timestamp_ns().zip(event.field("value").and_then(|v| v.as_f64()))
-        else {
-            return Ok(());
-        };
-        self.time_ns.push(time_ns);
-        self.values.push(value);
-        if self.time_ns.len() == 1024 {
-            output.emit(
-                POINTS,
-                vec![
-                    Column::U64 {
-                        values: std::mem::take(&mut self.time_ns),
-                        validity: None,
-                    },
-                    Column::F64 {
-                        values: std::mem::take(&mut self.values),
-                        validity: None,
-                    },
-                ],
-            )?;
-        }
-        Ok(())
-    }
-
-    fn finish(mut self, output: &mut OutputSink<'_>) -> Result<(), ExtensionError> {
-        if !self.time_ns.is_empty() {
-            output.emit(
-                POINTS,
-                vec![
-                    Column::U64 { values: self.time_ns, validity: None },
-                    Column::F64 { values: self.values, validity: None },
-                ],
-            )?;
-        }
-        Ok(())
-    }
-}
-
-dial9_viewer_extension::export_extension!(MyExtension);
 ```
 
 Build it without WASI or `wasm-bindgen`:
@@ -132,18 +115,34 @@ during the current `on_event` call.
 
 ## Tables and batches
 
-The manifest's `tables` array is the schema and source of table IDs.
+`include_manifest!` resolves its path relative to `CARGO_MANIFEST_DIR`, parses
+the `tables` array at compile time, embeds the compact manifest, and generates:
+
+```text
+tables::<table name>::ID
+tables::<table name>::Row
+tables::<table name>::Batch
+```
+
+Table and column names must be valid Rust identifiers; keywords use Rust's raw
+identifier syntax in generated code. Nullable columns become `Option<T>` row
+fields. UTF-8 fields borrow `&str` while `Batch::push` copies them into offsets
+and bytes. `Batch::emit` drains the generated typed columns into the ordinary
+output ABI; an empty batch emits nothing.
+
+The raw `TableId`, `Column`, and `OutputSink::emit` API remains available.
+Generated batches delegate to it rather than defining another transport.
 `TableId::new(n)` addresses position `n`; column vectors use manifest order, so
 names are never sent across the ABI.
 
-| Manifest type | Rust column | Host storage |
-| --- | --- | --- |
-| `f64` | `Column::F64` | `Float64Array` |
-| `i64` | `Column::I64` | `BigInt64Array` |
-| `u64` | `Column::U64` | `BigUint64Array` |
-| `u32` | `Column::U32` | `Uint32Array` |
-| `u8` | `Column::U8` | `Uint8Array` |
-| `utf8` | `Column::Utf8` | offsets plus UTF-8 bytes |
+| Manifest type | Generated row | Raw column | Host storage |
+| --- | --- | --- | --- |
+| `f64` | `f64` | `Column::F64` | `Float64Array` |
+| `i64` | `i64` | `Column::I64` | `BigInt64Array` |
+| `u64` | `u64` | `Column::U64` | `BigUint64Array` |
+| `u32` | `u32` | `Column::U32` | `Uint32Array` |
+| `u8` | `u8` | `Column::U8` | `Uint8Array` |
+| `utf8` | `&str` | `Column::Utf8` | offsets plus UTF-8 bytes |
 
 Every column in one `emit` must contain the same row count. A nullable column
 uses an optional LSB-first validity bitmap: bit `i` is set when row `i` is
@@ -170,9 +169,10 @@ version-1 JSON object:
 }
 ```
 
-`manifest!` removes JSON whitespace outside strings at compile time and writes
-that custom section. The viewer validates the complete manifest before
-instantiating the module.
+`include_manifest!` removes JSON whitespace outside strings at compile time and
+writes that custom section. The lower-level `manifest!` embeds an inline JSON
+expression without generating table bindings. The viewer validates the
+complete manifest before instantiating the module.
 
 Panels have these fields:
 

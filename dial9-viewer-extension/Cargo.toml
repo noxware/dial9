@@ -8,6 +8,7 @@ description = "Rust SDK for sandboxed dial9 viewer extensions"
 
 [dependencies]
 dial9-trace-format = { workspace = true }
+dial9-viewer-extension-macros = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = "1"

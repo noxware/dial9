@@ -2111,7 +2111,18 @@ name = "dial9-viewer-extension"
 version = "0.5.0-rc0"
 dependencies = [
  "dial9-trace-format",
+ "dial9-viewer-extension-macros",
  "pretty_assertions",
+]
+
+[[package]]
+name = "dial9-viewer-extension-macros"
+version = "0.5.0-rc0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_json",
+ "syn",
 ]
 
 [[package]]

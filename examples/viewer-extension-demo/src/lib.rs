@@ -1,422 +1,10 @@
-use dial9_viewer_extension::{Column, Event, Extension, ExtensionError, OutputSink, TableId};
-use std::mem;
+use dial9_viewer_extension::{Event, Extension, ExtensionError, OutputSink};
 
-const CPU_INTERVALS: TableId = TableId::new(0);
-const SCALARS: TableId = TableId::new(1);
-const CONTEXT_SWITCHES: TableId = TableId::new(2);
-const CUMULATIVE_CONTEXT_SWITCHES: TableId = TableId::new(3);
-const CONTEXT_LIMITS: TableId = TableId::new(4);
-const DINO_BODY: TableId = TableId::new(5);
-const DINO_FLAMES: TableId = TableId::new(6);
 const BATCH_ROWS: usize = 1_024;
 const CONTEXT_WARNING: u64 = 8_000;
 const CONTEXT_CRITICAL: u64 = 10_000;
 
-dial9_viewer_extension::manifest!(
-    r##"
-    {
-      "version": 1,
-      "tables": [
-        {
-          "name": "cpu_intervals",
-          "columns": [
-            { "name": "start_ns", "type": "u64" },
-            { "name": "end_ns", "type": "u64" },
-            { "name": "wall_ns", "type": "u64" },
-            { "name": "cpu_ns", "type": "u64" },
-            { "name": "cores", "type": "f64", "nullable": true },
-            { "name": "total_percent", "type": "f64", "nullable": true },
-            { "name": "percent", "type": "f64", "nullable": true },
-            { "name": "load", "type": "f64", "nullable": true }
-          ]
-        },
-        {
-          "name": "scalars",
-          "columns": [
-            { "name": "capacity", "type": "f64" }
-          ]
-        },
-        {
-          "name": "context_switches",
-          "columns": [
-            { "name": "start_ns", "type": "u64" },
-            { "name": "end_ns", "type": "u64" },
-            { "name": "voluntary_rate", "type": "f64", "nullable": true },
-            { "name": "involuntary_rate", "type": "f64", "nullable": true }
-          ]
-        },
-        {
-          "name": "cumulative_context_switches",
-          "columns": [
-            { "name": "timestamp_ns", "type": "u64" },
-            { "name": "voluntary", "type": "u64" },
-            { "name": "involuntary", "type": "u64" }
-          ]
-        },
-        {
-          "name": "context_limits",
-          "columns": [
-            { "name": "warning", "type": "u64" },
-            { "name": "critical", "type": "u64" }
-          ]
-        },
-        {
-          "name": "dino_body",
-          "columns": [
-            { "name": "x", "type": "u8" },
-            { "name": "value", "type": "f64" },
-            { "name": "tooltip", "type": "utf8" }
-          ]
-        },
-        {
-          "name": "dino_flames",
-          "columns": [
-            { "name": "x", "type": "u8" },
-            { "name": "value", "type": "f64" },
-            { "name": "tooltip", "type": "utf8" }
-          ]
-        }
-      ],
-      "panels": [
-        {
-          "title": "WASM · CPU Usage",
-          "components": [
-            {
-              "name": "interval-area/v1",
-              "table": "cpu_intervals",
-              "start": "start_ns",
-              "end": "end_ns",
-              "y": "cores",
-              "color": {
-                "column": "load",
-                "stops": [
-                  { "value": 0, "color": "#4fc3f7" },
-                  { "value": 1, "color": "#ff7361" }
-                ]
-              }
-            },
-            {
-              "name": "interval-line/v1",
-              "table": "cpu_intervals",
-              "start": "start_ns",
-              "end": "end_ns",
-              "y": "cores",
-              "color": {
-                "column": "load",
-                "stops": [
-                  { "value": 0, "color": "#4fc3f7" },
-                  { "value": 1, "color": "#ff7361" }
-                ]
-              }
-            },
-            {
-              "name": "horizontal-rule/v1",
-              "value": {
-                "table": "scalars",
-                "column": "capacity",
-                "select": "first"
-              },
-              "color": "#ffcf99"
-            },
-            {
-              "name": "swatch/v1",
-              "label": "available parallelism",
-              "color": "#ffcf99",
-              "shape": "reference",
-              "value": {
-                "table": "scalars",
-                "column": "capacity",
-                "select": "first",
-                "unit": "cores"
-              }
-            },
-            {
-              "name": "tooltip/v1",
-              "table": "cpu_intervals",
-              "match": {
-                "start": "start_ns",
-                "end": "end_ns",
-                "y": "cores"
-              },
-              "items": [
-                { "label": "Window", "column": "wall_ns", "unit": "ns" },
-                { "label": "CPU time", "column": "cpu_ns", "unit": "ns" },
-                { "label": "Cores", "column": "cores" },
-                { "label": "Total CPU", "column": "total_percent", "unit": "%" }
-              ]
-            },
-            {
-              "name": "readout/v1",
-              "table": "cpu_intervals",
-              "items": [
-                {
-                  "label": "avg",
-                  "column": "cores",
-                  "reduce": {
-                    "name": "time_weighted_mean",
-                    "start": "start_ns",
-                    "end": "end_ns"
-                  },
-                  "unit": "cores"
-                },
-                {
-                  "label": "avg",
-                  "column": "percent",
-                  "reduce": {
-                    "name": "time_weighted_mean",
-                    "start": "start_ns",
-                    "end": "end_ns"
-                  },
-                  "unit": "%"
-                },
-                {
-                  "label": "max",
-                  "column": "cores",
-                  "reduce": "max",
-                  "unit": "cores"
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "title": "WASM · Context Switch Rate",
-          "components": [
-            {
-              "name": "interval-line/v1",
-              "table": "context_switches",
-              "start": "start_ns",
-              "end": "end_ns",
-              "y": "voluntary_rate",
-              "color": "#81c784"
-            },
-            {
-              "name": "line/v1",
-              "table": "context_switches",
-              "start": "start_ns",
-              "end": "end_ns",
-              "y": "involuntary_rate",
-              "color": "#ffb74d"
-            },
-            {
-              "name": "swatch/v1",
-              "label": "Voluntary",
-              "color": "#81c784",
-              "shape": "line"
-            },
-            {
-              "name": "swatch/v1",
-              "label": "Involuntary",
-              "color": "#ffb74d",
-              "shape": "line"
-            },
-            {
-              "name": "tooltip/v1",
-              "table": "context_switches",
-              "match": {
-                "start": "start_ns",
-                "end": "end_ns",
-                "y": "voluntary_rate"
-              },
-              "items": [
-                { "label": "Voluntary", "column": "voluntary_rate", "unit": "switches/s" },
-                { "label": "Time", "column": "start_ns", "unit": "timestamp" }
-              ]
-            },
-            {
-              "name": "tooltip/v1",
-              "table": "context_switches",
-              "match": {
-                "start": "start_ns",
-                "end": "end_ns",
-                "y": "involuntary_rate"
-              },
-              "items": [
-                { "label": "Involuntary", "column": "involuntary_rate", "unit": "switches/s" },
-                { "label": "Time", "column": "start_ns", "unit": "timestamp" }
-              ]
-            },
-            {
-              "name": "readout/v1",
-              "table": "context_switches",
-              "items": [
-                { "label": "voluntary max", "column": "voluntary_rate", "reduce": "max", "unit": "switches/s" },
-                { "label": "involuntary max", "column": "involuntary_rate", "reduce": "max", "unit": "switches/s" }
-              ]
-            }
-          ]
-        },
-        {
-          "title": "WASM · Context Switches (Cumulative)",
-          "components": [
-            {
-              "name": "line/v1",
-              "table": "cumulative_context_switches",
-              "x": "timestamp_ns",
-              "y": "voluntary",
-              "color": "#81c784"
-            },
-            {
-              "name": "line/v1",
-              "table": "cumulative_context_switches",
-              "x": "timestamp_ns",
-              "y": "involuntary",
-              "color": "#ffb74d"
-            },
-            {
-              "name": "horizontal-rule/v1",
-              "value": {
-                "table": "context_limits",
-                "column": "warning",
-                "select": "first"
-              },
-              "color": "#ffb74d"
-            },
-            {
-              "name": "horizontal-rule/v1",
-              "value": {
-                "table": "context_limits",
-                "column": "critical",
-                "select": "first"
-              },
-              "color": "#ff5252"
-            },
-            {
-              "name": "swatch/v1",
-              "label": "Voluntary",
-              "color": "#81c784",
-              "shape": "line"
-            },
-            {
-              "name": "swatch/v1",
-              "label": "Involuntary",
-              "color": "#ffb74d",
-              "shape": "line"
-            },
-            {
-              "name": "swatch/v1",
-              "label": "warning",
-              "color": "#ffb74d",
-              "shape": "reference",
-              "value": {
-                "table": "context_limits",
-                "column": "warning",
-                "select": "first",
-                "unit": "switches"
-              }
-            },
-            {
-              "name": "swatch/v1",
-              "label": "critical",
-              "color": "#ff5252",
-              "shape": "reference",
-              "value": {
-                "table": "context_limits",
-                "column": "critical",
-                "select": "first",
-                "unit": "switches"
-              }
-            },
-            {
-              "name": "tooltip/v1",
-              "table": "cumulative_context_switches",
-              "match": {
-                "x": "timestamp_ns",
-                "y": "voluntary"
-              },
-              "items": [
-                { "label": "Voluntary", "column": "voluntary", "unit": "switches" },
-                { "label": "Time", "column": "timestamp_ns", "unit": "timestamp" }
-              ]
-            },
-            {
-              "name": "tooltip/v1",
-              "table": "cumulative_context_switches",
-              "match": {
-                "x": "timestamp_ns",
-                "y": "involuntary"
-              },
-              "items": [
-                { "label": "Involuntary", "column": "involuntary", "unit": "switches" },
-                { "label": "Time", "column": "timestamp_ns", "unit": "timestamp" }
-              ]
-            },
-            {
-              "name": "readout/v1",
-              "table": "cumulative_context_switches",
-              "items": [
-                { "label": "max", "column": "voluntary", "reduce": "max", "unit": "switches" }
-              ]
-            }
-          ]
-        },
-        {
-          "title": "WASM · Extremely Scientific Dinosaur",
-          "x_axis": { "kind": "linear", "min": 0, "max": 100 },
-          "y_scales": [
-            { "name": "dino", "include_zero": true, "min": 0, "max": 10 }
-          ],
-          "components": [
-            {
-              "name": "background/v1",
-              "color": "#0b2818"
-            },
-            {
-              "name": "polyline/v1",
-              "table": "dino_body",
-              "x": "x",
-              "y": "value",
-              "scale": "dino",
-              "color": "#66d17a"
-            },
-            {
-              "name": "polyline/v1",
-              "table": "dino_flames",
-              "x": "x",
-              "y": "value",
-              "scale": "dino",
-              "color": "#ff7043"
-            },
-            {
-              "name": "swatch/v1",
-              "label": "Dino",
-              "color": "#66d17a",
-              "shape": "line"
-            },
-            {
-              "name": "swatch/v1",
-              "label": "Flames",
-              "color": "#ff7043",
-              "shape": "line"
-            },
-            {
-              "name": "tooltip/v1",
-              "table": "dino_body",
-              "match": {
-                "x": "x",
-                "y": "value"
-              },
-              "items": [
-                { "label": "Dino says", "column": "tooltip" }
-              ]
-            },
-            {
-              "name": "tooltip/v1",
-              "table": "dino_flames",
-              "match": {
-                "x": "x",
-                "y": "value"
-              },
-              "items": [
-                { "label": "Science", "column": "tooltip" }
-              ]
-            }
-          ]
-        }
-      ]
-    }
-    "##
-);
+dial9_viewer_extension::include_manifest!("viewer-extension.json");
 
 #[derive(Clone, Copy)]
 struct ResourceSample {
@@ -428,211 +16,12 @@ struct ResourceSample {
 }
 
 #[derive(Default)]
-struct CpuBatch {
-    start_ns: Vec<u64>,
-    end_ns: Vec<u64>,
-    wall_ns: Vec<u64>,
-    cpu_ns: Vec<u64>,
-    cores: Vec<f64>,
-    cores_valid: Vec<bool>,
-    total_percent: Vec<f64>,
-    total_percent_valid: Vec<bool>,
-    percent: Vec<f64>,
-    percent_valid: Vec<bool>,
-    load: Vec<f64>,
-    load_valid: Vec<bool>,
-}
-
-impl CpuBatch {
-    fn push(&mut self, previous: ResourceSample, current: ResourceSample, capacity: Option<f64>) {
-        let wall_ns = current.timestamp_ns.checked_sub(previous.timestamp_ns);
-        let user_ns = current.user_cpu_ns.checked_sub(previous.user_cpu_ns);
-        let system_ns = current.system_cpu_ns.checked_sub(previous.system_cpu_ns);
-        let cpu_ns = user_ns.and_then(|user| system_ns.and_then(|system| user.checked_add(system)));
-        let cores = wall_ns
-            .zip(cpu_ns)
-            .filter(|(wall, _)| *wall > 0)
-            .map(|(wall, cpu)| cpu as f64 / wall as f64)
-            .filter(|value| value.is_finite());
-        let percent = cores
-            .zip(capacity)
-            .map(|(cores, capacity)| (cores / capacity) * 100.0);
-
-        self.start_ns.push(previous.timestamp_ns);
-        self.end_ns.push(current.timestamp_ns);
-        self.wall_ns.push(wall_ns.unwrap_or(0));
-        self.cpu_ns.push(cpu_ns.unwrap_or(0));
-        push_nullable(&mut self.cores, &mut self.cores_valid, cores);
-        push_nullable(
-            &mut self.total_percent,
-            &mut self.total_percent_valid,
-            percent.map(|value| value.min(100.0)),
-        );
-        push_nullable(&mut self.percent, &mut self.percent_valid, percent);
-        push_nullable(
-            &mut self.load,
-            &mut self.load_valid,
-            cores.map(|cores| capacity.map_or(cores, |capacity| cores / capacity)),
-        );
-    }
-
-    fn len(&self) -> usize {
-        self.start_ns.len()
-    }
-
-    fn flush(&mut self, output: &mut OutputSink) -> Result<(), ExtensionError> {
-        if self.start_ns.is_empty() {
-            return Ok(());
-        }
-        output.emit(
-            CPU_INTERVALS,
-            vec![
-                Column::U64 {
-                    values: mem::take(&mut self.start_ns),
-                    validity: None,
-                },
-                Column::U64 {
-                    values: mem::take(&mut self.end_ns),
-                    validity: None,
-                },
-                Column::U64 {
-                    values: mem::take(&mut self.wall_ns),
-                    validity: None,
-                },
-                Column::U64 {
-                    values: mem::take(&mut self.cpu_ns),
-                    validity: None,
-                },
-                nullable_f64(&mut self.cores, &mut self.cores_valid),
-                nullable_f64(&mut self.total_percent, &mut self.total_percent_valid),
-                nullable_f64(&mut self.percent, &mut self.percent_valid),
-                nullable_f64(&mut self.load, &mut self.load_valid),
-            ],
-        )?;
-        Ok(())
-    }
-}
-
-#[derive(Default)]
-struct ContextBatch {
-    start_ns: Vec<u64>,
-    end_ns: Vec<u64>,
-    voluntary_rate: Vec<f64>,
-    voluntary_valid: Vec<bool>,
-    involuntary_rate: Vec<f64>,
-    involuntary_valid: Vec<bool>,
-}
-
-impl ContextBatch {
-    fn push(&mut self, previous: ResourceSample, current: ResourceSample) {
-        let wall_ns = current
-            .timestamp_ns
-            .checked_sub(previous.timestamp_ns)
-            .filter(|wall| *wall > 0);
-        let voluntary = wall_ns.and_then(|wall| {
-            current
-                .voluntary_context_switches
-                .checked_sub(previous.voluntary_context_switches)
-                .map(|delta| delta as f64 * 1_000_000_000.0 / wall as f64)
-        });
-        let involuntary = wall_ns.and_then(|wall| {
-            current
-                .involuntary_context_switches
-                .checked_sub(previous.involuntary_context_switches)
-                .map(|delta| delta as f64 * 1_000_000_000.0 / wall as f64)
-        });
-
-        self.start_ns.push(previous.timestamp_ns);
-        self.end_ns.push(current.timestamp_ns);
-        push_nullable(
-            &mut self.voluntary_rate,
-            &mut self.voluntary_valid,
-            voluntary,
-        );
-        push_nullable(
-            &mut self.involuntary_rate,
-            &mut self.involuntary_valid,
-            involuntary,
-        );
-    }
-
-    fn len(&self) -> usize {
-        self.start_ns.len()
-    }
-
-    fn flush(&mut self, output: &mut OutputSink) -> Result<(), ExtensionError> {
-        if self.start_ns.is_empty() {
-            return Ok(());
-        }
-        output.emit(
-            CONTEXT_SWITCHES,
-            vec![
-                Column::U64 {
-                    values: mem::take(&mut self.start_ns),
-                    validity: None,
-                },
-                Column::U64 {
-                    values: mem::take(&mut self.end_ns),
-                    validity: None,
-                },
-                nullable_f64(&mut self.voluntary_rate, &mut self.voluntary_valid),
-                nullable_f64(&mut self.involuntary_rate, &mut self.involuntary_valid),
-            ],
-        )?;
-        Ok(())
-    }
-}
-
-#[derive(Default)]
-struct CumulativeContextBatch {
-    timestamp_ns: Vec<u64>,
-    voluntary: Vec<u64>,
-    involuntary: Vec<u64>,
-}
-
-impl CumulativeContextBatch {
-    fn push(&mut self, sample: ResourceSample) {
-        self.timestamp_ns.push(sample.timestamp_ns);
-        self.voluntary.push(sample.voluntary_context_switches);
-        self.involuntary.push(sample.involuntary_context_switches);
-    }
-
-    fn len(&self) -> usize {
-        self.timestamp_ns.len()
-    }
-
-    fn flush(&mut self, output: &mut OutputSink) -> Result<(), ExtensionError> {
-        if self.timestamp_ns.is_empty() {
-            return Ok(());
-        }
-        output.emit(
-            CUMULATIVE_CONTEXT_SWITCHES,
-            vec![
-                Column::U64 {
-                    values: mem::take(&mut self.timestamp_ns),
-                    validity: None,
-                },
-                Column::U64 {
-                    values: mem::take(&mut self.voluntary),
-                    validity: None,
-                },
-                Column::U64 {
-                    values: mem::take(&mut self.involuntary),
-                    validity: None,
-                },
-            ],
-        )?;
-        Ok(())
-    }
-}
-
-#[derive(Default)]
 pub struct DemoExtension {
     previous: Option<ResourceSample>,
     capacity: Option<f64>,
-    cpu: CpuBatch,
-    context: ContextBatch,
-    cumulative_context: CumulativeContextBatch,
+    cpu: tables::cpu_intervals::Batch,
+    context: tables::context_switches::Batch,
+    cumulative_context: tables::cumulative_context_switches::Batch,
 }
 
 impl DemoExtension {
@@ -641,21 +30,23 @@ impl DemoExtension {
         sample: ResourceSample,
         output: &mut OutputSink,
     ) -> Result<(), ExtensionError> {
-        self.cumulative_context.push(sample);
+        self.cumulative_context
+            .push(cumulative_context_row(sample))?;
         if let Some(previous) = self.previous {
-            self.cpu.push(previous, sample, self.capacity);
-            self.context.push(previous, sample);
+            self.cpu
+                .push(cpu_interval_row(previous, sample, self.capacity))?;
+            self.context.push(context_switch_row(previous, sample))?;
         }
         self.previous = Some(sample);
 
         if self.cpu.len() >= BATCH_ROWS {
-            self.cpu.flush(output)?;
+            self.cpu.emit(output)?;
         }
         if self.context.len() >= BATCH_ROWS {
-            self.context.flush(output)?;
+            self.context.emit(output)?;
         }
         if self.cumulative_context.len() >= BATCH_ROWS {
-            self.cumulative_context.flush(output)?;
+            self.cumulative_context.emit(output)?;
         }
         Ok(())
     }
@@ -693,33 +84,92 @@ impl Extension for DemoExtension {
     }
 
     fn finish(mut self, output: &mut OutputSink) -> Result<(), ExtensionError> {
-        self.cpu.flush(output)?;
-        self.context.flush(output)?;
-        self.cumulative_context.flush(output)?;
+        self.cpu.emit(output)?;
+        self.context.emit(output)?;
+        self.cumulative_context.emit(output)?;
+
         if let Some(capacity) = self.capacity {
-            output.emit(
-                SCALARS,
-                vec![Column::F64 {
-                    values: vec![capacity],
-                    validity: None,
-                }],
-            )?;
+            let mut scalars = tables::scalars::Batch::new();
+            scalars.push(tables::scalars::Row { capacity })?;
+            scalars.emit(output)?;
         }
-        output.emit(
-            CONTEXT_LIMITS,
-            vec![
-                Column::U64 {
-                    values: vec![CONTEXT_WARNING],
-                    validity: None,
-                },
-                Column::U64 {
-                    values: vec![CONTEXT_CRITICAL],
-                    validity: None,
-                },
-            ],
-        )?;
+
+        let mut limits = tables::context_limits::Batch::new();
+        limits.push(tables::context_limits::Row {
+            warning: CONTEXT_WARNING,
+            critical: CONTEXT_CRITICAL,
+        })?;
+        limits.emit(output)?;
+
         emit_dinosaur(output)?;
         Ok(())
+    }
+}
+
+fn cpu_interval_row(
+    previous: ResourceSample,
+    current: ResourceSample,
+    capacity: Option<f64>,
+) -> tables::cpu_intervals::Row {
+    let wall_ns = current.timestamp_ns.checked_sub(previous.timestamp_ns);
+    let user_ns = current.user_cpu_ns.checked_sub(previous.user_cpu_ns);
+    let system_ns = current.system_cpu_ns.checked_sub(previous.system_cpu_ns);
+    let cpu_ns = user_ns.and_then(|user| system_ns.and_then(|system| user.checked_add(system)));
+    let cores = wall_ns
+        .zip(cpu_ns)
+        .filter(|(wall, _)| *wall > 0)
+        .map(|(wall, cpu)| cpu as f64 / wall as f64)
+        .filter(|value| value.is_finite());
+    let percent = cores
+        .zip(capacity)
+        .map(|(cores, capacity)| (cores / capacity) * 100.0);
+
+    tables::cpu_intervals::Row {
+        start_ns: previous.timestamp_ns,
+        end_ns: current.timestamp_ns,
+        wall_ns: wall_ns.unwrap_or(0),
+        cpu_ns: cpu_ns.unwrap_or(0),
+        cores,
+        total_percent: percent.map(|value| value.min(100.0)),
+        percent,
+        load: cores.map(|cores| capacity.map_or(cores, |capacity| cores / capacity)),
+    }
+}
+
+fn context_switch_row(
+    previous: ResourceSample,
+    current: ResourceSample,
+) -> tables::context_switches::Row {
+    let wall_ns = current
+        .timestamp_ns
+        .checked_sub(previous.timestamp_ns)
+        .filter(|wall| *wall > 0);
+    let voluntary_rate = wall_ns.and_then(|wall| {
+        current
+            .voluntary_context_switches
+            .checked_sub(previous.voluntary_context_switches)
+            .map(|delta| delta as f64 * 1_000_000_000.0 / wall as f64)
+    });
+    let involuntary_rate = wall_ns.and_then(|wall| {
+        current
+            .involuntary_context_switches
+            .checked_sub(previous.involuntary_context_switches)
+            .map(|delta| delta as f64 * 1_000_000_000.0 / wall as f64)
+    });
+
+    tables::context_switches::Row {
+        start_ns: previous.timestamp_ns,
+        end_ns: current.timestamp_ns,
+        voluntary_rate,
+        involuntary_rate,
+    }
+}
+
+fn cumulative_context_row(sample: ResourceSample) -> tables::cumulative_context_switches::Row {
+    tables::cumulative_context_switches::Row {
+        timestamp_ns: sample.timestamp_ns,
+        voluntary: sample.voluntary_context_switches,
+        involuntary: sample.involuntary_context_switches,
     }
 }
 
@@ -731,30 +181,6 @@ fn resource_sample(event: &Event<'_, '_>) -> Option<ResourceSample> {
         voluntary_context_switches: event.field("voluntary_context_switches")?.as_u64()?,
         involuntary_context_switches: event.field("involuntary_context_switches")?.as_u64()?,
     })
-}
-
-fn push_nullable(values: &mut Vec<f64>, valid: &mut Vec<bool>, value: Option<f64>) {
-    values.push(value.unwrap_or(0.0));
-    valid.push(value.is_some());
-}
-
-fn nullable_f64(values: &mut Vec<f64>, valid: &mut Vec<bool>) -> Column {
-    let validity = validity_bitmap(valid);
-    valid.clear();
-    Column::F64 {
-        values: mem::take(values),
-        validity: Some(validity),
-    }
-}
-
-fn validity_bitmap(valid: &[bool]) -> Vec<u8> {
-    let mut bitmap = vec![0; valid.len().div_ceil(8)];
-    for (index, present) in valid.iter().copied().enumerate() {
-        if present {
-            bitmap[index / 8] |= 1 << (index % 8);
-        }
-    }
-    bitmap
 }
 
 const DINO_BODY_POINTS: &[(u8, f64, &str)] = &[
@@ -793,56 +219,18 @@ const DINO_FLAME_POINTS: &[(u8, f64, &str)] = &[
 ];
 
 fn emit_dinosaur(output: &mut OutputSink) -> Result<(), ExtensionError> {
-    emit_points(output, DINO_BODY, DINO_BODY_POINTS)?;
-    emit_points(output, DINO_FLAMES, DINO_FLAME_POINTS)
-}
-
-fn emit_points(
-    output: &mut OutputSink,
-    table: TableId,
-    points: &[(u8, f64, &str)],
-) -> Result<(), ExtensionError> {
-    let x = points.iter().map(|(x, _, _)| *x).collect();
-    let values = points.iter().map(|(_, value, _)| *value).collect();
-    let (offsets, data) = utf8_column(points.iter().map(|(_, _, tooltip)| *tooltip))?;
-    output.emit(
-        table,
-        vec![
-            Column::U8 {
-                values: x,
-                validity: None,
-            },
-            Column::F64 {
-                values,
-                validity: None,
-            },
-            Column::Utf8 {
-                offsets,
-                data,
-                validity: None,
-            },
-        ],
-    )?;
-    Ok(())
-}
-
-fn utf8_column<'a>(
-    values: impl IntoIterator<Item = &'a str>,
-) -> Result<(Vec<u32>, Vec<u8>), ExtensionError> {
-    let values = values.into_iter();
-    let (lower, _) = values.size_hint();
-    let mut offsets = Vec::with_capacity(lower + 1);
-    let mut data = Vec::new();
-    offsets.push(0);
-    for value in values {
-        data.extend_from_slice(value.as_bytes());
-        offsets.push(
-            data.len()
-                .try_into()
-                .map_err(|_| ExtensionError::new("dinosaur text exceeds u32::MAX bytes"))?,
-        );
+    let mut body = tables::dino_body::Batch::with_capacity(DINO_BODY_POINTS.len());
+    for &(x, value, tooltip) in DINO_BODY_POINTS {
+        body.push(tables::dino_body::Row { x, value, tooltip })?;
     }
-    Ok((offsets, data))
+    body.emit(output)?;
+
+    let mut flames = tables::dino_flames::Batch::with_capacity(DINO_FLAME_POINTS.len());
+    for &(x, value, tooltip) in DINO_FLAME_POINTS {
+        flames.push(tables::dino_flames::Row { x, value, tooltip })?;
+    }
+    flames.emit(output)?;
+    Ok(())
 }
 
 dial9_viewer_extension::export_extension!(DemoExtension);
@@ -867,10 +255,9 @@ mod tests {
             voluntary_context_switches: 5,
             involuntary_context_switches: 3,
         };
-        let mut batch = CpuBatch::default();
-        batch.push(previous, current, Some(4.0));
-        assert_eq!(batch.cores_valid, [false]);
-        assert_eq!(batch.total_percent_valid, [false]);
+        let row = cpu_interval_row(previous, current, Some(4.0));
+        assert_eq!(row.cores, None);
+        assert_eq!(row.total_percent, None);
     }
 
     #[test]
@@ -889,13 +276,12 @@ mod tests {
             voluntary_context_switches: 0,
             involuntary_context_switches: 0,
         };
-        let mut batch = CpuBatch::default();
-        batch.push(previous, current, Some(4.0));
-        assert_eq!(batch.wall_ns, [100]);
-        assert_eq!(batch.cpu_ns, [80]);
-        assert_eq!(batch.cores, [0.8]);
-        assert_eq!(batch.total_percent, [20.0]);
-        assert_eq!(batch.load, [0.2]);
+        let row = cpu_interval_row(previous, current, Some(4.0));
+        assert_eq!(row.wall_ns, 100);
+        assert_eq!(row.cpu_ns, 80);
+        assert_eq!(row.cores, Some(0.8));
+        assert_eq!(row.total_percent, Some(20.0));
+        assert_eq!(row.load, Some(0.2));
     }
 
     #[test]
@@ -914,19 +300,16 @@ mod tests {
             voluntary_context_switches: 298,
             involuntary_context_switches: 9,
         };
-        let mut batch = ContextBatch::default();
-        batch.push(previous, current);
-        assert_eq!(batch.start_ns, [1_000]);
-        assert_eq!(batch.end_ns, [1_000_001_000]);
-        assert_eq!(batch.voluntary_rate, [288.0]);
-        assert_eq!(batch.involuntary_rate, [5.0]);
-        assert_eq!(batch.voluntary_valid, [true]);
-        assert_eq!(batch.involuntary_valid, [true]);
+        let row = context_switch_row(previous, current);
+        assert_eq!(row.start_ns, 1_000);
+        assert_eq!(row.end_ns, 1_000_001_000);
+        assert_eq!(row.voluntary_rate, Some(288.0));
+        assert_eq!(row.involuntary_rate, Some(5.0));
     }
 
     #[test]
     fn cumulative_context_switches_preserve_every_sample() {
-        let samples = [
+        let rows = [
             ResourceSample {
                 timestamp_ns: 1_000,
                 user_cpu_ns: 0,
@@ -941,14 +324,14 @@ mod tests {
                 voluntary_context_switches: 298,
                 involuntary_context_switches: 9,
             },
-        ];
-        let mut batch = CumulativeContextBatch::default();
-        for sample in samples {
-            batch.push(sample);
-        }
-        assert_eq!(batch.timestamp_ns, [1_000, 2_000]);
-        assert_eq!(batch.voluntary, [10, 298]);
-        assert_eq!(batch.involuntary, [4, 9]);
+        ]
+        .map(cumulative_context_row);
+        assert_eq!(rows[0].timestamp_ns, 1_000);
+        assert_eq!(rows[1].timestamp_ns, 2_000);
+        assert_eq!(rows[0].voluntary, 10);
+        assert_eq!(rows[1].voluntary, 298);
+        assert_eq!(rows[0].involuntary, 4);
+        assert_eq!(rows[1].involuntary, 9);
     }
 
     #[test]
