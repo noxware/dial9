@@ -22,6 +22,7 @@ import {
 import type { EscCascade } from "./esc-cascade.js";
 import { ESC_PRIORITY } from "./esc-cascade.js";
 import {
+  FIELD_CHART_KINDS,
   fieldChartKey,
   hasFieldChartData,
   isFieldChartKind,
@@ -137,6 +138,7 @@ export function mountFieldCharts(
     }
     const series = seriesFor(trace, spec);
     if (!hasFieldChartData(series)) {
+      cache.delete(fieldChartKey(spec));
       deps.notify(
         `${spec.eventName} · ${spec.field} has no compatible values for ${kindLabel(spec.kind)}`,
         "error",
@@ -684,14 +686,10 @@ class FieldChartDialog {
     const label = doc.createElement("label");
     label.textContent = "Interpret as";
     this.#select = doc.createElement("select");
-    for (const [value, text] of [
-      ["gauge", "Gauge"],
-      ["counter", "Counter"],
-      ["up_down_counter", "Up/down counter"],
-    ] as const) {
+    for (const value of FIELD_CHART_KINDS) {
       const option = doc.createElement("option");
       option.value = value;
-      option.textContent = text;
+      option.textContent = kindLabel(value);
       this.#select.append(option);
     }
     label.append(this.#select);

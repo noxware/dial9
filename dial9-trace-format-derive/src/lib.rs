@@ -86,7 +86,7 @@ fn derive_trace_event_impl(input: DeriveInput) -> Result<proc_macro2::TokenStrea
                 return Err(syn::Error::new_spanned(
                     &unit,
                     "the timestamp field cannot carry a unit annotation: it is encoded in the \
-                    event header (always nanoseconds), not as a schema field",
+                     event header (always nanoseconds), not as a schema field",
                 ));
             }
             if let Some(kind) = kind {

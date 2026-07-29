@@ -61,11 +61,7 @@ interface NumericFieldValue {
 
 /** True for the three stable semantic values accepted by Rust and the URL. */
 export function isFieldChartKind(value: unknown): value is FieldChartKind {
-  return (
-    value === "gauge" ||
-    value === "counter" ||
-    value === "up_down_counter"
-  );
+  return FIELD_CHART_KINDS.some((kind) => kind === value);
 }
 
 /** Collision-free cache/deduplication key for a chart spec. */
