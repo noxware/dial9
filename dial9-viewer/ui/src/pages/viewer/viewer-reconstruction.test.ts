@@ -160,6 +160,13 @@ describe("viewer deep-link reconstruction", () => {
       regionOffworkerZoom: ["off", "alloc"],
       regionInspectFocus: "tokio::runtime::task::harness::poll_future",
       spanNavIndex: 5,
+      fieldCharts: [
+        {
+          eventName: "ProcessResourceUsageEvent",
+          field: "user_cpu_ns",
+          kind: "counter",
+        },
+      ],
     });
 
     const projected = projectViewerState(source.getState());
@@ -220,6 +227,9 @@ describe("viewer deep-link reconstruction", () => {
       regionWorkerZoom: ["region", "worker"],
       regionInspectFocus: "same::frame",
       spanNavIndex: 5,
+      fieldCharts: [
+        { eventName: "Metric", field: "value", kind: "gauge" },
+      ],
     });
     expect(store.getState().selection.pollDetail).toBe(oldPoll);
     expect(store.getState().selection.pinnedEvent?.events).toContain(oldEvent);
@@ -243,6 +253,9 @@ describe("viewer deep-link reconstruction", () => {
       regionWorkerZoom: ["region", "worker"],
       regionInspectFocus: "same::frame",
       spanNavIndex: 5,
+      fieldCharts: [
+        { eventName: "Metric", field: "value", kind: "gauge" },
+      ],
     });
   });
 
@@ -303,6 +316,9 @@ describe("viewer deep-link reconstruction", () => {
       regionOffworkerZoom: ["old", "free"],
       regionInspectFocus: "old::frame",
       spanNavIndex: 5,
+      fieldCharts: [
+        { eventName: "Metric", field: "value", kind: "counter" },
+      ],
     });
 
     reconstruction.applyLoadedTrace(reconstructedTrace, "source");
@@ -350,6 +366,7 @@ describe("viewer deep-link reconstruction", () => {
       regionOffworkerZoom: [],
       regionInspectFocus: null,
       spanNavIndex: -1,
+      fieldCharts: [],
     });
 
     const query = new URLSearchParams();
@@ -378,6 +395,7 @@ describe("viewer deep-link reconstruction", () => {
       "analysis-offworker-zoom",
       "analysis-inspect",
       "span-index",
+      "field-chart",
     ]) {
       expect(query.has(staleParam), staleParam).toBe(false);
     }

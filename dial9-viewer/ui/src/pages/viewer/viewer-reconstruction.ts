@@ -215,6 +215,7 @@ export function createViewerReconstruction(
       regionOffworkerZoom: [],
       regionInspectFocus: null,
       spanNavIndex: -1,
+      fieldCharts: [],
     });
   }
 

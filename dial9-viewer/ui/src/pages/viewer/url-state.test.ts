@@ -78,6 +78,7 @@ function mkState(over: {
       regionOffworkerZoom: [],
       regionInspectFocus: null,
       spanNavIndex: -1,
+      fieldCharts: [],
       ...over.view,
     },
     trace: over.trace ?? { trace: null },
@@ -157,6 +158,61 @@ describe("viewer URL state: focused span", () => {
     const { params, out } = roundTrip(mkState({ selection: { focusedSpanId: "0xabc" } }));
     expect(params.get("span-focus")).toBe("0xabc");
     expect(out.focusedSpanId).toBe("0xabc");
+  });
+});
+
+describe("viewer URL state: field charts", () => {
+  const first = {
+    eventName: "ProcessResourceUsageEvent",
+    field: "user_cpu_ns",
+    kind: "counter",
+  } as const;
+  const second = {
+    eventName: "Request Metrics",
+    field: "in_flight",
+    kind: "up_down_counter",
+  } as const;
+
+  it("round-trips repeated charts in display order", () => {
+    const { params, out } = roundTrip(
+      mkState({ view: { fieldCharts: [first, second] } }),
+    );
+
+    expect(params.getAll("field-chart")).toEqual([
+      "ProcessResourceUsageEvent,user_cpu_ns,counter",
+      "Request Metrics,in_flight,up_down_counter",
+    ]);
+    expect(out.fieldCharts).toEqual([first, second]);
+  });
+
+  it("ignores malformed values and deduplicates valid specs", () => {
+    const out = readViewerUrlState(
+      "?field-chart=Event,value,gauge" +
+        "&field-chart=Event,value,gauge" +
+        "&field-chart=missing-parts" +
+        "&field-chart=Event,value,rate" +
+        "&field-chart=Event,,counter",
+    );
+
+    expect(out.fieldCharts).toEqual([
+      { eventName: "Event", field: "value", kind: "gauge" },
+    ]);
+  });
+
+  it("rewrites repeated params when a chart closes", () => {
+    const params = new URLSearchParams();
+    mirrorViewerToQuery(
+      params,
+      projectViewerState(mkState({ view: { fieldCharts: [first, second] } })),
+    );
+    mirrorViewerToQuery(
+      params,
+      projectViewerState(mkState({ view: { fieldCharts: [second] } })),
+    );
+
+    expect(params.getAll("field-chart")).toEqual([
+      "Request Metrics,in_flight,up_down_counter",
+    ]);
   });
 });
 
@@ -336,7 +392,8 @@ describe("viewer URL state: store hydration", () => {
     const decoded = readViewerUrlState(
       "?rail=tasks&task-sort=lifetime,asc&inspector=stack" +
         "&analysis=cpu&analysis-inspect=tokio%3A%3Apoll" +
-        "&stack-view=flame&inspector-width=444",
+        "&stack-view=flame&inspector-width=444" +
+        "&field-chart=Metric,value,gauge",
     );
 
     hydrateViewerStore(store, decoded, {
@@ -359,6 +416,9 @@ describe("viewer URL state: store hydration", () => {
       inspectorTab: "stack",
       regionMode: "cpu",
       regionInspectFocus: "tokio::poll",
+      fieldCharts: [
+        { eventName: "Metric", field: "value", kind: "gauge" },
+      ],
     });
   });
 

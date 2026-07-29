@@ -17,11 +17,16 @@ import type {
   TaskSortKey,
   InspectorTab,
   RegionAnalysisMode,
+  FieldChartSpec,
 } from "../../types/state.js";
 import type { PointOfInterestType } from "../../types/trace.js";
 import type { ViewState } from "../../lib/url/index.js";
 import { DEFAULT_INSPECTOR_WIDTH, DEFAULT_LANES_HEIGHT } from "./store.js";
 import { POI_FILTERS } from "./poi.js";
+import {
+  fieldChartKey,
+  isFieldChartKind,
+} from "./field-chart-model.js";
 
 const P_START = "start";
 const P_END = "end";
@@ -66,6 +71,7 @@ const P_ANALYSIS_WORKER_ZOOM = "analysis-worker-zoom";
 const P_ANALYSIS_OFFWORKER_ZOOM = "analysis-offworker-zoom";
 const P_ANALYSIS_INSPECT = "analysis-inspect";
 const P_SPAN_INDEX = "span-index";
+const P_FIELD_CHART = "field-chart";
 const P_DATA_START = "data-start";
 const P_DATA_END = "data-end";
 
@@ -161,6 +167,7 @@ export const VIEWER_STATE_OWNERSHIP = {
     regionOffworkerZoom: url(P_ANALYSIS_OFFWORKER_ZOOM),
     regionInspectFocus: url(P_ANALYSIS_INSPECT),
     spanNavIndex: url(P_SPAN_INDEX),
+    fieldCharts: url(P_FIELD_CHART),
   },
   transient: {
     mouseNs: transient,
@@ -313,6 +320,9 @@ export function projectViewerState(state: ReadonlyState<StoreState>): ViewState 
     vs.regionInspectFocus = view.regionInspectFocus;
   }
   if (view.spanNavIndex >= 0) vs.spanNavIndex = view.spanNavIndex;
+  if (view.fieldCharts.length > 0) {
+    vs.fieldCharts = view.fieldCharts.map(encodeFieldChart);
+  }
 
   const trace = state.trace.trace;
   if (trace !== null) {
@@ -374,6 +384,10 @@ export function mirrorViewerToQuery(
   set(params, P_ANALYSIS_OFFWORKER_ZOOM, encodePath(vs.regionOffworkerZoom));
   set(params, P_ANALYSIS_INSPECT, vs.regionInspectFocus ?? null);
   set(params, P_SPAN_INDEX, finiteString(vs.spanNavIndex));
+  params.delete(P_FIELD_CHART);
+  for (const chart of vs.fieldCharts ?? []) {
+    params.append(P_FIELD_CHART, chart);
+  }
   set(params, P_DATA_START, finiteString(vs.dataStart));
   set(params, P_DATA_END, finiteString(vs.dataEnd));
 }
@@ -453,6 +467,7 @@ export interface ViewerUrlState {
   regionOffworkerZoom?: string[];
   regionInspectFocus?: string;
   spanNavIndex?: number;
+  fieldCharts?: FieldChartSpec[];
   dataRange?: { startNs?: number; endNs?: number };
 }
 
@@ -545,6 +560,9 @@ export function hydrateViewerStore(
   }
   if (urlView.spanNavIndex !== undefined) {
     view.spanNavIndex = urlView.spanNavIndex;
+  }
+  if (urlView.fieldCharts !== undefined) {
+    view.fieldCharts = urlView.fieldCharts;
   }
   if (Object.keys(view).length > 0) store.update("view", view);
 
@@ -695,6 +713,8 @@ export function readViewerUrlState(search: string): ViewerUrlState {
   }
   const spanNavIndex = nonNegativeInt(p.get(P_SPAN_INDEX));
   if (spanNavIndex !== null) out.spanNavIndex = spanNavIndex;
+  const fieldCharts = decodeFieldCharts(p.getAll(P_FIELD_CHART));
+  if (fieldCharts.length > 0) out.fieldCharts = fieldCharts;
   const dataStart = num(p.get(P_DATA_START));
   const dataEnd = num(p.get(P_DATA_END));
   if (dataStart !== null || dataEnd !== null) {
@@ -706,6 +726,36 @@ export function readViewerUrlState(search: string): ViewerUrlState {
     }
   }
   return out;
+}
+
+function encodeFieldChart(spec: FieldChartSpec): string {
+  return `${spec.eventName},${spec.field},${spec.kind}`;
+}
+
+function decodeFieldCharts(values: readonly string[]): FieldChartSpec[] {
+  const charts: FieldChartSpec[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const parts = value.split(",");
+    if (
+      parts.length !== 3 ||
+      parts[0] === "" ||
+      parts[1] === "" ||
+      !isFieldChartKind(parts[2])
+    ) {
+      continue;
+    }
+    const spec: FieldChartSpec = {
+      eventName: parts[0],
+      field: parts[1],
+      kind: parts[2],
+    };
+    const key = fieldChartKey(spec);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    charts.push(spec);
+  }
+  return charts;
 }
 
 /** Decode the modern marked list, falling back to the previously emitted

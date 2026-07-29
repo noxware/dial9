@@ -148,6 +148,8 @@ export interface ViewState {
   regionInspectFocus?: string;
   /** Span match navigation cursor. */
   spanNavIndex?: number;
+  /** User-created field charts, encoded by the viewer as repeated params. */
+  fieldCharts?: readonly string[];
   /** Active parse filter, distinct from the viewport window. */
   dataStart?: number;
   dataEnd?: number;
