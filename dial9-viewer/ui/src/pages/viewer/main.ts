@@ -41,6 +41,7 @@ import { buildSearchIndex, searchWindow } from "./search-model.js";
 import type { SearchResult } from "./search-model.js";
 import { poiJump } from "./poi.js";
 import { createViewerReconstruction } from "./viewer-reconstruction.js";
+import { mountFieldCharts } from "./field-charts.js";
 
 // Dual-UI switch: render the always-visible "Switch to legacy UI" pill. The
 // <head> auto-boot is a no-op on this off-root new-UI path.
@@ -158,6 +159,21 @@ function boot(): void {
   });
   const toasts = createToasts(shell.toastRegion);
   toastsRef = toasts;
+  const fieldCharts = mountFieldCharts(
+    shell.fieldChartRegion,
+    shell.trackColumn,
+    store,
+    {
+      esc,
+      notify: (message, type) =>
+        toasts.show({
+          id: `field-chart-${type}`,
+          type,
+          message,
+          autoHideMs: 5_000,
+        }),
+    },
+  );
 
   // Region-analysis panel: flamegraph / blocking-calls / heap for a Shift+drag
   // region or a whole-trace toolbar open. Renders into the inspector Stack tab
@@ -200,6 +216,10 @@ function boot(): void {
   const inspector = mountInspector(shell.inspectorRegion, store, {
     esc,
     regionPanel,
+    canGraphEventField: (event, field) =>
+      fieldCharts.canGraphField(event, field),
+    onGraphEventField: (event, field, restoreFocus) =>
+      fieldCharts.openField(event, field, restoreFocus),
     preserveInitialTab: urlView.inspectorTab !== undefined,
     preserveInitialPollView:
       urlView.poll !== undefined &&
@@ -296,6 +316,7 @@ function boot(): void {
   // below and pushed through loadUrls() once the file set is known. `initialUrls`
   // is set only for the inline case; the scope case enters the loading view via
   // scopeLoading() immediately, then calls loadUrls() once resolution completes.
+  let firstTraceLoad = true;
   const boot = mountLoadChrome({
     store,
     esc,
@@ -306,7 +327,13 @@ function boot(): void {
       ? { initialUrls: source.urls, initialLabel: source.label }
       : {}),
     ...(urlView.dataRange !== undefined ? { initialRange: urlView.dataRange } : {}),
-    onTraceLoaded: reconstruction.applyLoadedTrace,
+    onTraceLoaded: (trace, kind) => {
+      reconstruction.applyLoadedTrace(trace, kind);
+      if (firstTraceLoad) {
+        firstTraceLoad = false;
+        fieldCharts.reconcileRestoredCharts();
+      }
+    },
   });
   loadChrome = boot;
 
@@ -342,6 +369,7 @@ function boot(): void {
     laneInteraction.dispose();
     overlay.dispose();
     inspector.dispose();
+    fieldCharts.dispose();
     regionPanel?.dispose();
     lanes.dispose();
     shell.dispose();

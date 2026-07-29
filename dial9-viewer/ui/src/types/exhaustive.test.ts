@@ -214,6 +214,7 @@ const initialState: StoreState = {
     regionOffworkerZoom: [],
     regionInspectFocus: "alloc::slow",
     spanNavIndex: 3,
+    fieldCharts: [],
   },
   transient: {
     mouseNs: null,

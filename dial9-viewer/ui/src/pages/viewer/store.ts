@@ -92,6 +92,7 @@ export function initialViewerState(): StoreState {
       regionOffworkerZoom: [],
       regionInspectFocus: null,
       spanNavIndex: -1,
+      fieldCharts: [],
     },
     transient: {
       mouseNs: null,

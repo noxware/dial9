@@ -343,6 +343,16 @@ export interface RelatedExpansion {
   after: number;
 }
 
+/** Semantic interpretation used to turn one numeric event field into a chart. */
+export type FieldChartKind = "gauge" | "counter" | "up_down_counter";
+
+/** Durable identity of one user-created field chart. Its data is derived. */
+export interface FieldChartSpec {
+  eventName: string;
+  field: string;
+  kind: FieldChartKind;
+}
+
 /**
  * Durable controls that change what analysis is visible. Unlike TransientSlice,
  * every field here is part of the deep-link contract. Components must dispatch
@@ -370,6 +380,8 @@ export interface ViewerViewSlice {
   regionInspectFocus: string | null;
   /** Current next/previous cursor in the filtered span list. */
   spanNavIndex: number;
+  /** User-created numeric field charts, in display order. */
+  fieldCharts: readonly FieldChartSpec[];
 }
 
 // ── transient slice ─────────────────────────────────────────────────────

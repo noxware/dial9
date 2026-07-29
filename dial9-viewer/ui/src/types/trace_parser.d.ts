@@ -115,6 +115,8 @@ declare module "*/trace_parser.js" {
     fields: Record<string, import("*/decode.js").DecodedFieldValue>;
     /** field name -> unit annotation ("ns", "bytes", ...), if any. */
     units: Record<string, string> | null;
+    /** field name -> semantic chart kind annotation, when present. */
+    kinds?: Record<string, string> | null;
   }
 
   export interface AllocEvent {

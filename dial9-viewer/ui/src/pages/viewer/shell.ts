@@ -12,7 +12,10 @@ import { html, render, nothing, type TemplateResult } from "lit-html";
 import type { ViewerStore } from "../../store/store.js";
 import type { StoreState } from "../../types/state.js";
 import { tracksTemplate, sizeTracks, type TracksViewModel } from "./tracks.js";
-import type { TrackId } from "../../lib/canvas/track-layout.js";
+import {
+  LABEL_W,
+  type TrackId,
+} from "../../lib/canvas/track-layout.js";
 import { deriveAxisInputs } from "./axis.js";
 import { deriveCpuInputs } from "./cpu.js";
 import { createSpansTrack, type SpansTrackController } from "./spans-track.js";
@@ -211,6 +214,12 @@ function shellTemplate(
               queueTrack,
             )
           : emptyStateTemplate()}
+        <!-- Dynamic field charts are an imperative stack below the fixed
+             tracks. mountFieldCharts owns this binding-free host. -->
+        <div
+          class="d9-field-charts"
+          style="--d9-label-w:${LABEL_W}px"
+        ></div>
       </main>
       ${inspectorTemplate()}
     </div>
@@ -237,6 +246,8 @@ export interface MountedShell {
   toastRegion: HTMLElement;
   /** The track column element (canvas host for sizing). */
   trackColumn: HTMLElement;
+  /** Binding-free host for user-created field charts. */
+  fieldChartRegion: HTMLElement;
   /**
    * The issues rail. Exposed so the entry can supply its lane-reveal action
    * after mounting the lanes, which happens after the shell constructs this.
@@ -341,6 +352,7 @@ export function mountShell(
 
   const toastRegion = ensureRegion(root, ".d9-toast-region");
   const trackColumn = ensureRegion(root, ".d9-track-column");
+  const fieldChartRegion = ensureRegion(root, ".d9-field-charts");
   const inspectorRegion = ensureRegion(root, ".d9-inspector");
   const minimapRegion = ensureRegion(root, ".d9-minimap");
   const statusRegion = ensureRegion(root, ".d9-status");
@@ -348,6 +360,7 @@ export function mountShell(
   return {
     toastRegion,
     trackColumn,
+    fieldChartRegion,
     // Exposed so the entry can hand the rail its lane-reveal action once the
     // lanes are mounted (they mount after the shell).
     rail,

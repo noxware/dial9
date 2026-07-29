@@ -87,6 +87,7 @@ function initialViewerState(): StoreState {
       regionOffworkerZoom: [],
       regionInspectFocus: null,
       spanNavIndex: -1,
+      fieldCharts: [],
     },
     transient: { mouseNs: null, hoverEventTs: null, drag: null, keyboardSelection: null, atCursor: null },
     segments: { segments: new Map() },
