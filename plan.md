@@ -8,12 +8,17 @@ inspector y materializaremos únicamente la serie solicitada.
 
 ## Contrato Rust y trace
 
-- Añadir el atributo estable:
+- Añadir el atributo estable con tres valores posibles:
 
 ```rust
 #[traceevent(kind = "gauge")]
+temperature: f64,
+
 #[traceevent(kind = "counter")]
+requests_total: u64,
+
 #[traceevent(kind = "up_down_counter")]
+in_flight: i64,
 ```
 
 - Usar `kind` porque describe la semántica temporal del field, no su
@@ -35,7 +40,9 @@ resident_bytes: u64,
 
 ## Flujo del viewer nuevo
 
-- Añadir un botón “Graph field” sólo a rows numéricas del Event inspector.
+- Añadir un botón “Graph field” a fields cuyo valor actual sea numérico o cuyo
+  schema declare un `kind` reconocido. La materialización final valida que
+  exista una serie compatible.
 - Considerar numéricos: `number`, `bigint` y strings decimales canónicos
   producidos por `u64`.
 - Con un `kind` reconocido, crear el panel directamente.
@@ -98,9 +105,11 @@ resident_bytes: u64,
 
 ## Bonus: vistas compartibles por URL
 
-- Sincronizar la lista ordenada de specs con parámetros `panel` repetibles y
-  versionados. Cada valor codifica event name, field y kind; no incluye datos,
-  estadísticas ni unit.
+- Sincronizar la lista ordenada de specs en un parámetro versionado
+  `field-charts`. Su valor estructurado codifica event name, field y kind; no
+  incluye datos, estadísticas ni unit.
+- `field-charts` representa qué gráficos dinámicos están abiertos. No reemplaza
+  `collapsed`, que continúa controlando la visibilidad de los tracks existentes.
 - Al abrir un link, restaurar primero las specs y materializar sus series
   después de cargar el trace indicado por la URL.
 - Crear o cerrar un panel actualiza la URL mediante el mecanismo de
