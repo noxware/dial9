@@ -1,14 +1,16 @@
 # Gráficos dinámicos para fields
 
-## Resumen
+## Alcance
 
-La idea encaja con la arquitectura actual sin WASM ni machinery genérica.
-Usaremos las annotations de schema ya existentes, añadiremos un botón al
-inspector y materializaremos únicamente la serie solicitada.
+- Implementar la feature únicamente en el viewer nuevo.
+- Añadir metadata semántica a fields y permitir graficar cualquier field
+  numérico desde el inspector.
+- Materializar sólo los datos del gráfico solicitado.
+- No introducir WASM, un engine genérico ni cambios de UI en el viewer legacy.
 
-## Contrato Rust y trace
+## Metadata Rust
 
-- Añadir el atributo estable con tres valores posibles:
+Añadir `kind` como atributo estable de field:
 
 ```rust
 #[traceevent(kind = "gauge")]
@@ -21,12 +23,11 @@ requests_total: u64,
 in_flight: i64,
 ```
 
-- Usar `kind` porque describe la semántica temporal del field, no su
-  representación visual.
-- Validar esos tres valores durante compilación y rechazar `kind` sobre el
-  timestamp.
-- Codificarlo como annotation de field con key `"kind"`; no cambia el layout
-  del trace format.
+- Aceptar solamente `gauge`, `counter` y `up_down_counter`.
+- Rechazar valores desconocidos y `kind` sobre el timestamp durante
+  compilación.
+- Codificarlo como annotation de field con key `"kind"` sin cambiar el layout
+  del trace.
 - Permitir combinarlo con `unit`:
 
 ```rust
@@ -34,114 +35,97 @@ in_flight: i64,
 resident_bytes: u64,
 ```
 
-- El decoder expondrá por schema un mapa `field -> kind`, compartido por los
-  eventos igual que `units`.
-- Traces antiguos simplemente no tendrán esta metadata.
+- Propagar a `CustomTraceEvent` el mapa `field -> kind`, igual que se hace con
+  `units`.
+- Mantener compatibilidad con traces sin esta metadata.
 
-## Flujo del viewer nuevo
+## Creación
 
-- Añadir un botón “Graph field” a fields cuyo valor actual sea numérico o cuyo
-  schema declare un `kind` reconocido. La materialización final valida que
-  exista una serie compatible.
-- Considerar numéricos: `number`, `bigint` y strings decimales canónicos
-  producidos por `u64`.
-- Con un `kind` reconocido, crear el panel directamente.
-- Sin metadata —o con metadata desconocida— abrir un modal centrado con:
-  - Gauge, seleccionado por defecto.
-  - Counter.
-  - Up/down counter.
-  - Cancel / Create, cierre con Escape y restauración de foco.
-- Mantener en el store únicamente specs serializables: event name, field y
-  kind. La unit y los datos materializados se resuelven desde el trace y no se
-  duplican en el estado.
-- Si ya existe un panel para la misma combinación, conservar el existente y
-  mostrar un toast.
-- Al cargar otro archivo o URL, cerrar los paneles dinámicos. Al cambiar
-  Set/Clear Range sobre el mismo trace, conservarlos y reconstruir sus datos
-  para el nuevo rango.
+- Mostrar “Graph field” cuando el valor seleccionado sea `number`, `bigint` o
+  un string decimal canónico, o cuando el field tenga un `kind` reconocido.
+- Si existe `kind`, crear el gráfico directamente.
+- Si falta o es desconocido, mostrar un modal centrado con Gauge, Counter y
+  Up/down counter; Gauge queda seleccionado por defecto.
+- El modal tiene Cancel/Create, cierra con Escape y restaura el foco.
+- Identificar un gráfico por `event name + field + kind`. Si ya existe, mantener
+  el actual y mostrar un toast.
+- Si no hay valores suficientes o compatibles, no crear el gráfico y mostrar
+  un toast.
 
-## Datos y rendering
+## Materialización
 
+- Guardar en el store solamente `event name`, `field` y `kind`.
 - No ordenar ni mutar `customEvents`.
-- Al crear o rematerializar un panel:
-  1. Recorrer `customEvents` una vez.
-  2. Extraer solamente el event name y field pedidos.
-  3. Ordenar ese subconjunto por timestamp.
-  4. Construir la serie una sola vez.
+- Para materializar:
+  1. Filtrar el event name y field solicitados.
+  2. Ordenar ese subconjunto por timestamp.
+  3. Construir la serie una sola vez.
 
   Coste: `O(N + K log K)` y memoria `O(K)`.
 
-- Semánticas:
-  - Gauge: puntos con el valor original.
-  - Counter: intervalos `[previous.timestamp, current.timestamp]` cuyo valor es
-    `current - previous`. Una disminución introduce un gap y establece una
-    nueva baseline.
-  - Up/down counter: los mismos intervalos, conservando deltas negativos.
-  - No dividir por tiempo ni añadir `/s`; el delta conserva la unit del field.
-  - Valores inválidos/null rompen la continuidad. Timestamps iguales no
-    producen un intervalo visible.
-  - Calcular deltas enteros como `BigInt` antes de convertirlos a coordenadas
-    JS.
+- Gauge produce puntos con el valor original.
+- Counter produce intervalos `[previous.timestamp, current.timestamp]` con
+  valor `current - previous`. Una disminución introduce un gap y establece una
+  nueva baseline.
+- Up/down counter produce los mismos intervalos y conserva deltas negativos.
+- No dividir por tiempo ni añadir `/s`; el delta conserva la unit del field.
+- Valores inválidos o null rompen la continuidad. Timestamps iguales no
+  producen un intervalo visible.
+- Calcular deltas enteros como `BigInt` antes de convertirlos a coordenadas JS.
 
-- Implementar dos primitivas visuales pequeñas:
-  - Point chart para gauge.
-  - Step/area interval chart compartido por ambos counters.
+## Presentación
 
-- Añadir los panels debajo de los tracks fijos, usando el mismo gutter y mapeo
-  temporal. No participan inicialmente en reorder, collapse, localStorage ni
-  otros mecanismos de personalización; el bonus de URL sólo serializa sus
-  specs.
-- Cada panel muestra:
+- Implementar un point chart para gauges y un step/area interval chart
+  compartido por ambos counters.
+- Colocar los gráficos debajo de los tracks fijos con el mismo gutter y mapeo
+  temporal.
+- No integrarlos inicialmente con reorder, collapse ni localStorage.
+- Cada gráfico incluye:
   - Título `EventName · field`.
-  - Readout `avg · max` del viewport actual; promedio simple para puntos y
-    ponderado por overlap para intervalos.
-  - Tooltip con únicamente el field y su valor formateado con `unit`.
+  - Readout `avg · max` del viewport: promedio simple para puntos y ponderado
+    por overlap para intervalos.
+  - Tooltip con el field y valor formateado con su `unit`.
   - Botón de cierre.
-- Hit testing usa los datums visibles ya ordenados.
-- Al cerrar, eliminar el spec, el cache materializado, hits y tooltip activo;
-  sin referencias vivas, arrays y DOM quedan disponibles para GC.
-- Si no existen valores suficientes para la interpretación elegida, no crear
-  un panel y mostrar un toast breve.
+- Hacer hit testing sobre los datums visibles ya ordenados.
+- Al cerrar, eliminar spec, datos materializados, hits y tooltip activo para no
+  retener memoria.
 
-## Bonus: vistas compartibles por URL
+## Lifecycle
 
-- Representar cada gráfico abierto con un parámetro repetible `field-chart`,
-  cuyo valor es `event,field,kind`:
+- Reemplazar el source dentro de la sesión elimina los gráficos existentes.
+- Set/Clear Range sobre el mismo source conserva las specs y rematerializa sus
+  datos.
+
+## Bonus: URL compartible
+
+Representar cada gráfico con un parámetro repetible `field-chart` cuyo valor sea
+`event,field,kind`:
 
 ```text
 ?trace=demo.d9&field-chart=ProcessResourceUsageEvent,user_cpu_ns,counter&field-chart=ProcessResourceUsageEvent,resident_bytes,gauge
 ```
 
-- El orden de los parámetros `field-chart` determina el orden de los gráficos.
-  Sólo contienen sus specs; no incluyen datos, estadísticas ni unit.
-- `field-chart` representa qué gráficos dinámicos están abiertos. No reemplaza
-  `collapsed`, que continúa controlando la visibilidad de los tracks existentes.
-- Al abrir un link, restaurar primero las specs y materializar sus series
-  después de cargar el trace indicado por la URL.
-- Crear o cerrar un panel actualiza la URL mediante el mecanismo de
-  sincronización existente.
-- Aceptar únicamente entradas con tres partes y un `kind` reconocido.
-  Deduplicarlas, ignorar las inválidas y mostrar un toast si una spec válida no
-  encuentra datos compatibles.
-- La carga inicial conserva las specs restauradas desde la URL. Reemplazar
-  posteriormente el source limpia los paneles anteriores; Set/Clear Range los
-  conserva.
-- Los links de archivos locales continúan sin ser compartibles porque el
-  destinatario no puede recuperar ese trace.
+- El orden de los parámetros determina el orden de los gráficos.
+- Serializar solamente las specs, no datos, estadísticas ni units.
+- Restaurar las specs después de cargar el trace de la URL.
+- Crear o cerrar un gráfico actualiza la URL mediante la sincronización
+  existente.
+- Aceptar entradas con tres partes y un `kind` reconocido; ignorar las
+  inválidas y deduplicar las restantes.
+- `field-chart` no reemplaza `collapsed`, que controla los tracks existentes.
+- Un archivo local no produce un link compartible porque el destinatario no
+  puede recuperar el trace.
 
 ## Validación
 
-- Rust: atributos válidos, combinación con `unit`, kind inválido y metadata
-  sobre timestamp.
-- Decoder/parser: propagación de `kind` y compatibilidad con traces sin
-  metadata.
-- Modelo: inputs desordenados, los tres kinds, reset de counter, deltas
-  negativos, nulls, timestamps repetidos y `bigint`/`u64` string.
-- UI: creación directa, modal fallback, readout visible, tooltip, deduplicación
-  y cierre sin caches retenidos.
-- URL: round trip de múltiples parámetros `field-chart`, escaping, orden
-  estable, deduplicación, cierre y restauración diferida hasta que cargue el
-  trace.
+- Rust: kinds válidos, combinación con `unit`, kind inválido y kind sobre
+  timestamp.
+- Decoder/parser: propagación de `kind` y traces sin metadata.
+- Modelo: input desordenado, los tres kinds, reset de counter, deltas negativos,
+  nulls, timestamps repetidos y enteros BigInt-safe.
+- UI: creación directa, modal fallback, readout, tooltip, deduplicación, cierre
+  y liberación de datos.
+- URL: múltiples `field-chart`, orden, deduplicación, cierre y restauración
+  después de cargar el trace.
 - Ejecutar tests Rust enfocados, `npm run check:types`, `npm test` y
   `cargo build -p dial9-viewer`.
-- No modificar ningún archivo del legacy viewer.
