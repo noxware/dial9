@@ -57,7 +57,11 @@ type FieldChartRequest = Omit<FieldChartSpec, "id" | "kind">;
 
 export interface FieldChartsController {
   /** Render one row inside the shell-owned unified track column. */
-  rowTemplate(spec: FieldChartSpec, trackHeight: number): TemplateResult;
+  rowTemplate(
+    spec: FieldChartSpec,
+    trackHeight: number,
+    collapsed: boolean,
+  ): TemplateResult;
   /** Size and paint one field-chart canvas inside the shell render pass. */
   paint(
     spec: FieldChartSpec,
@@ -195,10 +199,12 @@ export function createFieldCharts(
   function rowTemplate(
     spec: FieldChartSpec,
     trackHeight: number,
+    collapsed: boolean,
   ): TemplateResult {
     const state = store.getState();
     const trace = state.trace.trace;
-    const series = trace === null ? null : seriesFor(trace, spec);
+    const series =
+      collapsed || trace === null ? null : seriesFor(trace, spec);
     const stats =
       series === null
         ? null
@@ -219,7 +225,7 @@ export function createFieldCharts(
         data-track-id=${spec.id}
         style="height:${trackHeight}px"
       >
-        <div class="d9-track-label" id="d9-track-label-${spec.id}">
+        <div class="d9-track-label">
           <span class="d9-track-name" title=${title}>${label}</span>
         </div>
         <div class="d9-track-canvas-wrap d9-field-chart-body">
@@ -236,7 +242,6 @@ export function createFieldCharts(
           <canvas
             class="d9-track-canvas d9-field-chart-canvas"
             data-track-canvas=${spec.id}
-            aria-labelledby="d9-track-label-${spec.id}"
             aria-label=${`${title}, ${kindLabel(spec.kind)} chart`}
             role="img"
             @mousemove=${(event: MouseEvent) =>
@@ -304,7 +309,7 @@ export function createFieldCharts(
         [
           {
             label: `${chart.spec.field}:`,
-            value: formatFieldValue(hit, chart.series.unit),
+            value: formatChartValue(hit, chart.series.unit),
           },
         ],
       ]),
@@ -402,12 +407,12 @@ function paintChart(
   const chartTop = CHART_TOP;
   const chartHeight = Math.max(0, height - CHART_TOP - CHART_BOTTOM);
   const range = visibleFieldChartRange(series, viewStart, viewEnd);
-  const paintStart =
-    series.kind === "gauge" ? Math.max(0, range.start - 1) : range.start;
-  const paintEnd =
+  const paintRange =
     series.kind === "gauge"
-      ? Math.min(series.points.length, range.end + 1)
-      : range.end;
+      ? gaugePaintRange(series.points, range)
+      : range;
+  const paintStart = paintRange.start;
+  const paintEnd = paintRange.end;
   let min = 0;
   let max = 0;
   let hasData = false;
@@ -479,6 +484,29 @@ function paintChart(
     min,
     max,
   };
+}
+
+/**
+ * Include only adjacent samples that form a line through the viewport. This
+ * keeps continuity at either edge without making an entirely offscreen series
+ * look visible or bridging an explicit gap.
+ */
+function gaugePaintRange(
+  points: readonly FieldChartPoint[],
+  visible: { readonly start: number; readonly end: number },
+): { start: number; end: number } {
+  let { start, end } = visible;
+  if (
+    start > 0 &&
+    start < points.length &&
+    !points[start]!.breakBefore
+  ) {
+    start--;
+  }
+  if (end < points.length && !points[end]!.breakBefore) {
+    end++;
+  }
+  return { start, end };
 }
 
 function paintGrid(
@@ -614,7 +642,13 @@ function datumAt(
     (x / chart.drawW) * (chart.viewEnd - chart.viewStart);
   if (chart.series.kind === "gauge") {
     const point = nearestPoint(chart.series.points, timestamp);
-    if (point === null) return null;
+    if (
+      point === null ||
+      point.timestamp < chart.viewStart ||
+      point.timestamp > chart.viewEnd
+    ) {
+      return null;
+    }
     const pointX = nsToDrawX(
       point.timestamp,
       chart.viewStart,
@@ -665,7 +699,7 @@ function intervalAt(
     const mid = (lo + hi) >>> 1;
     const interval = intervals[mid]!;
     if (timestamp < interval.start) hi = mid - 1;
-    else if (timestamp > interval.end) lo = mid + 1;
+    else if (timestamp >= interval.end) lo = mid + 1;
     else return interval;
   }
   return null;
@@ -684,7 +718,20 @@ function valueY(
 function formatReadoutValue(value: number, unit: string | undefined): string {
   return unit === undefined
     ? compactNumber(value)
-    : formatFieldValue(Number(value.toPrecision(5)), unit);
+    : formatChartValue(Number(value.toPrecision(5)), unit);
+}
+
+function formatChartValue(
+  value: number | bigint | string,
+  unit: string | undefined,
+): string {
+  const numeric = Number(value);
+  if (numeric < 0) {
+    const magnitude = formatFieldValue(-numeric, unit);
+    // Unknown units use formatFieldValue's raw-value fallback.
+    if (magnitude !== String(-numeric)) return `-${magnitude}`;
+  }
+  return formatFieldValue(value, unit);
 }
 
 function compactNumber(value: number): string {

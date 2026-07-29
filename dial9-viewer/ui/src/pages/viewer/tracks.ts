@@ -159,10 +159,9 @@ export function visibleTracks(vm: TracksViewModel): ViewerTrackSpec[] {
  */
 function effectiveTrack(
   t: ViewerTrackSpec,
-  collapsed: Readonly<Record<string, boolean>>,
-  dynamicIds: readonly string[],
+  collapsed: boolean,
 ): ViewerTrackSpec {
-  return isCollapsed(collapsed, t.id, dynamicIds)
+  return collapsed
     ? { ...t, height: COLLAPSED_TRACK_H }
     : t;
 }
@@ -203,10 +202,12 @@ export function tracksTemplate(
         // until its next paint.
         (t) => t.id,
         (t) => {
-          const eff = effectiveTrack(t, vm.collapsed, dynamicIds);
+          const collapsed = isCollapsed(vm.collapsed, t.id, dynamicIds);
+          const eff = effectiveTrack(t, collapsed);
           const inner = innerRow(
             eff,
             vm,
+            collapsed,
             spansTrack,
             taskDetailTrack,
             eventsTrack,
@@ -218,7 +219,7 @@ export function tracksTemplate(
           // render bare (they are pinned). The wrapper is outside each track's
           // own row renderer, so the delegation is unchanged.
           return isManageableTrack(t.id, dynamicIds)
-            ? manageWrapper(t, vm, actions, inner, dynamicIds)
+            ? manageWrapper(t, actions, inner, collapsed)
             : inner;
         },
       )}
@@ -234,6 +235,7 @@ export function tracksTemplate(
 function innerRow(
   t: ViewerTrackSpec,
   vm: TracksViewModel,
+  collapsed: boolean,
   spansTrack?: SpansTrackController,
   taskDetailTrack?: TaskDetailTrackController,
   eventsTrack?: EventsTrackController,
@@ -241,7 +243,7 @@ function innerRow(
   fieldCharts?: FieldChartsController,
 ): TemplateResult {
   if (isFieldChartTrack(t) && fieldCharts !== undefined) {
-    return fieldCharts.rowTemplate(t.chart, t.height);
+    return fieldCharts.rowTemplate(t.chart, t.height, collapsed);
   }
   if (isFieldChartTrack(t)) return html``;
   if (t.id === "lanes") return lanesTrackRow(t, vm.lanesViewportHeight);
@@ -346,12 +348,10 @@ function onGripDragEnd(): void {
  */
 function manageWrapper(
   t: ViewerTrackSpec,
-  vm: TracksViewModel,
   actions: TrackManageActions,
   inner: TemplateResult,
-  dynamicIds: readonly string[],
+  collapsed: boolean,
 ): TemplateResult {
-  const collapsed = isCollapsed(vm.collapsed, t.id, dynamicIds);
   const accessibleLabel = accessibleTrackLabel(t);
   return html`
     <div
@@ -449,6 +449,12 @@ export function sizeTracks(
   // scrollbar, not the column).
   const pw = columnEl.clientWidth;
   const scrollbarW = lanesScrollbarWidth(columnEl);
+  const drawW = timePanelLayout({
+    pw,
+    scrollbarW,
+    viewStart: vm.viewStart,
+    viewEnd: vm.viewEnd,
+  }).drawW;
   const dynamicIds = vm.fieldCharts.map((chart) => chart.id);
   const out: TrackSizing[] = [];
   for (const track of visibleTracks(vm)) {
@@ -463,16 +469,15 @@ export function sizeTracks(
       out.push({ id: track.id, drawW: 0, height: COLLAPSED_TRACK_H });
       continue;
     }
+    // Mounted renderers own their canvas size and paint cycle.
+    if (!isFieldChartTrack(track) && isTrackClaimed(track.id)) {
+      out.push({ id: track.id, drawW: 0, height: track.height });
+      continue;
+    }
     const canvas = columnEl.querySelector<HTMLCanvasElement>(
       `canvas[data-track-canvas="${track.id}"]`,
     );
     if (!canvas) continue;
-    const drawW = timePanelLayout({
-      pw,
-      scrollbarW,
-      viewStart: vm.viewStart,
-      viewEnd: vm.viewEnd,
-    }).drawW;
     // Narrow-panel contract (lib/canvas/layout): drawW can be <= 0 on a
     // collapsed column; render nothing but keep the slot.
     if (drawW <= 0) {
@@ -492,14 +497,6 @@ export function sizeTracks(
       );
       canvas.dataset["drawW"] = String(Math.round(drawW));
       out.push({ id: track.id, drawW, height: track.height });
-      continue;
-    }
-    // A track whose content is owned by a mounted renderer sizes AND draws its
-    // own canvas on its own store subscription. The shell leaves it alone - no
-    // placeholder paint, no backing-store resize that would clear the renderer's
-    // last draw.
-    if (isTrackClaimed(track.id)) {
-      out.push({ id: track.id, drawW: 0, height: track.height });
       continue;
     }
     const geometry = trackGeometry(track, {
