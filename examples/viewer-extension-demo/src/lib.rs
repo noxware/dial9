@@ -140,28 +140,27 @@ fn context_switch_row(
     previous: ResourceSample,
     current: ResourceSample,
 ) -> tables::context_switches::Row {
-    let wall_ns = current
-        .timestamp_ns
-        .checked_sub(previous.timestamp_ns)
-        .filter(|wall| *wall > 0);
-    let voluntary_rate = wall_ns.and_then(|wall| {
-        current
-            .voluntary_context_switches
-            .checked_sub(previous.voluntary_context_switches)
-            .map(|delta| delta as f64 * 1_000_000_000.0 / wall as f64)
-    });
-    let involuntary_rate = wall_ns.and_then(|wall| {
-        current
-            .involuntary_context_switches
-            .checked_sub(previous.involuntary_context_switches)
-            .map(|delta| delta as f64 * 1_000_000_000.0 / wall as f64)
-    });
+    let chronological = current.timestamp_ns > previous.timestamp_ns;
+    let voluntary_delta = chronological
+        .then(|| {
+            current
+                .voluntary_context_switches
+                .checked_sub(previous.voluntary_context_switches)
+        })
+        .flatten();
+    let involuntary_delta = chronological
+        .then(|| {
+            current
+                .involuntary_context_switches
+                .checked_sub(previous.involuntary_context_switches)
+        })
+        .flatten();
 
     tables::context_switches::Row {
         start_ns: previous.timestamp_ns,
         end_ns: current.timestamp_ns,
-        voluntary_rate,
-        involuntary_rate,
+        voluntary_delta,
+        involuntary_delta,
     }
 }
 
@@ -285,7 +284,7 @@ mod tests {
     }
 
     #[test]
-    fn context_switch_rate_covers_the_sample_interval() {
+    fn context_switch_delta_covers_the_sample_interval() {
         let previous = ResourceSample {
             timestamp_ns: 1_000,
             user_cpu_ns: 0,
@@ -294,7 +293,7 @@ mod tests {
             involuntary_context_switches: 4,
         };
         let current = ResourceSample {
-            timestamp_ns: 1_000_001_000,
+            timestamp_ns: 2_000_001_000,
             user_cpu_ns: 0,
             system_cpu_ns: 0,
             voluntary_context_switches: 298,
@@ -302,9 +301,9 @@ mod tests {
         };
         let row = context_switch_row(previous, current);
         assert_eq!(row.start_ns, 1_000);
-        assert_eq!(row.end_ns, 1_000_001_000);
-        assert_eq!(row.voluntary_rate, Some(288.0));
-        assert_eq!(row.involuntary_rate, Some(5.0));
+        assert_eq!(row.end_ns, 2_000_001_000);
+        assert_eq!(row.voluntary_delta, Some(288));
+        assert_eq!(row.involuntary_delta, Some(5));
     }
 
     #[test]

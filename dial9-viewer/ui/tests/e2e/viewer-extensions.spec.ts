@@ -48,14 +48,17 @@ test("renders the reference panels and their independent tooltips", async ({
   expect(cpuTooltip).toContain("Cores:");
   expect(cpuTooltip).toContain("Total CPU:");
 
-  const contextSwitches = extensionPanel(page, "WASM · Context Switch Rate");
+  const contextSwitches = extensionPanel(
+    page,
+    "WASM · Context Switches (Intervals)",
+  );
   const contextTooltip = await hoverUntilTooltip(
     page,
     contextSwitches,
     0.75,
     "Involuntary:",
   );
-  expect(contextTooltip).toMatch(/^Involuntary: .* switches\/s\nTime: \+\d/);
+  expect(contextTooltip).toMatch(/^Involuntary: .* switches\nTime: \+\d/);
 
   const cumulative = extensionPanel(
     page,
@@ -83,7 +86,7 @@ test("renders the reference panels and their independent tooltips", async ({
   await expect(visibleTooltip(page)).toHaveText("Science: 🔥");
 });
 
-test("creates and closes a counter-rate view from a custom-event field", async ({
+test("creates and closes a counter view from a custom-event field", async ({
   page,
 }) => {
   await loadDemo(page);
@@ -146,10 +149,10 @@ test("creates and closes a counter-rate view from a custom-event field", async (
 
   const panel = extensionPanel(
     page,
-    `${eventName} · user_cpu_ns · Counter rate`,
+    `${eventName} · user_cpu_ns · Counter`,
   );
   await expect(panel).toBeVisible();
-  await expect(panel.locator(".d9-extension-readout")).toContainText("ms/s");
+  await expect(panel.locator(".d9-extension-readout")).not.toContainText("/s");
   await panel.getByRole("button", { name: /^Close / }).click();
   await expect(panel).toHaveCount(0);
 });

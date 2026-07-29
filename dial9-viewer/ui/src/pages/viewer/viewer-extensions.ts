@@ -330,8 +330,8 @@ class FieldViewDialog {
     this.#select.name = "interpretation";
     for (const [value, text] of [
       ["gauge", "Gauge"],
-      ["counter", "Counter rate"],
-      ["up-down-counter", "Up/down counter rate"],
+      ["counter", "Counter"],
+      ["up-down-counter", "Up/down counter"],
     ] as const) {
       const option = document.createElement("option");
       option.value = value;

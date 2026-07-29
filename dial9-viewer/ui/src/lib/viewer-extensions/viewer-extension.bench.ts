@@ -60,7 +60,7 @@ interface CpuInterval {
 }
 
 interface ContextInterval {
-  readonly rate: number;
+  readonly delta: number;
 }
 
 interface ResourceOutput {
@@ -87,8 +87,8 @@ interface Summary {
   readonly bounds: readonly [number, number];
   readonly cpuDeltaNs: number;
   readonly cpuCores: readonly [number, number];
-  readonly voluntaryRate: readonly [number, number];
-  readonly involuntaryRate: readonly [number, number];
+  readonly voluntaryDelta: readonly [number, number];
+  readonly involuntaryDelta: readonly [number, number];
 }
 
 function usage(event: ResourceEvent): Usage {
@@ -125,12 +125,11 @@ function deriveWithFor(events: readonly ResourceEvent[]): ResourceOutput {
           cpuDeltaNs,
           cores: cpuDeltaNs / wallDeltaNs,
         });
-        const seconds = wallDeltaNs / 1_000_000_000;
         voluntary.push({
-          rate: (current.voluntary - previous.voluntary) / seconds,
+          delta: current.voluntary - previous.voluntary,
         });
         involuntary.push({
-          rate: (current.involuntary - previous.involuntary) / seconds,
+          delta: current.involuntary - previous.involuntary,
         });
       }
     }
@@ -171,15 +170,11 @@ function deriveWithArrayMethods(
         };
       },
     ),
-    voluntary: valid.map(({ previous, current, wallDeltaNs }) => ({
-      rate:
-        (current.voluntary - previous.voluntary) /
-        (wallDeltaNs / 1_000_000_000),
+    voluntary: valid.map(({ previous, current }) => ({
+      delta: current.voluntary - previous.voluntary,
     })),
-    involuntary: valid.map(({ previous, current, wallDeltaNs }) => ({
-      rate:
-        (current.involuntary - previous.involuntary) /
-        (wallDeltaNs / 1_000_000_000),
+    involuntary: valid.map(({ previous, current }) => ({
+      delta: current.involuntary - previous.involuntary,
     })),
   };
 }
@@ -247,13 +242,13 @@ function summarizeJs(output: ResourceOutput): Summary {
       0,
     ),
     cpuCores: [firstCpu.cores, lastCpu.cores],
-    voluntaryRate: [
-      output.voluntary[0]!.rate,
-      output.voluntary.at(-1)!.rate,
+    voluntaryDelta: [
+      output.voluntary[0]!.delta,
+      output.voluntary.at(-1)!.delta,
     ],
-    involuntaryRate: [
-      output.involuntary[0]!.rate,
-      output.involuntary.at(-1)!.rate,
+    involuntaryDelta: [
+      output.involuntary[0]!.delta,
+      output.involuntary.at(-1)!.delta,
     ],
   };
 }
@@ -265,7 +260,7 @@ function summarizeWasm(tables: ExtensionTableStore): Summary {
     numberAt(context, 0, "start_ns") !== numberAt(cpu, 0, "start_ns") ||
     !(numberAt(context, 0, "end_ns") > numberAt(context, 0, "start_ns"))
   ) {
-    throw new Error("first context-switch rate must cover its sample interval");
+    throw new Error("first context-switch delta must cover its sample interval");
   }
   return {
     rows: [cpu.rowCount, context.rowCount],
@@ -278,13 +273,13 @@ function summarizeWasm(tables: ExtensionTableStore): Summary {
       numberAt(cpu, 0, "cores"),
       numberAt(cpu, cpu.rowCount - 1, "cores"),
     ],
-    voluntaryRate: [
-      numberAt(context, 0, "voluntary_rate"),
-      numberAt(context, context.rowCount - 1, "voluntary_rate"),
+    voluntaryDelta: [
+      numberAt(context, 0, "voluntary_delta"),
+      numberAt(context, context.rowCount - 1, "voluntary_delta"),
     ],
-    involuntaryRate: [
-      numberAt(context, 0, "involuntary_rate"),
-      numberAt(context, context.rowCount - 1, "involuntary_rate"),
+    involuntaryDelta: [
+      numberAt(context, 0, "involuntary_delta"),
+      numberAt(context, context.rowCount - 1, "involuntary_delta"),
     ],
   };
 }

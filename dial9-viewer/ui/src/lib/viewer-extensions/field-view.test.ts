@@ -52,7 +52,7 @@ describe("interactive custom-event field views", () => {
     ]);
   });
 
-  it("materializes monotonic counter rates as intervals", () => {
+  it("materializes monotonic counter deltas as intervals", () => {
     const view = materializeFieldView(
       [
         event("Queue", 0, 100_000_000),
@@ -68,7 +68,7 @@ describe("interactive custom-event field views", () => {
       },
     );
 
-    expect(view.panel.title).toBe("Queue · depth · Counter rate");
+    expect(view.panel.title).toBe("Queue · depth · Counter");
     expect(view.panel.components.map((component) => component.name)).toEqual([
       "interval-area/v1",
       "interval-line/v1",
@@ -88,13 +88,13 @@ describe("interactive custom-event field views", () => {
       3_000_000_000,
     ]);
     expect([0, 1, 2].map((row) => table.value(row, "value"))).toEqual([
-      0.5,
+      500_000_000,
       null,
-      0.4,
+      400_000_000,
     ]);
   });
 
-  it("allows negative up/down counter rates", () => {
+  it("allows negative up/down counter deltas", () => {
     const view = materializeFieldView(
       [
         event("Queue", 0, 10),
@@ -108,7 +108,7 @@ describe("interactive custom-event field views", () => {
       },
     );
 
-    expect(view.panel.title).toBe("Queue · depth · Up/down counter rate");
+    expect(view.panel.title).toBe("Queue · depth · Up/down counter");
     const table = view.tables.table("field_values");
     expect([0, 1].map((row) => table.value(row, "value"))).toEqual([-5, 10]);
   });

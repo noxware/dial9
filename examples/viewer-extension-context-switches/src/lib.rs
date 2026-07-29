@@ -1,7 +1,6 @@
 use dial9_viewer_extension::{Event, Extension, ExtensionError, OutputSink};
 
 const BATCH_ROWS: usize = 1_024;
-const NANOS_PER_SECOND: f64 = 1_000_000_000.0;
 
 dial9_viewer_extension::include_manifest!("viewer-extension.json");
 
@@ -33,7 +32,7 @@ impl Extension for ContextSwitchExtension {
         };
 
         if let Some(previous) = self.previous
-            && let Some(row) = context_switch_rate(previous, current)
+            && let Some(row) = context_switch_interval(previous, current)
         {
             self.batch.push(row)?;
         }
@@ -59,19 +58,20 @@ fn sample(event: &Event<'_, '_>) -> Option<Sample> {
     })
 }
 
-fn context_switch_rate(previous: Sample, current: Sample) -> Option<tables::context_switches::Row> {
-    let elapsed_ns = current
+fn context_switch_interval(
+    previous: Sample,
+    current: Sample,
+) -> Option<tables::context_switches::Row> {
+    current
         .timestamp_ns
         .checked_sub(previous.timestamp_ns)
         .filter(|elapsed| *elapsed > 0)?;
-    let voluntary = current.voluntary.checked_sub(previous.voluntary)?;
-    let involuntary = current.involuntary.checked_sub(previous.involuntary)?;
 
     Some(tables::context_switches::Row {
         start_ns: previous.timestamp_ns,
         end_ns: current.timestamp_ns,
-        voluntary_per_second: voluntary as f64 * NANOS_PER_SECOND / elapsed_ns as f64,
-        involuntary_per_second: involuntary as f64 * NANOS_PER_SECOND / elapsed_ns as f64,
+        voluntary: current.voluntary.checked_sub(previous.voluntary)?,
+        involuntary: current.involuntary.checked_sub(previous.involuntary)?,
     })
 }
 

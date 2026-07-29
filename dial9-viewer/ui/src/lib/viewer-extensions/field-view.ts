@@ -34,11 +34,10 @@ type FieldViewPreset =
       readonly unit?: string;
     }
   | {
-      readonly kind: "rate";
-      readonly label: "Counter rate" | "Up/down counter rate";
+      readonly kind: "delta";
+      readonly label: "Counter" | "Up/down counter";
       readonly monotonic: boolean;
-      readonly scale: number;
-      readonly unit: string;
+      readonly unit?: string;
     };
 
 /**
@@ -53,19 +52,18 @@ export function materializeFieldView(
   const manifest = fieldViewManifest(request, preset);
   const tables = new ExtensionTableStore(manifest);
   const batch =
-    preset.kind === "rate"
-      ? intervalRateBatch(
+    preset.kind === "delta"
+      ? intervalDeltaBatch(
           events,
           request.eventName,
           request.field,
           preset.monotonic,
-          preset.scale,
         )
       : pointBatch(events, request.eventName, request.field);
 
   if (batch.rows === 0) {
     const requirement =
-      preset.kind === "rate"
+      preset.kind === "delta"
         ? "two events at increasing timestamps"
         : "one timestamped event";
     throw new Error(
@@ -90,8 +88,8 @@ function fieldViewManifest(
   preset: FieldViewPreset,
 ): ViewerExtensionManifest {
   const itemUnit = preset.unit === undefined ? {} : { unit: preset.unit };
-  const timeColumn = preset.kind === "rate" ? "start" : "timestamp";
-  const graphs = preset.kind === "rate"
+  const timeColumn = preset.kind === "delta" ? "start" : "timestamp";
+  const graphs = preset.kind === "delta"
     ? [
         {
           name: "interval-area/v1",
@@ -119,7 +117,7 @@ function fieldViewManifest(
           color: SERIES_COLOR,
         },
       ];
-  const average = preset.kind === "rate"
+  const average = preset.kind === "delta"
     ? {
         name: "time_weighted_mean",
         start: "start",
@@ -169,7 +167,7 @@ function fieldViewManifest(
         {
           name: TABLE_NAME,
           columns:
-            preset.kind === "rate"
+            preset.kind === "delta"
               ? [
                   { name: "start", type: "f64" },
                   { name: "end", type: "f64" },
@@ -233,12 +231,11 @@ function pointBatch(
   } as const;
 }
 
-function intervalRateBatch(
+function intervalDeltaBatch(
   events: readonly CustomTraceEvent[],
   eventName: string,
   field: string,
   monotonic: boolean,
-  scale: number,
 ) {
   let rows = 0;
   let previousTimestamp: number | null = null;
@@ -278,8 +275,7 @@ function intervalRateBatch(
         ? null
         : value - previousValue;
     if (delta !== null && (!monotonic || delta >= 0)) {
-      const elapsedSeconds = (event.timestamp - previous.timestamp) / 1e9;
-      values[row] = (delta * scale) / elapsedSeconds;
+      values[row] = delta;
       setValid(validity, row);
       valid++;
     }
@@ -310,16 +306,14 @@ function fieldViewPreset(request: FieldViewRequest): FieldViewPreset {
       ...(unit === undefined ? {} : { unit }),
     };
   }
-  const seconds = unit === "ns" || unit === "s";
   return {
-    kind: "rate",
+    kind: "delta",
     label:
       request.interpretation === "counter"
-        ? "Counter rate"
-        : "Up/down counter rate",
+        ? "Counter"
+        : "Up/down counter",
     monotonic: request.interpretation === "counter",
-    scale: unit === "ns" ? 1e-9 : 1,
-    unit: seconds ? "s/s" : unit === undefined ? "/s" : `${unit}/s`,
+    ...(unit === undefined ? {} : { unit }),
   };
 }
 

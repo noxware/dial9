@@ -25,8 +25,8 @@
       "columns": [
         { "name": "start_ns", "type": "u64" },
         { "name": "end_ns", "type": "u64" },
-        { "name": "voluntary_rate", "type": "f64", "nullable": true },
-        { "name": "involuntary_rate", "type": "f64", "nullable": true }
+        { "name": "voluntary_delta", "type": "u64", "nullable": true },
+        { "name": "involuntary_delta", "type": "u64", "nullable": true }
       ]
     },
     {
@@ -164,14 +164,14 @@
       ]
     },
     {
-      "title": "WASM · Context Switch Rate",
+      "title": "WASM · Context Switches (Intervals)",
       "components": [
         {
           "name": "interval-line/v1",
           "table": "context_switches",
           "start": "start_ns",
           "end": "end_ns",
-          "y": "voluntary_rate",
+          "y": "voluntary_delta",
           "color": "#81c784"
         },
         {
@@ -179,7 +179,7 @@
           "table": "context_switches",
           "start": "start_ns",
           "end": "end_ns",
-          "y": "involuntary_rate",
+          "y": "involuntary_delta",
           "color": "#ffb74d"
         },
         {
@@ -200,10 +200,10 @@
           "match": {
             "start": "start_ns",
             "end": "end_ns",
-            "y": "voluntary_rate"
+            "y": "voluntary_delta"
           },
           "items": [
-            { "label": "Voluntary", "column": "voluntary_rate", "unit": "switches/s" },
+            { "label": "Voluntary", "column": "voluntary_delta", "unit": "switches" },
             { "label": "Time", "column": "start_ns", "unit": "timestamp" }
           ]
         },
@@ -213,10 +213,10 @@
           "match": {
             "start": "start_ns",
             "end": "end_ns",
-            "y": "involuntary_rate"
+            "y": "involuntary_delta"
           },
           "items": [
-            { "label": "Involuntary", "column": "involuntary_rate", "unit": "switches/s" },
+            { "label": "Involuntary", "column": "involuntary_delta", "unit": "switches" },
             { "label": "Time", "column": "start_ns", "unit": "timestamp" }
           ]
         },
@@ -224,8 +224,8 @@
           "name": "readout/v1",
           "table": "context_switches",
           "items": [
-            { "label": "voluntary max", "column": "voluntary_rate", "reduce": "max", "unit": "switches/s" },
-            { "label": "involuntary max", "column": "involuntary_rate", "reduce": "max", "unit": "switches/s" }
+            { "label": "voluntary max", "column": "voluntary_delta", "reduce": "max", "unit": "switches" },
+            { "label": "involuntary max", "column": "involuntary_delta", "reduce": "max", "unit": "switches" }
           ]
         }
       ]
