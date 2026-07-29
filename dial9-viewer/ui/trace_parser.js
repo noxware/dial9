@@ -46,7 +46,7 @@
     }
 
     /** Decompress gzip data if detected, otherwise return as-is. */
-    async function prepareTraceBuffer(buf) {
+    async function maybeGunzip(buf) {
         const b = buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf;
         if (b.length < 2 || b[0] !== 0x1f || b[1] !== 0x8b) {
             return buf;
@@ -121,7 +121,7 @@
                 });
                 if (!resp.ok)
                     throw new Error(`HTTP ${resp.status} fetching ${url}`);
-                const raw = await prepareTraceBuffer(await resp.arrayBuffer());
+                const raw = await maybeGunzip(await resp.arrayBuffer());
                 return raw instanceof ArrayBuffer ? new Uint8Array(raw) : raw;
             }),
         );
@@ -1244,7 +1244,7 @@
 
     /** @private Parse a binary trace buffer. */
     async function parseTraceBuffer(buffer, options) {
-        buffer = await prepareTraceBuffer(buffer);
+        buffer = await maybeGunzip(buffer);
         const onProgress = (options && options.onParseProgress) || null;
         // Cheap per-frame gate. Every PROGRESS_BYTES of decoded bytes we refresh
         // the progress counter (a cheap textContent write) and check the paint
@@ -1914,7 +1914,6 @@
             OFF_WORKER_WORKER_ID,
             parseTrace,
             parseTraceStream,
-            prepareTraceBuffer,
             parseOne,
             fetchTraces,
             fetchTraceStream,
@@ -1931,7 +1930,6 @@
             OFF_WORKER_WORKER_ID,
             parseTrace,
             parseTraceStream,
-            prepareTraceBuffer,
             fetchTraces,
             fetchTraceStream,
             fetchTracesStream,

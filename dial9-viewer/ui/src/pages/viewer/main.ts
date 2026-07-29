@@ -41,6 +41,7 @@ import { buildSearchIndex, searchWindow } from "./search-model.js";
 import type { SearchResult } from "./search-model.js";
 import { poiJump } from "./poi.js";
 import { createViewerReconstruction } from "./viewer-reconstruction.js";
+import { mountViewerExtensions } from "./viewer-extensions.js";
 
 // Dual-UI switch: render the always-visible "Switch to legacy UI" pill. The
 // <head> auto-boot is a no-op on this off-root new-UI path.
@@ -158,6 +159,23 @@ function boot(): void {
   });
   const toasts = createToasts(shell.toastRegion);
   toastsRef = toasts;
+  const viewerExtensions = mountViewerExtensions(
+    shell.extensionRegion,
+    shell.trackColumn,
+    store,
+    {
+      show(message, error): void {
+        toasts.show({
+          id: "viewer-extensions",
+          message,
+          type: error ? "error" : "info",
+        });
+      },
+      hide(): void {
+        toasts.hide("viewer-extensions");
+      },
+    },
+  );
 
   // Region-analysis panel: flamegraph / blocking-calls / heap for a Shift+drag
   // region or a whole-trace toolbar open. Renders into the inspector Stack tab
@@ -200,6 +218,20 @@ function boot(): void {
   const inspector = mountInspector(shell.inspectorRegion, store, {
     esc,
     regionPanel,
+    canGraphEventField: (value) => viewerExtensions.canGraphField(value),
+    onGraphEventField: (event, field) => {
+      try {
+        viewerExtensions.openFieldView(event, field);
+      } catch (error) {
+        toasts.show({
+          id: "field-view-error",
+          type: "error",
+          message:
+            error instanceof Error ? error.message : String(error),
+          autoHideMs: 5_000,
+        });
+      }
+    },
     preserveInitialTab: urlView.inspectorTab !== undefined,
     preserveInitialPollView:
       urlView.poll !== undefined &&
@@ -307,6 +339,10 @@ function boot(): void {
       : {}),
     ...(urlView.dataRange !== undefined ? { initialRange: urlView.dataRange } : {}),
     onTraceLoaded: reconstruction.applyLoadedTrace,
+    onViewerExtensionFile: (file) => viewerExtensions.loadFile(file),
+    onSourceBuffer: (buffer, replacing) => {
+      viewerExtensions.processTraceBuffer(buffer, replacing);
+    },
   });
   loadChrome = boot;
 
@@ -343,6 +379,7 @@ function boot(): void {
     overlay.dispose();
     inspector.dispose();
     regionPanel?.dispose();
+    viewerExtensions.dispose();
     lanes.dispose();
     shell.dispose();
     help.dispose();

@@ -211,6 +211,10 @@ function shellTemplate(
               queueTrack,
             )
           : emptyStateTemplate()}
+        <!-- Stable imperative host for viewer-extension panels. It exists
+             before a trace loads, so a dropped extension can wait without
+             remounting its controller when the empty state becomes tracks. -->
+        <div class="d9-extension-tracks"></div>
       </main>
       ${inspectorTemplate()}
     </div>
@@ -237,6 +241,8 @@ export interface MountedShell {
   toastRegion: HTMLElement;
   /** The track column element (canvas host for sizing). */
   trackColumn: HTMLElement;
+  /** Track host owned by the viewer-extension controller. */
+  extensionRegion: HTMLElement;
   /**
    * The issues rail. Exposed so the entry can supply its lane-reveal action
    * after mounting the lanes, which happens after the shell constructs this.
@@ -341,6 +347,7 @@ export function mountShell(
 
   const toastRegion = ensureRegion(root, ".d9-toast-region");
   const trackColumn = ensureRegion(root, ".d9-track-column");
+  const extensionRegion = ensureRegion(root, ".d9-extension-tracks");
   const inspectorRegion = ensureRegion(root, ".d9-inspector");
   const minimapRegion = ensureRegion(root, ".d9-minimap");
   const statusRegion = ensureRegion(root, ".d9-status");
@@ -348,6 +355,7 @@ export function mountShell(
   return {
     toastRegion,
     trackColumn,
+    extensionRegion,
     // Exposed so the entry can hand the rail its lane-reveal action once the
     // lanes are mounted (they mount after the shell).
     rail,

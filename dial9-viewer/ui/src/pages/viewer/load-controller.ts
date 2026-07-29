@@ -92,9 +92,14 @@ export interface LoadControllerDeps {
    * Fired once, synchronously, when a load SUCCEEDS - after the store's trace
    * slice is populated and before the section closes. The page commits the
    * loaded source's toolbar label here (order-safe: it runs in the load's
-   * microtask, ahead of the store scheduler's next render frame).
+   * microtask, ahead of the store scheduler's next render frame). `replacing`
+   * reflects the state before this load began.
    */
-  onLoaded?(): void;
+  onLoaded?(
+    buffer: ArrayBuffer | null,
+    kind: "source" | "reparse",
+    replacing: boolean,
+  ): void;
   /**
    * The completed load's phase timing, when the loader reported any. The
    * main-thread loader also emits its own User Timing marks (lib/trace/
@@ -311,6 +316,7 @@ export function createLoadController(deps: LoadControllerDeps): LoadController {
       shareableAfterSuccess: boolean | null;
     },
   ): void {
+    const replacing = deps.hasTrace();
     // Supersede any in-flight load (its callbacks are already token-guarded).
     if (currentHandle !== null) currentHandle.abort();
     loadToken += 1;
@@ -365,7 +371,11 @@ export function createLoadController(deps: LoadControllerDeps): LoadController {
         }
         // Success: the store's trace slice is now populated; commit the
         // toolbar label, then drop the load section so the tracks show through.
-        deps.onLoaded?.();
+        deps.onLoaded?.(
+          buf instanceof ArrayBuffer ? buf : null,
+          opts.kind,
+          replacing,
+        );
         section = "closed";
         dragCounter = 0;
         notify();

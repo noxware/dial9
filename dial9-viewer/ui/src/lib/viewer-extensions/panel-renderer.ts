@@ -130,6 +130,21 @@ export interface SemanticPanelRendererOptions {
   readonly persistCollapse?: boolean;
 }
 
+export interface SemanticTooltipRow {
+  readonly label: string;
+  readonly value: string;
+}
+
+/**
+ * Viewer-owned tooltip surface. The semantic renderer supplies only escaped
+ * label/value rows and a pointer position; placement and styling remain host
+ * policy.
+ */
+export interface SemanticPanelTooltip {
+  show(rows: readonly SemanticTooltipRow[], cursor: MouseEvent): void;
+  hide(): void;
+}
+
 /**
  * One manifest panel rendered with viewer-owned layout and visual policy.
  *
@@ -142,7 +157,7 @@ export class SemanticPanelRenderer {
   readonly #source: SemanticPanelSource;
   readonly #panel: PanelManifest;
   readonly #panelIndex: number;
-  readonly #tooltip: HTMLElement;
+  readonly #tooltip: SemanticPanelTooltip;
   readonly #canvas: HTMLCanvasElement;
   readonly #title: HTMLSpanElement;
   readonly #legend: HTMLSpanElement;
@@ -163,7 +178,7 @@ export class SemanticPanelRenderer {
     source: SemanticPanelSource,
     panel: PanelManifest,
     panelIndex: number,
-    tooltip: HTMLElement,
+    tooltip: SemanticPanelTooltip,
     options: SemanticPanelRendererOptions = {},
   ) {
     this.#source = source;
@@ -175,12 +190,12 @@ export class SemanticPanelRenderer {
       `dial9.viewer.extensionPanelCollapsed.${source.identity.name}.${panelIndex}`;
 
     this.element = document.createElement("div");
-    this.element.className = "d9-extension-panel foldable-panel";
+    this.element.className = "d9-extension-panel";
     this.element.dataset.panelKey = `${source.identity.id}-${panelIndex}`;
     this.element.dataset.xAxis = panel.x_axis.kind;
 
     const label = document.createElement("div");
-    label.className = "chart-label";
+    label.className = "d9-extension-label";
     label.setAttribute("role", "button");
     label.setAttribute("tabindex", "0");
 
@@ -190,11 +205,11 @@ export class SemanticPanelRenderer {
     label.appendChild(this.#title);
 
     this.#legend = document.createElement("span");
-    this.#legend.className = "d9-extension-legend panel-expanded-label";
+    this.#legend.className = "d9-extension-legend";
     label.appendChild(this.#legend);
 
     this.#readout = document.createElement("span");
-    this.#readout.className = "d9-extension-readout panel-expanded-label";
+    this.#readout.className = "d9-extension-readout";
 
     this.#error = document.createElement("div");
     this.#error.className = "d9-extension-error";
@@ -253,9 +268,7 @@ export class SemanticPanelRenderer {
   }
 
   destroy(): void {
-    if (this.#tooltip.dataset.extensionPanel === this.element.dataset.panelKey) {
-      this.#hideTooltip();
-    }
+    this.#hideTooltip();
     this.element.remove();
   }
 
@@ -289,7 +302,7 @@ export class SemanticPanelRenderer {
     if (context === null) return;
     context.setTransform(dpr, 0, 0, dpr, 0, 0);
     context.clearRect(0, 0, width, PANEL_HEIGHT);
-    context.fillStyle = "#111b2e";
+    context.fillStyle = "#12172a";
     context.fillRect(0, 0, width, PANEL_HEIGHT);
 
     const xDomain = this.#xDomain(viewport);
@@ -369,7 +382,7 @@ export class SemanticPanelRenderer {
   #setCollapsed(collapsed: boolean, persist = true): void {
     this.#collapsed = collapsed;
     this.element.classList.toggle("is-collapsed", collapsed);
-    const label = this.element.querySelector(".chart-label");
+    const label = this.element.querySelector(".d9-extension-label");
     label?.setAttribute("aria-expanded", collapsed ? "false" : "true");
     if (persist && this.#persistCollapse) {
       writeStorage(this.#collapseKey, collapsed ? "collapsed" : "expanded");
@@ -1193,44 +1206,28 @@ export class SemanticPanelRenderer {
     event: MouseEvent,
   ): void {
     const table = this.#source.tables.table(hit.table);
-    const fragment = document.createDocumentFragment();
-    let rendered = 0;
+    const rows: SemanticTooltipRow[] = [];
     for (const item of component.items) {
       const value = table.value(hit.row, item.column);
       if (value === null || value === "") continue;
-      if (rendered > 0) fragment.append(document.createElement("br"));
-      const label = document.createElement("span");
-      label.className = "label";
-      label.textContent = `${item.label}:`;
-      const formatted = document.createElement("span");
-      formatted.className = "value";
-      formatted.textContent = formatTooltipValue(
-        value,
-        item.unit,
-        this.#viewport?.formatTimestamp,
-      );
-      fragment.append(label, document.createTextNode(" "), formatted);
-      rendered++;
+      rows.push({
+        label: `${item.label}:`,
+        value: formatTooltipValue(
+          value,
+          item.unit,
+          this.#viewport?.formatTimestamp,
+        ),
+      });
     }
-    if (rendered === 0) {
+    if (rows.length === 0) {
       this.#hideTooltip();
       return;
     }
-    this.#tooltip.replaceChildren(fragment);
-    this.#tooltip.dataset.extensionPanel = this.element.dataset.panelKey ?? "";
-    this.#tooltip.style.display = "block";
-    placeTooltip(this.#tooltip, event);
+    this.#tooltip.show(rows, event);
   }
 
   #hideTooltip(): void {
-    if (
-      this.#tooltip.dataset.extensionPanel !== undefined &&
-      this.#tooltip.dataset.extensionPanel !== this.element.dataset.panelKey
-    ) {
-      return;
-    }
-    delete this.#tooltip.dataset.extensionPanel;
-    this.#tooltip.style.display = "none";
+    this.#tooltip.hide();
   }
 }
 
@@ -1648,16 +1645,6 @@ function parseHexColor(color: string): readonly [number, number, number] | null 
     Number.parseInt(hex.slice(2, 4), 16),
     Number.parseInt(hex.slice(4, 6), 16),
   ];
-}
-
-function placeTooltip(tooltip: HTMLElement, event: MouseEvent): void {
-  const width = tooltip.offsetWidth;
-  const height = tooltip.offsetHeight;
-  const x = Math.min(event.clientX + 12, window.innerWidth - width - 8);
-  let y = event.clientY + 16;
-  if (y + height > window.innerHeight - 8) y = event.clientY - height - 8;
-  tooltip.style.left = `${Math.max(8, x)}px`;
-  tooltip.style.top = `${Math.max(8, y)}px`;
 }
 
 function componentRecord(

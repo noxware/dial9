@@ -5,7 +5,6 @@
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>dial9 Trace Viewer</title>
         <script src="ui-switch.js"></script>
-        <script type="module" src="/src/lib/viewer-extensions/legacy.ts"></script>
         <link rel="stylesheet" href="flamegraph.css" />
         <style>
             /* Stacking layers (low -> high). Only the tiers that must agree on
@@ -494,8 +493,7 @@
                 word-break: break-word;
             }
             #stack-sidebar .sidebar-body .kv-copy,
-            #stack-sidebar .sidebar-body .kv-corr,
-            #stack-sidebar .sidebar-body .kv-graph {
+            #stack-sidebar .sidebar-body .kv-corr {
                 background: none;
                 border: 1px solid #555;
                 color: #aaa;
@@ -509,13 +507,8 @@
                 border-color: #6c63ff;
                 color: #b9b4ff;
             }
-            #stack-sidebar .sidebar-body .kv-graph {
-                border-color: #4f8fb0;
-                color: #8dd8ff;
-            }
             #stack-sidebar .sidebar-body .kv-copy:hover,
-            #stack-sidebar .sidebar-body .kv-corr:hover,
-            #stack-sidebar .sidebar-body .kv-graph:hover {
+            #stack-sidebar .sidebar-body .kv-corr:hover {
                 background: #333;
                 color: #fff;
             }
@@ -830,8 +823,8 @@
     <body>
         <div id="drag-overlay">
             <div class="drag-overlay-msg">
-                Drop a trace or WASM viewer extension
-                <small>A trace replaces the current trace; an extension augments it</small>
+                Drop trace file to load
+                <small>Replaces the current trace</small>
             </div>
         </div>
         <div id="drop-zone">
@@ -847,7 +840,7 @@
                     <a href="#" id="load-demo" style="color: #6c63ff; font-size: 0.9em">or load demo trace</a>
                 </div>
             </div>
-            <input type="file" id="file-input" accept=".bin,.gz,.wasm" />
+            <input type="file" id="file-input" accept=".bin,.gz" />
         </div>
 
         <div id="viewer">
@@ -1543,30 +1536,20 @@
                     hideDragFeedback();
                 }
             });
-            document.addEventListener("drop", async (e) => {
+            document.addEventListener("drop", (e) => {
                 if (!isFileDrag(e)) return;
                 e.preventDefault();
                 dragCounter = 0;
                 hideDragFeedback();
-                const files = [...e.dataTransfer.files];
-                for (const file of files.filter(isWasmFile)) {
-                    await loadViewerExtension(file);
-                }
-                const traceFile = files.find((file) => !isWasmFile(file));
-                if (traceFile) loadFile(traceFile);
+                const file = e.dataTransfer.files[0];
+                if (file) loadFile(file);
             });
 
-            fileInput.addEventListener("change", async (e) => {
-                const file = e.target.files[0];
-                if (file) {
-                    if (isWasmFile(file)) await loadViewerExtension(file);
-                    else loadFile(file);
-                }
-                e.target.value = "";
+            fileInput.addEventListener("change", (e) => {
+                if (e.target.files[0]) loadFile(e.target.files[0]);
             });
             document.getElementById("btn-reset").addEventListener("click", () => {
                 resetTraceState({ clearUrlRange: true });
-                window.Dial9ViewerExtensions?.reset();
                 currentTraceBuffer = null;
                 currentTraceName = null;
                 viewer.style.display = "none";
@@ -1577,26 +1560,6 @@
             // re-parse in memory with a different time filter.
             let currentTraceBuffer = null;
             let currentTraceName = null;
-
-            function isWasmFile(file) {
-                return file.name.toLowerCase().endsWith(".wasm");
-            }
-
-            async function loadViewerExtension(file) {
-                if (!window.Dial9ViewerExtensions) {
-                    alert("The viewer extension runtime has not loaded yet");
-                    return;
-                }
-                try {
-                    await window.Dial9ViewerExtensions.loadFile(file);
-                } catch (err) {
-                    alert("Error loading viewer extension: " + err.message);
-                }
-            }
-
-            window.addEventListener("dial9-viewer-extensions-change", () => {
-                if (trace) renderAll();
-            });
 
             /** Clear UI state tied to the current trace so it doesn't leak into the next one. */
             function resetTraceState({ clearUrlRange } = {}) {
@@ -1716,25 +1679,13 @@
 
             /** Parse an already-fetched buffer and show the viewer. */
             async function parseAndShowTrace(buffer, name, opts = {}) {
-                let processingExtensions = false;
                 try {
+                    const fullOpts = { ...opts, onParseProgress: makeParseProgress() };
                     updateLoadProgress("Decompressing…");
-                    const prepared = await TraceParser.prepareTraceBuffer(buffer);
-                    const reuseExtensions = opts.reuseViewerExtensions === true;
-                    const { reuseViewerExtensions: _reuse, ...parseOptions } = opts;
-                    if (!reuseExtensions) {
-                        processingExtensions = true;
-                        window.Dial9ViewerExtensions?.processTraceBuffer(
-                            prepared,
-                            currentTraceBuffer != null,
-                        );
-                    }
-                    const fullOpts = { ...parseOptions, onParseProgress: makeParseProgress() };
-                    const parsed = await parseTrace(prepared, fullOpts);
+                    const parsed = await parseTrace(buffer, fullOpts);
                     if (loadPerf) loadPerf.parseDoneMs = performance.now();
-                    await showParsedTrace(parsed, prepared, name);
+                    await showParsedTrace(parsed, buffer, name);
                 } catch (err) {
-                    if (processingExtensions) window.Dial9ViewerExtensions?.cancelTrace();
                     if (err.name === "AbortError") return;
                     alert("Error: " + err.message);
                     resetDropZone();
@@ -1754,7 +1705,6 @@
             async function streamAndShowTrace(urls, name, opts = {}) {
                 const list = Array.isArray(urls) ? urls : [urls];
                 try {
-                    window.Dial9ViewerExtensions?.beginTrace(currentTraceBuffer != null);
                     const credHeaders = window.Dial9Creds ? Dial9Creds.headers() : {};
                     const stream = list.length === 1
                         ? await TraceParser.fetchTraceStream(list[0], {
@@ -1770,7 +1720,6 @@
                         async *[Symbol.asyncIterator]() {
                             for await (const chunk of stream) {
                                 captured.push(chunk);
-                                window.Dial9ViewerExtensions?.pushTraceChunk(chunk);
                                 yield chunk;
                             }
                         },
@@ -1788,10 +1737,8 @@
                     const buffer = new Uint8Array(total);
                     let off = 0;
                     for (const c of captured) { buffer.set(c, off); off += c.length; }
-                    window.Dial9ViewerExtensions?.finishTrace(buffer.buffer);
                     await showParsedTrace(parsed, buffer.buffer, name);
                 } catch (err) {
-                    window.Dial9ViewerExtensions?.cancelTrace();
                     if (err.name === "AbortError") return;
                     throw err;
                 }
@@ -1987,7 +1934,6 @@
                 const opts = {};
                 if (startNs != null) opts.startTime = startNs;
                 if (endNs != null) opts.endTime = endNs;
-                opts.reuseViewerExtensions = true;
                 await parseAndShowTrace(currentTraceBuffer, currentTraceName, opts);
 
                 clearRangeBtn.style.display = (startNs != null || endNs != null) ? "" : "none";
@@ -2097,18 +2043,13 @@
             }
 
             const urlScope = Dial9TraceScope.readScope(urlParams);
-            // Module scripts run after this legacy inline script. Wait for
-            // DOMContentLoaded so the extension adapter receives the first
-            // trace instead of missing an immediately-started URL load.
-            window.addEventListener("DOMContentLoaded", () => {
-                if (traceUrls.length) {
-                    showLoadingState(traceUrls.length > 1 ? `Loading ${traceUrls.length} traces…` : 'Loading trace…');
-                    loadTraceFromUrl(traceUrls);
-                } else if (urlScope) {
-                    showLoadingState('Loading trace selection…');
-                    loadTraceFromScope(urlScope);
-                }
-            }, { once: true });
+            if (traceUrls.length) {
+                showLoadingState(traceUrls.length > 1 ? `Loading ${traceUrls.length} traces…` : 'Loading trace…');
+                loadTraceFromUrl(traceUrls);
+            } else if (urlScope) {
+                showLoadingState('Loading trace selection…');
+                loadTraceFromScope(urlScope);
+            }
 
             function onLoadDemo(e) {
                 e.stopPropagation();
@@ -3019,13 +2960,6 @@
                 if (prof) _t = _profMark(prof, `spanPanel(allSpans=${allSpans.length})`, _t);
                 renderCustomEventsPanel(scrollbarW);
                 renderProcessCpuPanel(scrollbarW);
-                window.Dial9ViewerExtensions?.render({
-                    start: viewStart,
-                    end: viewEnd,
-                    labelWidth: LABEL_W,
-                    scrollbarWidth: scrollbarW,
-                    formatTimestamp: fmtTs,
-                });
                 if (prof) _t = _profMark(prof, `customEvents(${genericCustomEvents.length})`, _t);
                 renderTaskDetail(scrollbarW);
                 if (prof) _t = _profMark(prof, "taskDetail", _t);
@@ -4193,26 +4127,18 @@
 
             // One styled k/v row with a copy button — same visual language as
             // the span metadata panel. `copyVal` defaults to the displayed val.
-            function graphFieldButton(field) {
-                if (field == null) return "";
-                return `<button class="kv-graph" data-field="${esc(field)}" ` +
-                    `title="Graph ${esc(field)}" aria-label="Graph ${esc(field)}">⌁</button>`;
-            }
-
-            function kvRow(key, val, copyVal = val, graphField = null) {
+            function kvRow(key, val, copyVal = val) {
                 return `<div class="kv-row">${kvKeyVal(key, val)}` +
-                    graphFieldButton(graphField) +
                     `<button class="kv-copy" data-val="${esc(copyVal)}">⎘</button></div>`;
             }
 
             // Like kvRow, plus a "↔" button that opens the Related tab filtered to
             // other events sharing this field value. `corrVal` is the raw value to
             // match on (the displayed `val` may be formatted).
-            function kvRowCorrelate(key, val, corrVal, graphField = null) {
+            function kvRowCorrelate(key, val, corrVal) {
                 return `<div class="kv-row">${kvKeyVal(key, val)}` +
                     `<button class="kv-corr" data-corr-key="${esc(key)}" data-corr-val="${esc(corrVal)}" ` +
                     `title="Find events with ${esc(key)}=${esc(corrVal)}">↔</button>` +
-                    graphFieldButton(graphField) +
                     `<button class="kv-copy" data-val="${esc(val)}">⎘</button></div>`;
             }
 
@@ -4237,13 +4163,11 @@
                     for (const [k, v] of Object.entries(ev.fields || {})) {
                         const corrVal = String(v);
                         const display = formatFieldValue(v, ev.units?.[k]);
-                        const graphField =
-                            window.Dial9ViewerExtensions?.canGraphField(v) ? k : null;
                         // Only offer correlation when another event shares the value;
                         // a value unique to this event leads nowhere.
                         html += eventsWithField(k, corrVal).length > 1
-                            ? kvRowCorrelate(k, display, corrVal, graphField)
-                            : kvRow(k, display, display, graphField);
+                            ? kvRowCorrelate(k, display, corrVal)
+                            : kvRow(k, display);
                     }
                     html += kvRow("@", fmtTs(ev.timestamp));
                 } else {
@@ -5823,20 +5747,6 @@
             // Delegated on the stable container so it survives re-renders.
             document.getElementById("stack-sidebar-body").addEventListener("click", (e) => {
                 if (copyFromKvButton(e)) return;
-                const graph = e.target.closest(".kv-graph");
-                if (graph) {
-                    if (!selectedEventRef || !window.Dial9ViewerExtensions) return;
-                    try {
-                        window.Dial9ViewerExtensions.openFieldView(
-                            selectedEventRef,
-                            graph.dataset.field,
-                            genericCustomEvents,
-                        );
-                    } catch (err) {
-                        alert("Unable to create field view: " + err.message);
-                    }
-                    return;
-                }
                 // Field "↔": correlate by this field value in the Related tab.
                 const corr = e.target.closest(".kv-corr");
                 if (corr) {
@@ -6658,17 +6568,6 @@
                     // CPU panel owns its interval tooltip.
                     if (e.target.closest && e.target.closest("#cpu-panel")) {
                         mouseNs = eventToTimelineNs(e.clientX);
-                        lanesContainer.style.cursor = "";
-                        scheduleCrosshairRedraw();
-                        return;
-                    }
-                    // Semantic panels own their component hit testing and
-                    // tooltip while sharing the viewer's time-axis crosshair.
-                    if (e.target.closest && e.target.closest(".d9-extension-panel")) {
-                        const panel = e.target.closest(".d9-extension-panel");
-                        mouseNs = panel.dataset.xAxis === "time"
-                            ? eventToTimelineNs(e.clientX)
-                            : null;
                         lanesContainer.style.cursor = "";
                         scheduleCrosshairRedraw();
                         return;

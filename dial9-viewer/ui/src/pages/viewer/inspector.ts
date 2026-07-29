@@ -96,6 +96,10 @@ export interface InspectorDeps {
   preserveInitialRelatedView?: boolean;
   /** True when the URL explicitly owns the initial inspector width. */
   preserveInitialWidth?: boolean;
+  /** Whether a custom-event field can be materialized as a numeric view. */
+  canGraphEventField?(value: unknown): boolean;
+  /** Open the viewer-owned field-view dialog for one custom-event field. */
+  onGraphEventField?(event: CustomTraceEvent, field: string): void;
 }
 
 export interface MountedInspector {
@@ -793,15 +797,34 @@ export function mountInspector(
     }
     const { fmtTs } = formatters();
     const view = buildEventDetail(pinned, data().customEvents, fmtTs);
+    const detailEvent = view.isSingle ? pinned.events[0] ?? null : null;
     return html`
       <div class="d9-event-detail">
         <div class="d9-event-title">${view.title}</div>
-        ${view.rows.map((r) => eventRow(r.key, r.value, r.corrVal))}
+        ${view.rows.map((r) => {
+          const raw = detailEvent?.fields?.[r.key];
+          const graphable =
+            detailEvent !== null &&
+            raw !== undefined &&
+            deps.onGraphEventField !== undefined &&
+            deps.canGraphEventField?.(raw) === true;
+          return eventRow(
+            r.key,
+            r.value,
+            r.corrVal,
+            graphable ? detailEvent : null,
+          );
+        })}
       </div>
     `;
   }
 
-  function eventRow(key: string, value: string, corrVal: string | null): TemplateResult {
+  function eventRow(
+    key: string,
+    value: string,
+    corrVal: string | null,
+    graphEvent: CustomTraceEvent | null,
+  ): TemplateResult {
     return html`<div class="d9-kv-row">
       <span class="k">${key}</span><span class="v">${value}</span>
       ${corrVal !== null
@@ -813,6 +836,17 @@ export function mountInspector(
             @click=${() => correlate(key, corrVal)}
           >
             ↔
+          </button>`
+        : nothing}
+      ${graphEvent !== null
+        ? html`<button
+            type="button"
+            class="d9-kv-graph"
+            title="Graph ${key}"
+            aria-label="Graph ${key}"
+            @click=${() => deps.onGraphEventField?.(graphEvent, key)}
+          >
+            ⌁
           </button>`
         : nothing}
       <button

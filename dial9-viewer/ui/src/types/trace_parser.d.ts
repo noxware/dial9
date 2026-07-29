@@ -340,11 +340,6 @@ declare module "*/trace_parser.js" {
     options?: ParseOptions
   ): Promise<ParsedTrace>;
 
-  /** Return raw D9TF bytes, decompressing a gzip buffer when necessary. */
-  export function prepareTraceBuffer(
-    input: ArrayBuffer | Uint8Array
-  ): Promise<ArrayBuffer | Uint8Array>;
-
   /** Parse a single trace file/buffer; always a Promise (Node accepts paths). */
   export function parseOne(
     input: ArrayBuffer | Uint8Array | string,

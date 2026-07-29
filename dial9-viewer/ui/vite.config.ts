@@ -138,6 +138,7 @@ function frozenCoreDevInterop(): Plugin {
 // Vite-entry ticket in chunk 1 but must keep being served).
 const legacyPages = [
   "index.html",
+  "viewer.html",
   "flamegraph.html",
   "tokio_stats.html",
 ];
@@ -254,9 +255,6 @@ export default defineConfig({
       // placeholder inputs: the dev-probe module was retired when
       // the first real entry landed, as its header said it would be).
       input: {
-        // The legacy viewer remains a classic-script page, but is a Vite HTML
-        // entry so its isolated TypeScript WASM-extension adapter can bundle.
-        viewer: "viewer.html",
         // The migrated flamegraph page, served at /new/flamegraph.html
         // (HTML inputs keep their project-root-relative path in dist/).
         flamegraph: "new/flamegraph.html",

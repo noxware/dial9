@@ -15,7 +15,7 @@ export default defineConfig({
   },
   webServer: {
     command: `npm run dev -- --host 127.0.0.1 --port ${port} --strictPort`,
-    url: `${baseURL}/viewer.html`,
+    url: `${baseURL}/new/viewer.html`,
     reuseExistingServer: false,
   },
 });

@@ -8,12 +8,15 @@ El modelo sigue la separación de Perfetto entre datasets tipados y renderers
 reutilizables. [Perfetto UI plugins](https://perfetto.dev/docs/contributing/ui-plugins)
 
 ```text
-D9TF descomprimido ─┬─→ parser normal del viewer
-                    └─→ Worker por WASM → record batches columnares
-                                           ↓
-                               store scopeado por instancia
-                                           ↓
-                           paneles de componentes stackeables
+D9TF → parser Worker → trace + buffer descomprimido
+                                  ↓
+                         Worker por WASM
+                                  ↓
+                    record batches columnares
+                                  ↓
+                    store scopeado por instancia
+                                  ↓
+                paneles de componentes stackeables
 ```
 
 ```text
@@ -24,18 +27,19 @@ Main thread JS
 ```
 
 - Core WebAssembly sin imports, WASI, DOM, red ni objetos JavaScript.
-- Cómputo streaming sobre D9TF, sin materializar eventos como objetos JS.
+- Cómputo chunked sobre D9TF, sin materializar eventos como objetos JS.
 - Componentes TypeScript reutilizables; terceros no reciben acceso a Canvas.
 - El manifest declara qué datos y semántica consume cada componente, no layout
   físico ni instrucciones de dibujo de bajo nivel.
-- Legacy viewer primero, sin perder funcionalidad de `upstream/main`.
+- Integración exclusiva con el viewer nuevo; el viewer legacy queda idéntico a
+  `upstream/main`.
 - CPU exacto y dragón son las validaciones visibles; los paneles originales
   permanecen para compararlos.
 
 ## Alcance inicial
 
-- La primera implementación carga extensiones únicamente mediante drag and
-  drop de archivos `.wasm`.
+- La primera implementación carga archivos `.wasm` mediante el selector del
+  viewer o drag and drop.
 - No modifica D9TF, sus encoders, decoders ni recorder. El bundling dentro del
   trace conserva su diseño más abajo como trabajo diferido.
 - Una extensión cargada antes del trace queda pendiente y procesa la próxima
@@ -305,15 +309,15 @@ Referencia visual:
 - v1 garantiza aislamiento de capacidades, no cuotas de recursos. Límites de
   memoria, tiempo, cantidad de módulos y output se decidirán con mediciones
   reales.
-- Main encola cada chunk D9TF descomprimido con `postMessage()` en todos los
-  Workers y continúa inmediatamente con su parser, sin esperarlos. Cada Worker
-  recibe su propia copia y procesa su cola en orden.
+- Tras un parse exitoso, main encola el buffer D9TF descomprimido por chunks con
+  `postMessage()` en todos los Workers, sin esperar el cómputo de cada uno.
+  Cada Worker recibe su propia copia y procesa su cola en orden.
 - No hay créditos ni backpressure entre main y Workers en v1; sus colas pueden
   crecer. Un módulo decodifica una vez y puede producir múltiples tablas y
   paneles.
-- Convertir `viewer.html` en entrada Vite manteniendo sus scripts legacy y
-  añadir un adaptador TypeScript fino para lifecycle, fanout, paneles,
-  viewport, tooltip y la llamada desde `renderAll()`.
+- Integrar un controller TypeScript fino con el shell, loader, store, viewport,
+  inspector y tooltip compartido del viewer nuevo. El viewer legacy, sus
+  scripts y su configuración Vite no cambian.
 - Construir primero el vertical slice de CPU reutilizando la presentación de
   `574-generalize-series-and-fields` y revisar su API y paridad visual antes de
   generalizar componentes o agregar opciones públicas.
@@ -378,8 +382,8 @@ Referencia visual:
   sólo una métrica informativa.
 - CI compila la extensión de ejemplo para `wasm32-unknown-unknown` y ejecuta
   Rust, Vitest, build Vite y Playwright.
-- Las suites actuales y una revisión visual verifican que el legacy viewer
-  conserva toda la funcionalidad de `upstream/main`.
+- El diff contra `upstream/main` verifica que ningún asset, script o
+  configuración del viewer legacy cambie.
 
 ## Diferido
 
@@ -415,7 +419,6 @@ al mismo loader.
 
 ### Otros
 
-- Adaptador para el viewer nuevo.
 - Callbacks WASM reactivos.
 - Cuotas y policy estática de recursos WASM.
 - Builders tipados, domain types y proc macros ergonómicas para batches.

@@ -50,6 +50,10 @@ export interface LoadChromeOptions {
   initialRange?: ReparseRange;
   /** Explicit production transition that commits each successfully parsed trace. */
   onTraceLoaded?(trace: ParsedTrace, kind: LoadedTraceKind): void;
+  /** Route a dropped or picked `.wasm` file to the viewer-extension host. */
+  onViewerExtensionFile?(file: File): Promise<void>;
+  /** Feed a successfully loaded source's decompressed D9TF bytes to extensions. */
+  onSourceBuffer?(buffer: ArrayBuffer, replacing: boolean): void;
   /** Test seams. */
   document?: Document;
   startLoad?: LoadControllerDeps["startLoad"];
@@ -108,15 +112,19 @@ export function mountLoadChrome(options: LoadChromeOptions): LoadChrome {
   // (a render pass would otherwise clobber a child input).
   const fileInput = doc.createElement("input");
   fileInput.type = "file";
-  fileInput.accept = ".bin,.gz";
+  fileInput.accept = ".bin,.gz,.wasm";
   fileInput.className = "d9-load-file-input";
   fileInput.addEventListener("change", () => {
     const file = fileInput.files?.[0];
     // Reset so re-picking the SAME file still fires change.
     fileInput.value = "";
     if (file) {
-      pendingLabel = file.name;
-      controller.loadFile(file);
+      if (isWasmFile(file)) {
+        void loadViewerExtension(file);
+      } else {
+        pendingLabel = file.name;
+        controller.loadFile(file);
+      }
     }
   });
   container.appendChild(fileInput);
@@ -143,8 +151,11 @@ export function mountLoadChrome(options: LoadChromeOptions): LoadChrome {
     confirm: options.confirm ?? ((message) => window.confirm(message)),
     onError: options.onError,
     onChange: renderLayer,
-    onLoaded: () => {
+    onLoaded: (buffer, kind, replacing) => {
       committedLabel = pendingLabel;
+      if (kind === "source" && buffer !== null) {
+        options.onSourceBuffer?.(buffer, replacing);
+      }
     },
     onTiming: (timing) => {
       if (!isLoadPerfEnabled()) return;
@@ -187,10 +198,14 @@ export function mountLoadChrome(options: LoadChromeOptions): LoadChrome {
     if (!isFileDrag(e)) return;
     e.preventDefault();
     controller.endDrag();
-    const file = e.dataTransfer?.files[0];
-    if (file) {
-      pendingLabel = file.name;
-      controller.loadFile(file);
+    const files = [...(e.dataTransfer?.files ?? [])];
+    for (const file of files.filter(isWasmFile)) {
+      void loadViewerExtension(file);
+    }
+    const trace = files.find((file) => !isWasmFile(file));
+    if (trace !== undefined) {
+      pendingLabel = trace.name;
+      controller.loadFile(trace);
     }
   };
   doc.addEventListener("dragenter", onDragEnter);
@@ -214,7 +229,7 @@ export function mountLoadChrome(options: LoadChromeOptions): LoadChrome {
         class=${dropClass}
         role="button"
         tabindex="0"
-        aria-label="Load a trace file"
+        aria-label="Load a trace or WASM viewer extension"
         @click=${(): void => fileInput.click()}
         @keydown=${onDropZoneKey}
       >
@@ -236,6 +251,9 @@ export function mountLoadChrome(options: LoadChromeOptions): LoadChrome {
           click to open
         </div>
         <div class="d9-drop-sub">Expects D9TF binary format</div>
+        <div class="d9-drop-sub">
+          You can also drop a <code>.wasm</code> viewer extension
+        </div>
         <a
           href="#"
           class="d9-load-demo"
@@ -275,11 +293,28 @@ export function mountLoadChrome(options: LoadChromeOptions): LoadChrome {
     return html`
       <div class="d9-drag-overlay">
         <div class="d9-drag-overlay-msg">
-          Drop trace file to load
-          <small>Replaces the current trace</small>
+          Drop a trace or WASM viewer extension
+          <small>A trace replaces the current trace; an extension augments it</small>
         </div>
       </div>
     `;
+  }
+
+  function isWasmFile(file: File): boolean {
+    return file.name.toLowerCase().endsWith(".wasm");
+  }
+
+  async function loadViewerExtension(file: File): Promise<void> {
+    if (options.onViewerExtensionFile === undefined) {
+      options.onError("This viewer does not support WASM extensions.");
+      return;
+    }
+    try {
+      await options.onViewerExtensionFile(file);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      options.onError(`Could not load viewer extension: ${detail}`);
+    }
   }
 
   function onDropZoneKey(e: KeyboardEvent): void {

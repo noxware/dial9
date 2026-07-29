@@ -1,18 +1,21 @@
 # Viewer extensions
 
 Viewer extensions are Rust programs compiled to core WebAssembly. They consume
-the same decompressed D9TF byte stream as the viewer and emit immutable typed
-tables. A static manifest composes semantic components over those tables.
+the viewer's decompressed D9TF bytes as an ordered chunk stream and emit
+immutable typed tables. A static manifest composes semantic components over
+those tables.
 
 ```text
-D9TF ─┬─→ viewer parser
-      └─→ dedicated Worker → extension WASM → column batches → panels
+D9TF → viewer parser → parsed trace + decompressed buffer
+                                     └→ dedicated Worker
+                                          → extension WASM
+                                          → column batches → panels
 ```
 
-Version 1 loads `.wasm` files by drag and drop in the legacy viewer. A module
-may be dropped before a trace or after one is loaded. Embedding the same module
-bytes in D9TF is deferred; it does not change the SDK, ABI, manifest, or
-component contracts documented here.
+Version 1 loads `.wasm` files through the new viewer's file chooser or drag and
+drop. A module may be loaded before a trace or after one is loaded. Embedding
+the same module bytes in D9TF is deferred; it does not change the SDK, ABI,
+manifest, or component contracts documented here.
 
 ## Rust extension
 
@@ -269,8 +272,8 @@ error naming the missing component. Other panels and extensions continue.
 
 ### Interactive field views
 
-The legacy viewer can graph a numeric field directly from a selected custom
-event. `Interpret as` offers three semantic presets:
+The new viewer can graph a numeric field directly from the Event inspector.
+`Interpret as` offers three semantic presets:
 
 - `Gauge` maps each raw observation to its timestamp and renders the points as
   a line.
@@ -360,11 +363,12 @@ module can consume excessive resources or loop forever in its Worker, but it
 cannot acquire browser capabilities through this ABI. Resource policy remains
 separate from the versioned data and component contracts.
 
-The main thread sends each decompressed input chunk to every extension Worker
-and immediately continues its own parser. Worker queues preserve order; there
-is no v1 backpressure. Loading a module after a trace replays the viewer's
-retained decompressed buffer. Replacing or cancelling a logical trace disposes
-its extension instances.
+After a source parses successfully, the new viewer sends its retained
+decompressed buffer to every pending extension Worker in bounded chunks.
+Worker queues preserve order; there is no v1 backpressure. Loading a module
+after a trace replays the same retained buffer. A successful source replacement
+disposes the previous trace's extension instances; a cancelled or failed load
+leaves the current trace and its panels intact.
 
 ## Performance check
 

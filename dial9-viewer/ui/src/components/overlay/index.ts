@@ -59,11 +59,14 @@ function columnGeometry(
   // scrollHeight is a feedback ratchet that only ever grows the column's scroll
   // area (phantom empty scroll below the last track). Measure the real FLOW
   // content instead (hint chips + tracks), floored at the visible height.
-  const flowContent =
-    trackColumn.querySelector<HTMLElement>(".d9-tracks") ?? trackColumn;
+  const flowContent = trackColumn.querySelector<HTMLElement>(".d9-tracks");
+  const extensionContent =
+    trackColumn.querySelector<HTMLElement>(".d9-extension-tracks");
   const hint = trackColumn.querySelector<HTMLElement>(".d9-hint-chips");
   const contentHeight =
-    (hint?.offsetHeight ?? 0) + flowContent.offsetHeight;
+    (hint?.offsetHeight ?? 0) +
+    (flowContent?.offsetHeight ?? 0) +
+    (extensionContent?.offsetHeight ?? 0);
   return {
     layout: timePanelLayout({ pw, scrollbarW, viewStart, viewEnd }),
     pw,
