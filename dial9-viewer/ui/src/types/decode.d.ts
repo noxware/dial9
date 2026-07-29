@@ -81,6 +81,8 @@ declare module "*/decode.js" {
     annotations?: SchemaAnnotation[];
     /** field name -> unit string, from `unit` annotations. */
     units?: Record<string, string>;
+    /** field name -> semantic chart kind, from `kind` annotations. */
+    kinds?: Record<string, string>;
   }
 
   export interface SchemaFrame extends EventSchema {

@@ -1052,11 +1052,13 @@
                 // spanEventSink when present; everything else stays fat.
                 if (ts != null) {
                     if (!(spanEventSink && spanEventSink.pushIfSpan(frame.name, ts, v))) {
+                        const schema = dec.schemas.get(frame.typeId);
                         customEvents.push({
                             name: frame.name,
                             timestamp: ts,
                             fields: v,
-                            units: dec.schemas.get(frame.typeId)?.units || null,
+                            units: schema?.units || null,
+                            kinds: schema?.kinds || null,
                         });
                     }
                 }

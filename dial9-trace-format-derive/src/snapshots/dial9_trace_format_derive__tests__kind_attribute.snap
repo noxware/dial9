@@ -1,0 +1,46 @@
+---
+source: dial9-trace-format-derive/src/lib.rs
+expression: "expand_to_string(quote!\n{\n    struct ChartableFields\n    {\n        #[traceevent(timestamp)] timestamp_ns: u64,\n        #[traceevent(unit = \"bytes\", kind = \"gauge\")] resident_bytes: u64,\n        #[traceevent(kind = \"counter\")] requests_total: u64,\n        #[traceevent(kind = \"up_down_counter\")] in_flight: i64,\n    }\n})"
+---
+impl ::dial9_trace_format::TraceEvent for ChartableFields {
+    fn event_name() -> &'static str {
+        "ChartableFields"
+    }
+    fn field_defs() -> Vec<::dial9_trace_format::schema::FieldDef> {
+        vec![
+            ::dial9_trace_format::schema::FieldDef::new("resident_bytes", < u64 as
+            ::dial9_trace_format::TraceField > ::field_type(),),
+            ::dial9_trace_format::schema::FieldDef::new("requests_total", < u64 as
+            ::dial9_trace_format::TraceField > ::field_type(),),
+            ::dial9_trace_format::schema::FieldDef::new("in_flight", < i64 as
+            ::dial9_trace_format::TraceField > ::field_type(),)
+        ]
+    }
+    fn schema_entry() -> ::dial9_trace_format::schema::SchemaEntry {
+        ::dial9_trace_format::schema::SchemaEntry::with_annotations(
+            Self::event_name(),
+            Self::has_timestamp(),
+            Self::field_defs(),
+            vec![
+                ::dial9_trace_format::schema::FieldAnnotation::new(0u16, "unit",
+                "bytes"), ::dial9_trace_format::schema::FieldAnnotation::new(0u16,
+                "kind", "gauge"),
+                ::dial9_trace_format::schema::FieldAnnotation::new(1u16, "kind",
+                "counter"), ::dial9_trace_format::schema::FieldAnnotation::new(2u16,
+                "kind", "up_down_counter")
+            ],
+        )
+    }
+    fn timestamp(&self) -> u64 {
+        self.timestamp_ns
+    }
+    fn encode_fields<W: ::std::io::Write>(
+        &self,
+        enc: &mut ::dial9_trace_format::EventEncoder<'_, W>,
+    ) -> ::std::io::Result<()> {
+        <u64 as ::dial9_trace_format::TraceField>::encode(&self.resident_bytes, enc)?;
+        <u64 as ::dial9_trace_format::TraceField>::encode(&self.requests_total, enc)?;
+        <i64 as ::dial9_trace_format::TraceField>::encode(&self.in_flight, enc)?;
+        Ok(())
+    }
+}

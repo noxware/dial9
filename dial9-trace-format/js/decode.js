@@ -354,11 +354,14 @@ class TraceDecoder {
     if (schema) {
       schema.annotations = annotations;
       const units = {};
+      const kinds = {};
       for (const a of annotations) {
         const field = schema.fields[a.fieldIndex];
         if (a.key === 'unit' && field) units[field.name] = a.value;
+        if (a.key === 'kind' && field) kinds[field.name] = a.value;
       }
       schema.units = units;
+      schema.kinds = kinds;
     }
     return { type: 'schema_annotations', typeId, annotations };
   }

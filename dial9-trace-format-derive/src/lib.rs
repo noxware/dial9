@@ -11,6 +11,9 @@ use syn::{Data, DeriveInput, Fields, parse_macro_input};
 /// with the viewer's `formatFieldValue` (dial9-viewer/ui/format.js).
 const SUPPORTED_UNITS: &[&str] = &["ns", "us", "ms", "s", "bytes"];
 
+/// Semantic chart kinds accepted by `#[traceevent(kind = "...")]`.
+const SUPPORTED_KINDS: &[&str] = &["gauge", "counter", "up_down_counter"];
+
 fn derive_trace_event_impl(input: DeriveInput) -> Result<proc_macro2::TokenStream, syn::Error> {
     let name = &input.ident;
     let name_str = name.to_string();
@@ -61,17 +64,19 @@ fn derive_trace_event_impl(input: DeriveInput) -> Result<proc_macro2::TokenStrea
         let field_name = field.ident.as_ref().unwrap();
         let ty = &field.ty;
 
-        // Parse #[traceevent(unit = "...")]: emitted as a "unit"
-        // schema annotation so viewers can render the field in that unit.
+        // Parse field metadata emitted as schema annotations.
         let mut unit: Option<syn::LitStr> = None;
+        let mut kind: Option<syn::LitStr> = None;
         for attr in &field.attrs {
             if attr.path().is_ident("traceevent") {
-                let _ = attr.parse_nested_meta(|meta| {
+                attr.parse_nested_meta(|meta| {
                     if meta.path.is_ident("unit") {
                         unit = Some(meta.value()?.parse::<syn::LitStr>()?);
+                    } else if meta.path.is_ident("kind") {
+                        kind = Some(meta.value()?.parse::<syn::LitStr>()?);
                     }
                     Ok(())
-                });
+                })?;
             }
         }
 
@@ -81,11 +86,21 @@ fn derive_trace_event_impl(input: DeriveInput) -> Result<proc_macro2::TokenStrea
                 return Err(syn::Error::new_spanned(
                     &unit,
                     "the timestamp field cannot carry a unit annotation: it is encoded in the \
-                     event header (always nanoseconds), not as a schema field",
+                    event header (always nanoseconds), not as a schema field",
+                ));
+            }
+            if let Some(kind) = kind {
+                return Err(syn::Error::new_spanned(
+                    &kind,
+                    "the timestamp field cannot carry a kind annotation: it is encoded in the \
+                     event header, not as a schema field",
                 ));
             }
             continue;
         }
+        // field_index matches the position in field_defs(), which excludes the
+        // timestamp field.
+        let idx = field_def_tokens.len() as u16;
         if let Some(unit) = unit {
             if !SUPPORTED_UNITS.contains(&unit.value().as_str()) {
                 return Err(syn::Error::new_spanned(
@@ -97,11 +112,23 @@ fn derive_trace_event_impl(input: DeriveInput) -> Result<proc_macro2::TokenStrea
                     ),
                 ));
             }
-            // field_index matches the position in field_defs(), which
-            // excludes the timestamp field.
-            let idx = field_def_tokens.len() as u16;
             annotation_tokens.push(quote! {
                 ::dial9_trace_format::schema::FieldAnnotation::new(#idx, "unit", #unit)
+            });
+        }
+        if let Some(kind) = kind {
+            if !SUPPORTED_KINDS.contains(&kind.value().as_str()) {
+                return Err(syn::Error::new_spanned(
+                    &kind,
+                    format!(
+                        "unsupported kind \"{}\"; supported kinds: {}",
+                        kind.value(),
+                        SUPPORTED_KINDS.join(", ")
+                    ),
+                ));
+            }
+            annotation_tokens.push(quote! {
+                ::dial9_trace_format::schema::FieldAnnotation::new(#idx, "kind", #kind)
             });
         }
 
@@ -201,6 +228,10 @@ fn derive_trace_event_impl(input: DeriveInput) -> Result<proc_macro2::TokenStrea
 ///   `"ns"`, `"us"`, `"ms"`, `"s"`, `"bytes"`. Any other value is a compile
 ///   error, as is placing `unit` on the timestamp field (the timestamp is
 ///   encoded in the event header and is always nanoseconds).
+/// - `#[traceevent(kind = "...")]` (field): describes how viewers should
+///   interpret the field when graphing it. Supported values are `"gauge"`,
+///   `"counter"`, and `"up_down_counter"`. Unknown values and `kind` on the
+///   timestamp field are compile errors.
 ///
 /// ```ignore
 /// #[derive(TraceEvent)]
@@ -209,6 +240,8 @@ fn derive_trace_event_impl(input: DeriveInput) -> Result<proc_macro2::TokenStrea
 ///     timestamp_ns: u64,
 ///     #[traceevent(unit = "us")]
 ///     latency_us: u64,
+///     #[traceevent(kind = "counter")]
+///     requests_total: u64,
 ///     status_code: u32,
 /// }
 /// ```
@@ -357,6 +390,55 @@ mod tests {
             err.to_string(),
             "the timestamp field cannot carry a unit annotation: it is encoded in the \
              event header (always nanoseconds), not as a schema field"
+        );
+    }
+
+    #[test]
+    fn kind_attribute() {
+        assert_snapshot!(expand_to_string(quote! {
+            struct ChartableFields {
+                #[traceevent(timestamp)]
+                timestamp_ns: u64,
+                #[traceevent(unit = "bytes", kind = "gauge")]
+                resident_bytes: u64,
+                #[traceevent(kind = "counter")]
+                requests_total: u64,
+                #[traceevent(kind = "up_down_counter")]
+                in_flight: i64,
+            }
+        }));
+    }
+
+    #[test]
+    fn invalid_kind_rejected() {
+        let err = expand_err(quote! {
+            struct BadKind {
+                #[traceevent(timestamp)]
+                timestamp_ns: u64,
+                #[traceevent(kind = "histogram")]
+                value: u64,
+            }
+        });
+        assert_eq!(
+            err.to_string(),
+            "unsupported kind \"histogram\"; supported kinds: gauge, counter, up_down_counter"
+        );
+    }
+
+    #[test]
+    fn kind_on_timestamp_rejected() {
+        let err = expand_err(quote! {
+            struct TimestampKind {
+                #[traceevent(timestamp)]
+                #[traceevent(kind = "gauge")]
+                timestamp_ns: u64,
+                value: u64,
+            }
+        });
+        assert_eq!(
+            err.to_string(),
+            "the timestamp field cannot carry a kind annotation: it is encoded in the event \
+             header, not as a schema field"
         );
     }
 
