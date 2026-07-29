@@ -88,7 +88,7 @@ The `#[traceevent(timestamp)]` attribute marks a `u64` field as the event's time
 
 The `#[traceevent(unit = "...")]` attribute attaches a `unit` schema annotation to a field, so viewers render its value in a human-friendly unit (e.g. `1.50ms` instead of `1500000`, `12.00 GiB` instead of `12884901888`). Supported values are `"ns"`, `"us"`, `"ms"`, `"s"`, and `"bytes"`; anything else is a compile error.
 
-The `#[traceevent(kind = "...")]` attribute describes how viewers should graph a field. Supported values are `"gauge"`, `"counter"`, and `"up_down_counter"`; anything else is a compile error.
+The `#[traceevent(kind = "...")]` attribute describes how viewers should graph a field: `"gauge"` plots absolute samples, `"counter"` plots non-negative deltas and treats decreases as resets, and `"up_down_counter"` plots signed deltas. Anything else is a compile error.
 
 ```rust,ignore
 #[derive(TraceEvent)]

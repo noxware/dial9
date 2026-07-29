@@ -12,7 +12,7 @@ import { html, render, nothing, type TemplateResult } from "lit-html";
 import type { ViewerStore } from "../../store/store.js";
 import type { StoreState } from "../../types/state.js";
 import { tracksTemplate, sizeTracks, type TracksViewModel } from "./tracks.js";
-import { type TrackId } from "../../lib/canvas/track-layout.js";
+import type { TrackId } from "../../lib/canvas/track-layout.js";
 import { deriveAxisInputs } from "./axis.js";
 import { deriveCpuInputs } from "./cpu.js";
 import { createSpansTrack, type SpansTrackController } from "./spans-track.js";

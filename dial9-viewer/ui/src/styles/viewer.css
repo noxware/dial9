@@ -553,8 +553,6 @@ body {
     line-height: 1.15;
     color: var(--d9-fg);
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
 }
 .d9-track-caret,
 .d9-track-grip {
@@ -1124,6 +1122,10 @@ body {
 
 /* User-created numeric field tracks. Layout/collapse/reorder come from the
    shared track shell; only their readout and close control are private. */
+.d9-field-chart .d9-track-name {
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 .d9-field-chart-readout {
     position: absolute;
     top: 4px;

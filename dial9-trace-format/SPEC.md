@@ -179,8 +179,9 @@ Annotation keys and values are free-form at the wire level. By convention:
 
 - `unit` carries a field's display unit. The derive accepts `ns`, `us`, `ms`,
   `s`, and `bytes`; unrecognized wire values render as raw numbers.
-- `kind` carries a field's graph semantics. The derive accepts `gauge`,
-  `counter`, and `up_down_counter`.
+- `kind` carries a field's graph semantics. `gauge` represents absolute
+  samples, `counter` non-negative deltas with decreases treated as resets, and
+  `up_down_counter` signed deltas.
 
 ## Field Types
 

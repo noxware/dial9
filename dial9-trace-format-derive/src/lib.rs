@@ -229,9 +229,10 @@ fn derive_trace_event_impl(input: DeriveInput) -> Result<proc_macro2::TokenStrea
 ///   error, as is placing `unit` on the timestamp field (the timestamp is
 ///   encoded in the event header and is always nanoseconds).
 /// - `#[traceevent(kind = "...")]` (field): describes how viewers should
-///   interpret the field when graphing it. Supported values are `"gauge"`,
-///   `"counter"`, and `"up_down_counter"`. Unknown values and `kind` on the
-///   timestamp field are compile errors.
+///   interpret the field when graphing it. Supported values are `"gauge"` for
+///   absolute samples, `"counter"` for non-negative deltas with decreases
+///   treated as resets, and `"up_down_counter"` for signed deltas. Unknown
+///   values and `kind` on the timestamp field are compile errors.
 ///
 /// ```ignore
 /// #[derive(TraceEvent)]
