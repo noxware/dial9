@@ -281,11 +281,11 @@ The new viewer can graph a numeric field directly from the Event inspector.
   interval. Counter decreases are gaps.
 - `Up/down counter` emits the same deltas and permits negative values.
 
-The viewer scans events in timestamp order without sorting or constructing row
-objects, materializes only the matching schema name into host-native typed
-columns, and feeds them to the same table store and semantic components used by
-extensions. Missing or non-numeric operands are encoded through the validity
-bitmap and create gaps. Counter deltas retain the field's original unit.
+The viewer filters the matching schema, sorts those event references by
+timestamp, materializes them into host-native typed columns, and feeds them to
+the same table store and semantic components used by extensions. Missing or
+non-numeric operands are encoded through the validity bitmap and create gaps.
+Counter deltas retain the field's original unit.
 
 The generated panel composes the corresponding graph, tooltip, and visible
 `avg`/`max` readout. Closing it drops the renderer, table store, and all

@@ -19,11 +19,11 @@ describe("interactive custom-event field views", () => {
   it("materializes gauges as ordered points and preserves gaps", () => {
     const view = materializeFieldView(
       [
-        event("Queue", 10, 1),
-        event("Other", 15, 99),
-        event("Queue", 20, null),
-        event("Queue", 25, "2"),
         event("Queue", 30, 3),
+        event("Other", 15, 99),
+        event("Queue", 10, 1),
+        event("Queue", 25, "2"),
+        event("Queue", 20, null),
       ],
       {
         eventName: "Queue",
@@ -55,10 +55,10 @@ describe("interactive custom-event field views", () => {
   it("materializes monotonic counter deltas as intervals", () => {
     const view = materializeFieldView(
       [
-        event("Queue", 0, 100_000_000),
-        event("Queue", 1_000_000_000, 600_000_000),
         event("Queue", 2_000_000_000, 500_000_000),
+        event("Queue", 0, 100_000_000),
         event("Queue", 3_000_000_000, 900_000_000),
+        event("Queue", 1_000_000_000, 600_000_000),
       ],
       {
         eventName: "Queue",

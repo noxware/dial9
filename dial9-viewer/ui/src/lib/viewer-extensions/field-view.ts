@@ -51,15 +51,17 @@ export function materializeFieldView(
   const preset = fieldViewPreset(request);
   const manifest = fieldViewManifest(request, preset);
   const tables = new ExtensionTableStore(manifest);
+  const matchingEvents = events
+    .filter(
+      (event) =>
+        event.name === request.eventName &&
+        Number.isFinite(event.timestamp),
+    )
+    .sort((left, right) => left.timestamp - right.timestamp);
   const batch =
     preset.kind === "delta"
-      ? intervalDeltaBatch(
-          events,
-          request.eventName,
-          request.field,
-          preset.monotonic,
-        )
-      : pointBatch(events, request.eventName, request.field);
+      ? intervalDeltaBatch(matchingEvents, request.field, preset.monotonic)
+      : pointBatch(matchingEvents, request.field);
 
   if (batch.rows === 0) {
     const requirement =
@@ -183,20 +185,8 @@ function fieldViewManifest(
   );
 }
 
-function pointBatch(
-  events: readonly CustomTraceEvent[],
-  eventName: string,
-  field: string,
-) {
-  let rows = 0;
-  let previousTimestamp = -Infinity;
-  for (const event of events) {
-    if (event.name !== eventName || !Number.isFinite(event.timestamp)) continue;
-    assertChronological(event.timestamp, previousTimestamp);
-    previousTimestamp = event.timestamp;
-    rows++;
-  }
-
+function pointBatch(events: readonly CustomTraceEvent[], field: string) {
+  const rows = events.length;
   const timestamps = new Float64Array(rows);
   const values = new Float64Array(rows);
   const validity = new Uint8Array(Math.ceil(rows / 8));
@@ -204,7 +194,6 @@ function pointBatch(
   let valid = 0;
 
   for (const event of events) {
-    if (event.name !== eventName || !Number.isFinite(event.timestamp)) continue;
     timestamps[row] = event.timestamp;
     const value = fieldViewNumber(event.fields[field]);
     if (value !== null) {
@@ -227,16 +216,13 @@ function pointBatch(
 
 function intervalDeltaBatch(
   events: readonly CustomTraceEvent[],
-  eventName: string,
   field: string,
   monotonic: boolean,
 ) {
   let rows = 0;
   let previousTimestamp: number | null = null;
   for (const event of events) {
-    if (event.name !== eventName || !Number.isFinite(event.timestamp)) continue;
     if (previousTimestamp !== null) {
-      assertChronological(event.timestamp, previousTimestamp);
       if (event.timestamp > previousTimestamp) rows++;
     }
     previousTimestamp = event.timestamp;
@@ -251,7 +237,6 @@ function intervalDeltaBatch(
   let previous: CustomTraceEvent | null = null;
 
   for (const event of events) {
-    if (event.name !== eventName || !Number.isFinite(event.timestamp)) continue;
     if (previous === null) {
       previous = event;
       continue;
@@ -339,12 +324,6 @@ export function fieldViewNumber(value: unknown): number | null {
 
 function setValid(validity: Uint8Array, row: number): void {
   validity[row >> 3] = validity[row >> 3]! | (1 << (row & 7));
-}
-
-function assertChronological(timestamp: number, previous: number): void {
-  if (timestamp < previous) {
-    throw new Error("custom events must be ordered by timestamp");
-  }
 }
 
 function batchHasValue(column: ColumnChunk): boolean {
