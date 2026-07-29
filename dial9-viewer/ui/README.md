@@ -286,6 +286,7 @@ list escaping. Previously emitted comma/pre-encoded list values remain readable.
 | `analysis-offworker-zoom` | same | Region off-worker-tree flamegraph zoom. |
 | `analysis-inspect` | full frame key | Region flamegraph butterfly/inspect focus. |
 | `span-index` | non-negative integer | Current filtered-span navigation cursor. |
+| `field-chart` | `event,field,gauge\|counter\|up_down_counter` (repeatable) | Numeric custom-event field charts, in display order. |
 | `data-start` | monotonic ns | Parse-time Set Range lower bound. |
 | `data-end` | monotonic ns | Parse-time Set Range upper bound. |
 
