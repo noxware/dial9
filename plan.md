@@ -35,8 +35,6 @@ in_flight: i64,
 resident_bytes: u64,
 ```
 
-- Propagar a `CustomTraceEvent` el mapa `field -> kind`, igual que se hace con
-  `units`.
 - Mantener compatibilidad con traces sin esta metadata.
 
 ## Creación
@@ -113,14 +111,13 @@ Representar cada gráfico con un parámetro repetible `field-chart` cuyo valor s
 - Aceptar entradas con tres partes y un `kind` reconocido; ignorar las
   inválidas y deduplicar las restantes.
 - `field-chart` no reemplaza `collapsed`, que controla los tracks existentes.
-- Un archivo local no produce un link compartible porque el destinatario no
-  puede recuperar el trace.
 
 ## Validación
 
 - Rust: kinds válidos, combinación con `unit`, kind inválido y kind sobre
   timestamp.
-- Decoder/parser: propagación de `kind` y traces sin metadata.
+- Trace/viewer: el `kind` llega al field correspondiente y los traces sin
+  metadata mantienen su comportamiento.
 - Modelo: input desordenado, los tres kinds, reset de counter, deltas negativos,
   nulls, timestamps repetidos y enteros BigInt-safe.
 - UI: creación directa, modal fallback, readout, tooltip, deduplicación, cierre
