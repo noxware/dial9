@@ -17,6 +17,7 @@ import {
   type ViewerUrlState,
 } from "./url-state.js";
 import { taskIndexFor } from "./tasks-model.js";
+import { removeTrackIdsFromLayout } from "./track-management.js";
 
 export type LoadedTraceKind = "source" | "reparse";
 
@@ -197,6 +198,18 @@ export function createViewerReconstruction(
   }
 
   function resetSourceScopedState(): void {
+    const state = store.getState();
+    const fieldChartIds = state.view.fieldCharts.map((chart) => chart.id);
+    if (fieldChartIds.length > 0) {
+      store.update(
+        "uiPrefs",
+        removeTrackIdsFromLayout(
+          state.uiPrefs.trackOrder,
+          state.uiPrefs.collapsed,
+          fieldChartIds,
+        ),
+      );
+    }
     clearSelection();
     store.update("poi", {
       index: -1,

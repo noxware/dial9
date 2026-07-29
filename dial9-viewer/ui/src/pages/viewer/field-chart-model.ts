@@ -7,6 +7,7 @@ import type {
 const INTEGER_DECIMAL = /^-?(?:0|[1-9]\d*)$/;
 const DECIMAL =
   /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
+const FIELD_CHART_ID = /^fc([1-9]\d*)$/;
 
 export const FIELD_CHART_KINDS: readonly FieldChartKind[] = [
   "gauge",
@@ -20,6 +21,8 @@ export interface FieldChartPoint {
   value: number;
   /** Exact source value used by the tooltip where possible. */
   displayValue: number | bigint | string;
+  /** True when this sample starts a new line segment. */
+  breakBefore: boolean;
 }
 
 export interface FieldChartInterval {
@@ -64,9 +67,45 @@ export function isFieldChartKind(value: unknown): value is FieldChartKind {
   return FIELD_CHART_KINDS.some((kind) => kind === value);
 }
 
-/** Collision-free cache/deduplication key for a chart spec. */
-export function fieldChartKey(spec: FieldChartSpec): string {
+/** Collision-free semantic key; the stable track id is deliberately excluded. */
+export function fieldChartKey(
+  spec: Pick<FieldChartSpec, "eventName" | "field" | "kind">,
+): string {
   return JSON.stringify([spec.eventName, spec.field, spec.kind]);
+}
+
+/** Whether a string is a valid short field-chart track id. */
+export function isFieldChartId(value: unknown): value is string {
+  return typeof value === "string" && FIELD_CHART_ID.test(value);
+}
+
+/** Allocate the first unused short id. */
+export function nextFieldChartId(
+  charts: readonly FieldChartSpec[],
+): string {
+  const used = new Set(charts.map((chart) => chart.id));
+  for (let next = 1; ; next++) {
+    const id = `fc${next}`;
+    if (!used.has(id)) return id;
+  }
+}
+
+/** Stable numeric ordering used when a URL omits `track-order`. */
+export function compareFieldChartIds(left: string, right: string): number {
+  const leftDigits = FIELD_CHART_ID.exec(left)?.[1] ?? "";
+  const rightDigits = FIELD_CHART_ID.exec(right)?.[1] ?? "";
+  if (leftDigits.length !== rightDigits.length) {
+    return leftDigits.length - rightDigits.length;
+  }
+  return leftDigits < rightDigits ? -1 : leftDigits > rightDigits ? 1 : 0;
+}
+
+/** Compact human label for the fixed-width track gutter. */
+export function fieldChartLabel(field: string): string {
+  const words = field.replace(/[_-]+/g, " ").trim();
+  return words.length === 0
+    ? field
+    : words[0]!.toUpperCase() + words.slice(1);
 }
 
 /**
@@ -99,14 +138,20 @@ export function materializeFieldChart(
   const unit = matching.find((event) => event.unit !== undefined)?.unit;
   if (spec.kind === "gauge") {
     const points: FieldChartPoint[] = [];
+    let breakBefore = true;
     for (const event of matching) {
       const value = numericFieldValue(event.value);
-      if (value === null) continue;
+      if (value === null) {
+        breakBefore = true;
+        continue;
+      }
       points.push({
         timestamp: event.timestamp,
         value: value.number,
         displayValue: value.displayValue,
+        breakBefore,
       });
+      breakBefore = false;
     }
     return { kind: "gauge", unit, points };
   }

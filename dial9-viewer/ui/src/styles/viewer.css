@@ -553,6 +553,8 @@ body {
     line-height: 1.15;
     color: var(--d9-fg);
     overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 .d9-track-caret,
 .d9-track-grip {
@@ -1120,34 +1122,8 @@ body {
     border-color: var(--d9-accent);
 }
 
-/* User-created numeric field charts: a simple semantic stack below the fixed
-   tracks, sharing their label gutter and time mapping. */
-.d9-field-charts { display: flex; flex-direction: column; flex: none; }
-.d9-field-chart {
-    display: flex;
-    flex: none;
-    overflow: hidden;
-    border-bottom: 1px solid var(--d9-border);
-    background: var(--d9-bg-track);
-}
-.d9-field-chart-label {
-    width: var(--d9-label-w, 100px);
-    flex: none;
-    padding: 7px 8px;
-    overflow: hidden;
-    border-right: 1px solid var(--d9-border);
-    background: #131834;
-    color: var(--d9-fg);
-    font-size: 0.76em;
-    line-height: 1.25;
-    overflow-wrap: anywhere;
-}
-.d9-field-chart-body {
-    position: relative;
-    flex: 1;
-    min-width: 0;
-}
-.d9-field-chart-canvas { display: block; }
+/* User-created numeric field tracks. Layout/collapse/reorder come from the
+   shared track shell; only their readout and close control are private. */
 .d9-field-chart-readout {
     position: absolute;
     top: 4px;

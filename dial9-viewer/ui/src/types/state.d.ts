@@ -239,10 +239,7 @@ export interface PoiSlice {
 
 // ── uiPrefs slice ───────────────────────────────────────────────────────
 
-/**
- * View preferences persisted to localStorage. Persistence mechanics are the
- * store's concern, not encoded here.
- */
+/** View and layout preferences shared by the URL and local preferences. */
 export interface UiPrefsSlice {
   /**
    * Legacy foldable-panel collapsed state. SUPERSEDED by `collapsed`: the
@@ -253,21 +250,18 @@ export interface UiPrefsSlice {
    */
   panelCollapsed: Readonly<Record<FoldablePanelKind, boolean>>;
   /**
-   * Track order for the unified column. The user drag-reorders the
-   * manageable analysis tracks (cpu/queue/spans/events) by the track-label
-   * grip; this is their resulting id order. Empty = the catalogue order
-   * (track-layout.ts TRACKS). Resolution is robust to unknown or missing ids,
-   * so an order stored before a new track was added still resolves (the new
-   * track appears in its catalogue slot). Persisted to localStorage
-   * (dial9.viewer.trackPrefs) so it survives reload.
+   * Track order for the unified column's built-in analysis tracks and dynamic
+   * field charts. Empty = catalogue order followed by field-chart id order.
+   * The complete layout is URL-owned; only built-in ids are mirrored to
+   * localStorage.
    */
   trackOrder: readonly string[];
   /**
    * Per-track collapsed state. Track id -> true when the user collapsed it to
    * label-only height via the track-label caret. Absent or false = expanded
-   * (analysis surfaces visible by default). Only the manageable analysis
-   * tracks (cpu/queue/spans/events) are collapsible. localStorage-backed
-   * (dial9.viewer.trackPrefs).
+   * (analysis surfaces visible by default). Built-in analysis tracks and
+   * dynamic field charts are collapsible. The complete state is URL-owned;
+   * only built-in ids are mirrored to localStorage.
    */
   collapsed: Readonly<Record<string, boolean>>;
   /**
@@ -346,8 +340,10 @@ export interface RelatedExpansion {
 /** Semantic interpretation used to turn one numeric event field into a chart. */
 export type FieldChartKind = "gauge" | "counter" | "up_down_counter";
 
-/** Durable identity of one user-created field chart. Its data is derived. */
+/** Durable definition of one user-created field chart. Its data is derived. */
 export interface FieldChartSpec {
+  /** Short URL-stable track id (`fc1`, `fc2`, ...). */
+  id: string;
   eventName: string;
   field: string;
   kind: FieldChartKind;
@@ -380,7 +376,7 @@ export interface ViewerViewSlice {
   regionInspectFocus: string | null;
   /** Current next/previous cursor in the filtered span list. */
   spanNavIndex: number;
-  /** User-created numeric field charts, in display order. */
+  /** User-created numeric field charts. `uiPrefs.trackOrder` owns display order. */
   fieldCharts: readonly FieldChartSpec[];
 }
 

@@ -163,40 +163,63 @@ describe("viewer URL state: focused span", () => {
 
 describe("viewer URL state: field charts", () => {
   const first = {
+    id: "fc1",
     eventName: "ProcessResourceUsageEvent",
     field: "user_cpu_ns",
     kind: "counter",
   } as const;
   const second = {
+    id: "fc2",
     eventName: "Request Metrics",
     field: "in_flight",
     kind: "up_down_counter",
   } as const;
 
-  it("round-trips repeated charts in display order", () => {
+  it("round-trips charts by stable id, independent of parameter order", () => {
     const { params, out } = roundTrip(
-      mkState({ view: { fieldCharts: [first, second] } }),
+      mkState({
+        uiPrefs: {
+          trackOrder: ["cpu", "fc2", "queue", "fc1", "spans", "events"],
+          collapsed: { fc2: true },
+        },
+        view: { fieldCharts: [second, first] },
+      }),
     );
 
     expect(params.getAll("field-chart")).toEqual([
-      "ProcessResourceUsageEvent,user_cpu_ns,counter",
-      "Request Metrics,in_flight,up_down_counter",
+      "fc1,ProcessResourceUsageEvent,user_cpu_ns,counter",
+      "fc2,Request Metrics,in_flight,up_down_counter",
     ]);
     expect(out.fieldCharts).toEqual([first, second]);
+    expect(out.trackOrder).toEqual([
+      "cpu",
+      "fc2",
+      "queue",
+      "fc1",
+      "spans",
+      "events",
+    ]);
+    expect(out.collapsed).toEqual(["fc2"]);
   });
 
-  it("ignores malformed values and deduplicates valid specs", () => {
+  it("ignores malformed values and deduplicates ids and specs", () => {
     const out = readViewerUrlState(
-      "?field-chart=Event,value,gauge" +
-        "&field-chart=Event,value,gauge" +
+      "?field-chart=fc2,Event,value,gauge" +
+        "&field-chart=fc1,Event,value,gauge" +
+        "&field-chart=fc2,Other,value,counter" +
         "&field-chart=missing-parts" +
-        "&field-chart=Event,value,rate" +
-        "&field-chart=Event,,counter",
+        "&field-chart=bad,Event,value,gauge" +
+        "&field-chart=fc3,Event,value,rate" +
+        "&field-chart=fc4,Event,,counter" +
+        "&track-order=cpu,fc2,fc1,fc4,events" +
+        "&collapsed=fc2,fc1,fc4",
     );
 
     expect(out.fieldCharts).toEqual([
-      { eventName: "Event", field: "value", kind: "gauge" },
+      { id: "fc1", eventName: "Event", field: "value", kind: "gauge" },
     ]);
+    expect(out.trackOrder).toEqual(["cpu", "fc1", "events"]);
+    expect(out.collapsed).toEqual(["fc1"]);
   });
 
   it("rewrites repeated params when a chart closes", () => {
@@ -211,7 +234,7 @@ describe("viewer URL state: field charts", () => {
     );
 
     expect(params.getAll("field-chart")).toEqual([
-      "Request Metrics,in_flight,up_down_counter",
+      "fc2,Request Metrics,in_flight,up_down_counter",
     ]);
   });
 });
@@ -393,7 +416,7 @@ describe("viewer URL state: store hydration", () => {
       "?rail=tasks&task-sort=lifetime,asc&inspector=stack" +
         "&analysis=cpu&analysis-inspect=tokio%3A%3Apoll" +
         "&stack-view=flame&inspector-width=444" +
-        "&field-chart=Metric,value,gauge",
+        "&field-chart=fc1,Metric,value,gauge",
     );
 
     hydrateViewerStore(store, decoded, {
@@ -417,7 +440,7 @@ describe("viewer URL state: store hydration", () => {
       regionMode: "cpu",
       regionInspectFocus: "tokio::poll",
       fieldCharts: [
-        { eventName: "Metric", field: "value", kind: "gauge" },
+        { id: "fc1", eventName: "Metric", field: "value", kind: "gauge" },
       ],
     });
   });

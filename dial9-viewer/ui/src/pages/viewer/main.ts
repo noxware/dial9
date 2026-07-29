@@ -41,7 +41,6 @@ import { buildSearchIndex, searchWindow } from "./search-model.js";
 import type { SearchResult } from "./search-model.js";
 import { poiJump } from "./poi.js";
 import { createViewerReconstruction } from "./viewer-reconstruction.js";
-import { mountFieldCharts } from "./field-charts.js";
 
 // Dual-UI switch: render the always-visible "Switch to legacy UI" pill. The
 // <head> auto-boot is a no-op on this off-root new-UI path.
@@ -144,6 +143,16 @@ function boot(): void {
     toastsRef?.show({ id: "t33-seam", type: "info", message });
   };
   const shell = mountShell(root, store, {
+    fieldCharts: {
+      esc,
+      notify: (message, type) =>
+        toastsRef?.show({
+          id: `field-chart-${type}`,
+          type,
+          message,
+          autoHideMs: 5_000,
+        }),
+    },
     toggleHelp: () => help.toggle(),
     sourceLabel: () => loadChrome?.currentLabel() ?? source.label,
     // Key-derived svc/host from the browser handoff. A boot constant: the
@@ -159,21 +168,6 @@ function boot(): void {
   });
   const toasts = createToasts(shell.toastRegion);
   toastsRef = toasts;
-  const fieldCharts = mountFieldCharts(
-    shell.fieldChartRegion,
-    shell.trackColumn,
-    store,
-    {
-      esc,
-      notify: (message, type) =>
-        toasts.show({
-          id: `field-chart-${type}`,
-          type,
-          message,
-          autoHideMs: 5_000,
-        }),
-    },
-  );
 
   // Region-analysis panel: flamegraph / blocking-calls / heap for a Shift+drag
   // region or a whole-trace toolbar open. Renders into the inspector Stack tab
@@ -217,9 +211,9 @@ function boot(): void {
     esc,
     regionPanel,
     canGraphEventField: (event, field) =>
-      fieldCharts.canGraphField(event, field),
+      shell.fieldCharts.canGraphField(event, field),
     onGraphEventField: (event, field, restoreFocus) =>
-      fieldCharts.openField(event, field, restoreFocus),
+      shell.fieldCharts.openField(event, field, restoreFocus),
     preserveInitialTab: urlView.inspectorTab !== undefined,
     preserveInitialPollView:
       urlView.poll !== undefined &&
@@ -331,7 +325,7 @@ function boot(): void {
       reconstruction.applyLoadedTrace(trace, kind);
       if (firstTraceLoad) {
         firstTraceLoad = false;
-        fieldCharts.reconcileRestoredCharts();
+        shell.fieldCharts.reconcileRestoredCharts();
       }
     },
   });
@@ -369,7 +363,6 @@ function boot(): void {
     laneInteraction.dispose();
     overlay.dispose();
     inspector.dispose();
-    fieldCharts.dispose();
     regionPanel?.dispose();
     lanes.dispose();
     shell.dispose();

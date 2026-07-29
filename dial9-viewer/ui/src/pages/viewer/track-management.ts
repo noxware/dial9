@@ -1,8 +1,8 @@
 // Per-track collapse + drag-reorder for the unified track column. This module
 // owns:
 //
-//   - which tracks are user-manageable (collapse + reorder): the four foldable
-//     analysis surfaces (cpu/queue/spans/events). The two structural tracks
+//   - which tracks are user-manageable (collapse + reorder): the four built-in
+//     analysis surfaces plus live field charts. The two structural tracks
 //     (timeline/lanes) and the selection-only task-detail track are fixed.
 //   - the ordering resolution (uiPrefs.trackOrder -> the ordered TrackSpec
 //     list), robust to unknown/missing ids so a stored order predating a new
@@ -11,8 +11,8 @@
 //   - the collapse predicate + label-only height.
 //   - the store actions (toggle collapse / reorder) the shell's caret + grip
 //     handlers dispatch.
-//   - localStorage persistence (hydrate on boot + persist on change):
-//     trackOrder/collapsed survive reload.
+//   - localStorage persistence for built-in tracks. Dynamic field-chart layout
+//     is URL-owned and deliberately excluded from localStorage.
 //
 // Track pinning is out of scope. This operates on the track list/order +
 // per-track height only; it does not touch the per-track render delegation.
@@ -20,6 +20,10 @@
 import type { ViewerStore } from "../../store/store.js";
 import { TRACKS } from "../../lib/canvas/track-layout.js";
 import type { TrackId, TrackSpec } from "../../lib/canvas/track-layout.js";
+import {
+  compareFieldChartIds,
+  isFieldChartId,
+} from "./field-chart-model.js";
 
 /** Collapsed (label-only) track height in CSS px. */
 export const COLLAPSED_TRACK_H = 36;
@@ -37,11 +41,17 @@ export const MANAGEABLE_TRACK_IDS: readonly TrackId[] = [
   "events",
 ];
 
-const MANAGEABLE = new Set<string>(MANAGEABLE_TRACK_IDS);
+const STATIC_MANAGEABLE = new Set<string>(MANAGEABLE_TRACK_IDS);
 
-/** True when a track can be collapsed + reordered (a foldable analysis track). */
-export function isManageableTrack(id: TrackId): boolean {
-  return MANAGEABLE.has(id);
+/** True when a currently-present track can be collapsed and reordered. */
+export function isManageableTrack(
+  id: string,
+  dynamicIds: readonly string[] = [],
+): boolean {
+  return (
+    STATIC_MANAGEABLE.has(id) ||
+    (isFieldChartId(id) && dynamicIds.includes(id))
+  );
 }
 
 /**
@@ -51,9 +61,40 @@ export function isManageableTrack(id: TrackId): boolean {
  */
 export function isCollapsed(
   collapsed: Readonly<Record<string, boolean>>,
-  id: TrackId,
+  id: string,
+  dynamicIds: readonly string[] = [],
 ): boolean {
-  return isManageableTrack(id) && collapsed[id] === true;
+  return isManageableTrack(id, dynamicIds) && collapsed[id] === true;
+}
+
+/**
+ * Resolve the order of the manageable block. URL order wins; missing static
+ * tracks follow in catalogue order and missing field charts in numeric id
+ * order. Unknown, pinned and duplicate ids are ignored.
+ */
+export function orderedManagedTrackIds(
+  trackOrder: readonly string[],
+  dynamicIds: readonly string[] = [],
+): string[] {
+  const dynamic = [...new Set(dynamicIds)]
+    .filter(
+      (id) => isFieldChartId(id) && !STATIC_MANAGEABLE.has(id),
+    )
+    .sort(compareFieldChartIds);
+  const candidates = [...MANAGEABLE_TRACK_IDS, ...dynamic];
+  const allowed = new Set(candidates);
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const id of trackOrder) {
+    if (allowed.has(id) && !seen.has(id)) {
+      ordered.push(id);
+      seen.add(id);
+    }
+  }
+  for (const id of candidates) {
+    if (!seen.has(id)) ordered.push(id);
+  }
+  return ordered;
 }
 
 /**
@@ -73,30 +114,14 @@ export function orderedTracks(
 ): readonly TrackSpec[] {
   const catalogueManageable = TRACKS.filter((t) => isManageableTrack(t.id));
   const byId = new Map(catalogueManageable.map((t) => [t.id, t] as const));
-  const seen = new Set<string>();
-  const managed: TrackSpec[] = [];
-  for (const id of trackOrder) {
-    const spec = byId.get(id as TrackId);
-    if (spec !== undefined && !seen.has(id)) {
-      managed.push(spec);
-      seen.add(id);
-    }
-  }
-  for (const t of catalogueManageable) {
-    if (!seen.has(t.id)) managed.push(t);
-  }
+  const managed = orderedManagedTrackIds(trackOrder)
+    .map((id) => byId.get(id as TrackId))
+    .filter((track): track is TrackSpec => track !== undefined);
   // Re-lay the catalogue, drawing manageable slots from `managed` in order.
   let mi = 0;
   return TRACKS.map((t) =>
     isManageableTrack(t.id) ? (managed[mi++] as TrackSpec) : t,
   );
-}
-
-/** The manageable track ids in their current resolved order (persist target). */
-function manageableOrder(trackOrder: readonly string[]): TrackId[] {
-  return orderedTracks(trackOrder)
-    .filter((t) => isManageableTrack(t.id))
-    .map((t) => t.id);
 }
 
 /**
@@ -106,14 +131,15 @@ function manageableOrder(trackOrder: readonly string[]): TrackId[] {
  */
 export function computeReorder(
   trackOrder: readonly string[],
-  dragged: TrackId,
-  target: TrackId,
-): TrackId[] {
-  const order = manageableOrder(trackOrder);
+  dragged: string,
+  target: string,
+  dynamicIds: readonly string[] = [],
+): string[] {
+  const order = orderedManagedTrackIds(trackOrder, dynamicIds);
   if (
     dragged === target ||
-    !isManageableTrack(dragged) ||
-    !isManageableTrack(target)
+    !isManageableTrack(dragged, dynamicIds) ||
+    !isManageableTrack(target, dynamicIds)
   ) {
     return order;
   }
@@ -121,8 +147,23 @@ export function computeReorder(
   const j = order.indexOf(target);
   if (i < 0 || j < 0) return order;
   const swapped = order.slice();
-  [swapped[i], swapped[j]] = [swapped[j] as TrackId, swapped[i] as TrackId];
+  [swapped[i], swapped[j]] = [swapped[j]!, swapped[i]!];
   return swapped;
+}
+
+/** Remove deleted dynamic tracks from both layout channels. */
+export function removeTrackIdsFromLayout(
+  trackOrder: readonly string[],
+  collapsed: Readonly<Record<string, boolean>>,
+  removedIds: readonly string[],
+): { trackOrder: string[]; collapsed: Record<string, boolean> } {
+  const removed = new Set(removedIds);
+  return {
+    trackOrder: trackOrder.filter((id) => !removed.has(id)),
+    collapsed: Object.fromEntries(
+      Object.entries(collapsed).filter(([id]) => !removed.has(id)),
+    ),
+  };
 }
 
 // ── Store actions ────────────────────────────────────────────────────────
@@ -130,28 +171,34 @@ export function computeReorder(
 /** The collapse/reorder dispatchers the shell's caret + grip handlers call. */
 export interface TrackManageActions {
   /** Toggle a track's collapsed state (caret click / Enter / Space). */
-  toggleCollapse(id: TrackId): void;
+  toggleCollapse(id: string): void;
   /** Reorder: drop `dragged` onto `target`, swapping their positions. */
-  reorder(dragged: TrackId, target: TrackId): void;
+  reorder(dragged: string, target: string): void;
 }
 
 /** Bind the track-management actions to a store (dispatch uiPrefs updates). */
 export function createTrackManageActions(store: ViewerStore): TrackManageActions {
   return {
-    toggleCollapse(id: TrackId): void {
-      if (!isManageableTrack(id)) return;
+    toggleCollapse(id: string): void {
+      const dynamicIds = store.getState().view.fieldCharts.map(
+        (chart) => chart.id,
+      );
+      if (!isManageableTrack(id, dynamicIds)) return;
       const cur = store.getState().uiPrefs.collapsed;
       store.update("uiPrefs", {
         collapsed: { ...cur, [id]: !(cur[id] === true) },
       });
     },
-    reorder(dragged: TrackId, target: TrackId): void {
+    reorder(dragged: string, target: string): void {
+      const dynamicIds = store.getState().view.fieldCharts.map(
+        (chart) => chart.id,
+      );
       const cur = store.getState().uiPrefs.trackOrder;
-      const next = computeReorder(cur, dragged, target);
+      const next = computeReorder(cur, dragged, target, dynamicIds);
       // Only write on an actual change (no store thrash / needless render).
       // Compare against the RESOLVED current order, not the raw stored value:
       // a same-track drop with an empty stored order must not normalize-write.
-      if (sameOrder(manageableOrder(cur), next)) return;
+      if (sameOrder(orderedManagedTrackIds(cur, dynamicIds), next)) return;
       store.update("uiPrefs", { trackOrder: next });
     },
   };
@@ -229,9 +276,9 @@ function storageSet(key: string, value: string): void {
 }
 
 /**
- * Read persisted track prefs, or null when none are stored / the stored value
- * is unusable. Defensive parse: a malformed blob (hand-edited, older schema)
- * yields null rather than throwing, so a corrupt entry degrades to defaults.
+ * Read persisted built-in track prefs, or null when none are stored / the
+ * stored value is unusable. Dynamic ids are discarded even if an older or
+ * hand-edited blob contains them.
  */
 export function loadTrackPrefs(): TrackPrefs | null {
   const raw = storageGet(TRACK_PREFS_STORAGE_KEY);
@@ -241,13 +288,23 @@ export function loadTrackPrefs(): TrackPrefs | null {
     if (parsed === null || typeof parsed !== "object") return null;
     const obj = parsed as { trackOrder?: unknown; collapsed?: unknown };
     const trackOrder = Array.isArray(obj.trackOrder)
-      ? obj.trackOrder.filter((v): v is string => typeof v === "string")
+      ? obj.trackOrder.filter(
+          (value): value is string =>
+            typeof value === "string" && STATIC_MANAGEABLE.has(value),
+        )
       : [];
-    const collapsed = parseBoolMap(obj.collapsed);
+    const collapsed = Object.fromEntries(
+      Object.entries(parseBoolMap(obj.collapsed)).filter(([id]) =>
+        STATIC_MANAGEABLE.has(id),
+      ),
+    );
     const cr = (obj as { collapsedRuntimes?: unknown }).collapsedRuntimes;
     const collapsedRuntimes = cr !== undefined ? parseBoolMap(cr) : undefined;
     const lh = (obj as { lanesHeight?: unknown }).lanesHeight;
-    const lanesHeight = typeof lh === "number" && Number.isFinite(lh) && lh > 0 ? lh : undefined;
+    const lanesHeight =
+      typeof lh === "number" && Number.isFinite(lh) && lh > 0
+        ? lh
+        : undefined;
     return {
       trackOrder,
       collapsed,
@@ -259,18 +316,27 @@ export function loadTrackPrefs(): TrackPrefs | null {
   }
 }
 
-/** Persist track prefs (order + collapse map + runtime fold map + lanes box
- *  height) to localStorage. */
+/** Persist built-in track prefs + runtime folds + lanes height. */
 export function saveTrackPrefs(prefs: TrackPrefs): void {
+  const trackOrder = prefs.trackOrder.filter((id) =>
+    STATIC_MANAGEABLE.has(id),
+  );
+  const collapsed = Object.fromEntries(
+    Object.entries(prefs.collapsed).filter(([id]) =>
+      STATIC_MANAGEABLE.has(id),
+    ),
+  );
   storageSet(
     TRACK_PREFS_STORAGE_KEY,
     JSON.stringify({
-      trackOrder: prefs.trackOrder,
-      collapsed: prefs.collapsed,
+      trackOrder,
+      collapsed,
       ...(prefs.collapsedRuntimes !== undefined
         ? { collapsedRuntimes: prefs.collapsedRuntimes }
         : {}),
-      ...(prefs.lanesHeight !== undefined ? { lanesHeight: prefs.lanesHeight } : {}),
+      ...(prefs.lanesHeight !== undefined
+        ? { lanesHeight: prefs.lanesHeight }
+        : {}),
     }),
   );
 }
@@ -292,7 +358,9 @@ export function hydrateTrackPrefs(store: ViewerStore): void {
     ...(prefs.collapsedRuntimes !== undefined
       ? { collapsedRuntimes: prefs.collapsedRuntimes }
       : {}),
-    ...(prefs.lanesHeight !== undefined ? { lanesViewportHeight: prefs.lanesHeight } : {}),
+    ...(prefs.lanesHeight !== undefined
+      ? { lanesViewportHeight: prefs.lanesHeight }
+      : {}),
   });
 }
 
@@ -305,7 +373,17 @@ export function hydrateTrackPrefs(store: ViewerStore): void {
  */
 export function mountTrackPrefsPersistence(store: ViewerStore): () => void {
   return store.subscribe(["uiPrefs"], (state) => {
-    const { trackOrder, collapsed, collapsedRuntimes, lanesViewportHeight } = state.uiPrefs;
-    saveTrackPrefs({ trackOrder, collapsed, collapsedRuntimes, lanesHeight: lanesViewportHeight });
+    const {
+      trackOrder,
+      collapsed,
+      collapsedRuntimes,
+      lanesViewportHeight,
+    } = state.uiPrefs;
+    saveTrackPrefs({
+      trackOrder,
+      collapsed,
+      collapsedRuntimes,
+      lanesHeight: lanesViewportHeight,
+    });
   });
 }

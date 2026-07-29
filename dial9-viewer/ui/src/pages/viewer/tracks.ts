@@ -15,13 +15,19 @@ import { html, type TemplateResult } from "lit-html";
 import { repeat } from "lit-html/directives/repeat.js";
 import { createCanvasSizer } from "../../lib/canvas/dpr.js";
 import type { CanvasSizer } from "../../lib/canvas/dpr.js";
-import { LABEL_W, lanesScrollbarWidth, trackGeometry } from "../../lib/canvas/track-layout.js";
+import { timePanelLayout } from "../../lib/canvas/layout.js";
+import {
+  LABEL_W,
+  TRACKS,
+  lanesScrollbarWidth,
+  trackGeometry,
+} from "../../lib/canvas/track-layout.js";
 import type { TrackId, TrackSpec } from "../../lib/canvas/track-layout.js";
 import {
   COLLAPSED_TRACK_H,
   isCollapsed,
   isManageableTrack,
-  orderedTracks,
+  orderedManagedTrackIds,
   type TrackManageActions,
 } from "./track-management.js";
 import { renderTimeAxis, type AxisInputs } from "./axis.js";
@@ -31,6 +37,12 @@ import type { SpansTrackController } from "./spans-track.js";
 import type { QueueTrackController } from "./queue-track.js";
 import type { TaskDetailTrackController } from "./task-detail-track.js";
 import type { EventsTrackController } from "./events-track.js";
+import type { FieldChartSpec } from "../../types/state.js";
+import {
+  FIELD_CHART_TRACK_HEIGHT,
+  type FieldChartsController,
+} from "./field-charts.js";
+import { fieldChartLabel } from "./field-chart-model.js";
 
 export interface TracksViewModel {
   /** True once a trace is loaded (tracks render empty until then). */
@@ -57,6 +69,8 @@ export interface TracksViewModel {
    */
   trackOrder: readonly string[];
   collapsed: Readonly<Record<string, boolean>>;
+  /** Dynamic tracks available to the shared manageable-track block. */
+  fieldCharts: readonly FieldChartSpec[];
   /**
    * Tracks the loaded trace carries no data for. These are dropped from the
    * column entirely, unlike a collapsed track (which keeps its row so it can be
@@ -80,8 +94,57 @@ export interface TracksViewModel {
  * the loaded trace has no data for. Collapsed tracks REMAIN visible
  * (label-only) - collapse is a height override, not a hide.
  */
-export function visibleTracks(vm: TracksViewModel): TrackSpec[] {
-  return orderedTracks(vm.trackOrder).filter((t) => {
+export interface FieldChartTrackSpec {
+  id: string;
+  label: string;
+  height: number;
+  chart: FieldChartSpec;
+}
+
+export type ViewerTrackSpec = TrackSpec | FieldChartTrackSpec;
+
+function isFieldChartTrack(
+  track: ViewerTrackSpec,
+): track is FieldChartTrackSpec {
+  return "chart" in track;
+}
+
+function accessibleTrackLabel(track: ViewerTrackSpec): string {
+  return isFieldChartTrack(track)
+    ? `${track.chart.eventName} · ${track.chart.field}`
+    : track.label;
+}
+
+/** Unified structural + manageable track order. */
+export function orderedViewerTracks(vm: TracksViewModel): ViewerTrackSpec[] {
+  const dynamicIds = vm.fieldCharts.map((chart) => chart.id);
+  const staticById = new Map(
+    TRACKS.filter((track) => isManageableTrack(track.id))
+      .map((track) => [track.id, track] as const),
+  );
+  const dynamicById = new Map(
+    vm.fieldCharts.map((chart) => [
+      chart.id,
+      {
+        id: chart.id,
+        label: fieldChartLabel(chart.field),
+        height: FIELD_CHART_TRACK_HEIGHT,
+        chart,
+      } satisfies FieldChartTrackSpec,
+    ]),
+  );
+  const structural = TRACKS.filter(
+    (track) => !isManageableTrack(track.id),
+  );
+  const managed = orderedManagedTrackIds(vm.trackOrder, dynamicIds)
+    .map((id) => staticById.get(id as TrackId) ?? dynamicById.get(id))
+    .filter((track): track is ViewerTrackSpec => track !== undefined);
+  return [...structural, ...managed];
+}
+
+export function visibleTracks(vm: TracksViewModel): ViewerTrackSpec[] {
+  return orderedViewerTracks(vm).filter((t) => {
+    if (isFieldChartTrack(t)) return true;
     if (t.selectionOnly && !vm.taskSelected) return false;
     if (vm.hasTrace && vm.emptyTracks.has(t.id)) return false;
     return true;
@@ -95,10 +158,13 @@ export function visibleTracks(vm: TracksViewModel): TrackSpec[] {
  * (`.d9-track-manage.is-collapsed`) hides the drawing body.
  */
 function effectiveTrack(
-  t: TrackSpec,
+  t: ViewerTrackSpec,
   collapsed: Readonly<Record<string, boolean>>,
-): TrackSpec {
-  return isCollapsed(collapsed, t.id) ? { ...t, height: COLLAPSED_TRACK_H } : t;
+  dynamicIds: readonly string[],
+): ViewerTrackSpec {
+  return isCollapsed(collapsed, t.id, dynamicIds)
+    ? { ...t, height: COLLAPSED_TRACK_H }
+    : t;
 }
 
 /**
@@ -118,8 +184,10 @@ export function tracksTemplate(
   taskDetailTrack?: TaskDetailTrackController,
   eventsTrack?: EventsTrackController,
   queueTrack?: QueueTrackController,
+  fieldCharts?: FieldChartsController,
 ): TemplateResult {
   const tracks = visibleTracks(vm);
+  const dynamicIds = vm.fieldCharts.map((chart) => chart.id);
   return html`
     <div
       class="d9-tracks"
@@ -135,7 +203,7 @@ export function tracksTemplate(
         // until its next paint.
         (t) => t.id,
         (t) => {
-          const eff = effectiveTrack(t, vm.collapsed);
+          const eff = effectiveTrack(t, vm.collapsed, dynamicIds);
           const inner = innerRow(
             eff,
             vm,
@@ -143,13 +211,14 @@ export function tracksTemplate(
             taskDetailTrack,
             eventsTrack,
             queueTrack,
+            fieldCharts,
           );
           // Manageable tracks (the foldable analysis surfaces) gain the shell-
           // owned collapse caret + reorder grip; structural/task-detail tracks
           // render bare (they are pinned). The wrapper is outside each track's
           // own row renderer, so the delegation is unchanged.
-          return isManageableTrack(t.id)
-            ? manageWrapper(t, vm, actions, inner)
+          return isManageableTrack(t.id, dynamicIds)
+            ? manageWrapper(t, vm, actions, inner, dynamicIds)
             : inner;
         },
       )}
@@ -163,13 +232,18 @@ export function tracksTemplate(
  * track carries the label-only height.
  */
 function innerRow(
-  t: TrackSpec,
+  t: ViewerTrackSpec,
   vm: TracksViewModel,
   spansTrack?: SpansTrackController,
   taskDetailTrack?: TaskDetailTrackController,
   eventsTrack?: EventsTrackController,
   queueTrack?: QueueTrackController,
+  fieldCharts?: FieldChartsController,
 ): TemplateResult {
+  if (isFieldChartTrack(t) && fieldCharts !== undefined) {
+    return fieldCharts.rowTemplate(t.chart, t.height);
+  }
+  if (isFieldChartTrack(t)) return html``;
   if (t.id === "lanes") return lanesTrackRow(t, vm.lanesViewportHeight);
   if (t.id === "spans" && spansTrack !== undefined) return spansTrack.rowTemplate(t);
   if (t.id === "queue" && queueTrack !== undefined) return queueTrack.rowTemplate(t);
@@ -230,9 +304,9 @@ function lanesTrackRow(t: TrackSpec, viewportHeight: number): TemplateResult {
 // Id of the track whose grip is being dragged; module-level so `drop` can
 // read it without relying on DataTransfer (jsdom/older browsers vary). Set on
 // dragstart, cleared on dragend/drop. Transient, like the `sizers` memo below.
-let dragSourceId: TrackId | null = null;
+let dragSourceId: string | null = null;
 
-function onGripDragStart(e: DragEvent, id: TrackId): void {
+function onGripDragStart(e: DragEvent, id: string): void {
   dragSourceId = id;
   if (e.dataTransfer !== null) {
     e.dataTransfer.effectAllowed = "move";
@@ -245,19 +319,19 @@ function onGripDragStart(e: DragEvent, id: TrackId): void {
   }
 }
 
-function onRowDragOver(e: DragEvent, id: TrackId): void {
+function onRowDragOver(e: DragEvent, id: string): void {
   // Only a manageable target accepts a drop; preventDefault enables it.
-  if (dragSourceId !== null && dragSourceId !== id && isManageableTrack(id)) {
+  if (dragSourceId !== null && dragSourceId !== id) {
     e.preventDefault();
     if (e.dataTransfer !== null) e.dataTransfer.dropEffect = "move";
   }
 }
 
-function onRowDrop(e: DragEvent, targetId: TrackId, actions: TrackManageActions): void {
+function onRowDrop(e: DragEvent, targetId: string, actions: TrackManageActions): void {
   e.preventDefault();
   const src = dragSourceId;
   dragSourceId = null;
-  if (src === null || src === targetId || !isManageableTrack(targetId)) return;
+  if (src === null || src === targetId) return;
   actions.reorder(src, targetId);
 }
 
@@ -271,12 +345,14 @@ function onGripDragEnd(): void {
  * block) and carries `is-collapsed` so CSS can hide the drawing body.
  */
 function manageWrapper(
-  t: TrackSpec,
+  t: ViewerTrackSpec,
   vm: TracksViewModel,
   actions: TrackManageActions,
   inner: TemplateResult,
+  dynamicIds: readonly string[],
 ): TemplateResult {
-  const collapsed = isCollapsed(vm.collapsed, t.id);
+  const collapsed = isCollapsed(vm.collapsed, t.id, dynamicIds);
+  const accessibleLabel = accessibleTrackLabel(t);
   return html`
     <div
       class="d9-track-manage ${collapsed ? "is-collapsed" : ""}"
@@ -290,18 +366,22 @@ function manageWrapper(
           class="d9-track-caret"
           aria-expanded=${collapsed ? "false" : "true"}
           aria-label=${collapsed
-            ? `Expand ${t.label} track`
-            : `Collapse ${t.label} track`}
+            ? `Expand ${accessibleLabel} track`
+            : `Collapse ${accessibleLabel} track`}
           title=${collapsed ? "Expand track" : "Collapse track"}
           @click=${() => actions.toggleCollapse(t.id)}
         ></button>
-        <span class="d9-track-strip-name" aria-hidden="true">${t.label}</span>
+        <span
+          class="d9-track-strip-name"
+          aria-hidden="true"
+          title=${accessibleLabel}
+        >${t.label}</span>
         <span
           class="d9-track-grip"
           draggable="true"
           role="button"
           tabindex="-1"
-          aria-label=${`Drag to reorder ${t.label} track`}
+          aria-label=${`Drag to reorder ${accessibleLabel} track`}
           title="Drag to reorder"
           @dragstart=${(e: DragEvent) => onGripDragStart(e, t.id)}
           @dragend=${onGripDragEnd}
@@ -340,7 +420,10 @@ export interface TrackSizing {
 
 // One sizer per live canvas element; keyed by the element so lit-html node
 // reuse keeps the same sizer (and its geometry memo) across frames.
-const sizers = new WeakMap<HTMLCanvasElement, CanvasSizer<CanvasRenderingContext2D>>();
+const sizers = new WeakMap<
+  HTMLCanvasElement,
+  CanvasSizer<CanvasRenderingContext2D>
+>();
 
 /**
  * Measure the track column and size every track canvas to the shared drawW
@@ -358,6 +441,7 @@ export function sizeTracks(
   taskDetailTrack?: TaskDetailTrackController,
   eventsTrack?: EventsTrackController,
   queueTrack?: QueueTrackController,
+  fieldCharts?: FieldChartsController,
 ): TrackSizing[] {
   const dpr = (typeof devicePixelRatio === "number" ? devicePixelRatio : 1) || 1;
   // Full column width and the LANES-BOX scrollbar gutter, so every track's draw
@@ -365,6 +449,7 @@ export function sizeTracks(
   // scrollbar, not the column).
   const pw = columnEl.clientWidth;
   const scrollbarW = lanesScrollbarWidth(columnEl);
+  const dynamicIds = vm.fieldCharts.map((chart) => chart.id);
   const out: TrackSizing[] = [];
   for (const track of visibleTracks(vm)) {
     // A collapsed track is label-only: its drawing body is hidden by CSS
@@ -373,8 +458,40 @@ export function sizeTracks(
     // expanding flips this off and a normal render+size pass re-paints it from
     // CURRENT windowed state, so a collapsed track still respects windowing on
     // re-expand.
-    if (isCollapsed(vm.collapsed, track.id)) {
+    if (isCollapsed(vm.collapsed, track.id, dynamicIds)) {
+      if (isFieldChartTrack(track)) fieldCharts?.deactivate(track.id);
       out.push({ id: track.id, drawW: 0, height: COLLAPSED_TRACK_H });
+      continue;
+    }
+    const canvas = columnEl.querySelector<HTMLCanvasElement>(
+      `canvas[data-track-canvas="${track.id}"]`,
+    );
+    if (!canvas) continue;
+    const drawW = timePanelLayout({
+      pw,
+      scrollbarW,
+      viewStart: vm.viewStart,
+      viewEnd: vm.viewEnd,
+    }).drawW;
+    // Narrow-panel contract (lib/canvas/layout): drawW can be <= 0 on a
+    // collapsed column; render nothing but keep the slot.
+    if (drawW <= 0) {
+      if (isFieldChartTrack(track)) fieldCharts?.deactivate(track.id);
+      out.push({ id: track.id, drawW: 0, height: track.height });
+      continue;
+    }
+    if (isFieldChartTrack(track)) {
+      fieldCharts?.paint(
+        track.chart,
+        canvas,
+        drawW,
+        track.height,
+        dpr,
+        vm.viewStart,
+        vm.viewEnd,
+      );
+      canvas.dataset["drawW"] = String(Math.round(drawW));
+      out.push({ id: track.id, drawW, height: track.height });
       continue;
     }
     // A track whose content is owned by a mounted renderer sizes AND draws its
@@ -385,10 +502,6 @@ export function sizeTracks(
       out.push({ id: track.id, drawW: 0, height: track.height });
       continue;
     }
-    const canvas = columnEl.querySelector<HTMLCanvasElement>(
-      `canvas[data-track-canvas="${track.id}"]`,
-    );
-    if (!canvas) continue;
     const geometry = trackGeometry(track, {
       pw,
       scrollbarW,
@@ -396,13 +509,6 @@ export function sizeTracks(
       viewEnd: vm.viewEnd,
       dpr,
     });
-    const drawW = geometry.time.drawW;
-    // Narrow-panel contract (lib/canvas/layout): drawW can be <= 0 on a
-    // collapsed column; render nothing but keep the slot.
-    if (drawW <= 0) {
-      out.push({ id: track.id, drawW: 0, height: track.height });
-      continue;
-    }
     // The spans track owns its own canvas sizing + draw: it reserves a controls
     // strip above the canvas, so its draw area is shorter than the full track
     // height. Delegate and skip the uniform placeholder path.

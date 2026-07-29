@@ -25,7 +25,9 @@ import {
   isManageableTrack,
   loadTrackPrefs,
   mountTrackPrefsPersistence,
+  orderedManagedTrackIds,
   orderedTracks,
+  removeTrackIdsFromLayout,
   saveTrackPrefs,
 } from "./track-management.js";
 
@@ -76,7 +78,7 @@ afterEach(() => {
 });
 
 describe("manageable tracks", () => {
-  it("collapse/reorder apply to the four foldable analysis tracks only", () => {
+  it("includes built-in analysis tracks and currently active field charts", () => {
     expect([...MANAGEABLE_TRACK_IDS].sort()).toEqual(
       ["cpu", "events", "queue", "spans"].sort(),
     );
@@ -86,6 +88,9 @@ describe("manageable tracks", () => {
     for (const id of ["timeline", "lanes", "task-detail"] as TrackId[]) {
       expect(isManageableTrack(id)).toBe(false);
     }
+    expect(isManageableTrack("fc1", ["fc1"])).toBe(true);
+    expect(isManageableTrack("fc1")).toBe(false);
+    expect(isManageableTrack("arbitrary", ["arbitrary"])).toBe(false);
   });
 });
 
@@ -156,6 +161,11 @@ describe("isCollapsed", () => {
     expect(isCollapsed({ lanes: true }, "lanes")).toBe(false);
     expect(isCollapsed({ "task-detail": true }, "task-detail")).toBe(false);
   });
+
+  it("accepts an active field chart without making arbitrary ids manageable", () => {
+    expect(isCollapsed({ fc1: true }, "fc1", ["fc1"])).toBe(true);
+    expect(isCollapsed({ fc1: true }, "fc1")).toBe(false);
+  });
 });
 
 describe("computeReorder (drop = swap position)", () => {
@@ -202,6 +212,17 @@ describe("computeReorder (drop = swap position)", () => {
       "cpu",
     ]);
   });
+
+  it("swaps field charts with built-in tracks", () => {
+    expect(
+      computeReorder(
+        ["cpu", "fc2", "queue", "fc1", "spans", "events"],
+        "fc2",
+        "spans",
+        ["fc1", "fc2"],
+      ),
+    ).toEqual(["cpu", "spans", "queue", "fc1", "fc2", "events"]);
+  });
 });
 
 describe("store actions", () => {
@@ -239,6 +260,33 @@ describe("store actions", () => {
     actions.reorder("cpu", "cpu"); // same track -> no change
     sched.flush();
     expect(notifications).toBe(0);
+  });
+
+  it("collapses and reorders an active field chart", () => {
+    const store = createViewerStore({ scheduler: () => {} });
+    store.update("view", {
+      fieldCharts: [
+        {
+          id: "fc1",
+          eventName: "Metric",
+          field: "value",
+          kind: "gauge",
+        },
+      ],
+    });
+    const actions = createTrackManageActions(store);
+
+    actions.toggleCollapse("fc1");
+    actions.reorder("fc1", "queue");
+
+    expect(uiPrefs(store).collapsed["fc1"]).toBe(true);
+    expect(uiPrefs(store).trackOrder).toEqual([
+      "cpu",
+      "fc1",
+      "spans",
+      "events",
+      "queue",
+    ]);
   });
 });
 
@@ -306,6 +354,37 @@ describe("persistence: uiPrefs survives reload (headline DoD)", () => {
     expect(prefs?.collapsed).toEqual({ cpu: true });
   });
 
+  it("never persists field-chart ids in localStorage", () => {
+    vi.stubGlobal("localStorage", fakeLocalStorage());
+
+    saveTrackPrefs({
+      trackOrder: ["cpu", "fc2", "queue", "fc1"],
+      collapsed: { cpu: true, fc1: true },
+    });
+
+    expect(loadTrackPrefs()).toEqual({
+      trackOrder: ["cpu", "queue"],
+      collapsed: { cpu: true },
+    });
+  });
+
+  it("discards field-chart ids found in an existing storage blob", () => {
+    const ls = fakeLocalStorage();
+    ls.setItem(
+      TRACK_PREFS_STORAGE_KEY,
+      JSON.stringify({
+        trackOrder: ["cpu", "fc1", "events"],
+        collapsed: { queue: true, fc1: true },
+      }),
+    );
+    vi.stubGlobal("localStorage", ls);
+
+    expect(loadTrackPrefs()).toEqual({
+      trackOrder: ["cpu", "events"],
+      collapsed: { queue: true },
+    });
+  });
+
   it("falls back to an in-memory store when localStorage throws", () => {
     vi.stubGlobal("localStorage", fakeLocalStorage({ throwOnAccess: true }));
     // save writes to the memory fallback; load reads it back (no throw).
@@ -366,5 +445,31 @@ describe("collapse height + re-expand windowing obligation", () => {
     const ids = orderedTracks([]).map((t) => t.id);
     expect(ids).toContain("spans");
     expect(isCollapsed(collapsed, "spans")).toBe(true);
+  });
+});
+
+describe("dynamic layout helpers", () => {
+  it("resolves missing field charts by numeric id after built-in tracks", () => {
+    expect(orderedManagedTrackIds([], ["fc10", "fc2"])).toEqual([
+      "cpu",
+      "queue",
+      "spans",
+      "events",
+      "fc2",
+      "fc10",
+    ]);
+  });
+
+  it("removes a closed chart from order and collapse state", () => {
+    expect(
+      removeTrackIdsFromLayout(
+        ["cpu", "fc1", "queue", "fc2"],
+        { cpu: true, fc1: true, fc2: false },
+        ["fc1"],
+      ),
+    ).toEqual({
+      trackOrder: ["cpu", "queue", "fc2"],
+      collapsed: { cpu: true, fc2: false },
+    });
   });
 });

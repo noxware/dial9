@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { visibleTracks, type TracksViewModel } from "./tracks.js";
+import {
+  orderedViewerTracks,
+  visibleTracks,
+  type TracksViewModel,
+} from "./tracks.js";
 import type { TrackId } from "../../lib/canvas/track-layout.js";
 import type { AxisInputs } from "./axis.js";
 import type { CpuInputs } from "./cpu.js";
@@ -16,13 +20,15 @@ function vm(over: Partial<TracksViewModel> = {}): TracksViewModel {
     cpu: {} as CpuInputs,
     trackOrder: [],
     collapsed: {},
+    fieldCharts: [],
     emptyTracks: new Set<TrackId>(),
     lanesViewportHeight: 130,
     ...over,
   };
 }
 
-const ids = (m: TracksViewModel): TrackId[] => visibleTracks(m).map((t) => t.id);
+const ids = (m: TracksViewModel): string[] =>
+  visibleTracks(m).map((t) => t.id);
 
 describe("visibleTracks", () => {
   it("places task detail directly under the worker lanes when a task is selected", () => {
@@ -69,5 +75,72 @@ describe("visibleTracks", () => {
       }),
     );
     expect(shown).toEqual(["timeline", "lanes", "events", "spans", "cpu"]);
+  });
+
+  it("interleaves field charts with built-in analysis tracks", () => {
+    const fieldCharts = [
+      {
+        id: "fc2",
+        eventName: "Metric",
+        field: "second_value",
+        kind: "gauge",
+      },
+      {
+        id: "fc1",
+        eventName: "Metric",
+        field: "first_value",
+        kind: "counter",
+      },
+    ] as const;
+
+    expect(
+      orderedViewerTracks(
+        vm({
+          fieldCharts,
+          trackOrder: ["cpu", "fc2", "queue", "fc1", "spans", "events"],
+        }),
+      ).map((track) => track.id),
+    ).toEqual([
+      "timeline",
+      "lanes",
+      "task-detail",
+      "cpu",
+      "fc2",
+      "queue",
+      "fc1",
+      "spans",
+      "events",
+    ]);
+  });
+
+  it("appends unordered field charts by numeric stable id", () => {
+    const fieldCharts = [
+      {
+        id: "fc10",
+        eventName: "Metric",
+        field: "ten",
+        kind: "gauge",
+      },
+      {
+        id: "fc2",
+        eventName: "Metric",
+        field: "two",
+        kind: "gauge",
+      },
+    ] as const;
+
+    expect(
+      orderedViewerTracks(vm({ fieldCharts })).map((track) => track.id),
+    ).toEqual([
+      "timeline",
+      "lanes",
+      "task-detail",
+      "cpu",
+      "queue",
+      "spans",
+      "events",
+      "fc2",
+      "fc10",
+    ]);
   });
 });

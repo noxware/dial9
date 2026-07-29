@@ -24,7 +24,9 @@ import type { ViewState } from "../../lib/url/index.js";
 import { DEFAULT_INSPECTOR_WIDTH, DEFAULT_LANES_HEIGHT } from "./store.js";
 import { POI_FILTERS } from "./poi.js";
 import {
+  compareFieldChartIds,
   fieldChartKey,
+  isFieldChartId,
   isFieldChartKind,
 } from "./field-chart-model.js";
 
@@ -321,7 +323,9 @@ export function projectViewerState(state: ReadonlyState<StoreState>): ViewState 
   }
   if (view.spanNavIndex >= 0) vs.spanNavIndex = view.spanNavIndex;
   if (view.fieldCharts.length > 0) {
-    vs.fieldCharts = view.fieldCharts.map(encodeFieldChart);
+    vs.fieldCharts = [...view.fieldCharts]
+      .sort((left, right) => compareFieldChartIds(left.id, right.id))
+      .map(encodeFieldChart);
   }
 
   const trace = state.trace.trace;
@@ -715,6 +719,17 @@ export function readViewerUrlState(search: string): ViewerUrlState {
   if (spanNavIndex !== null) out.spanNavIndex = spanNavIndex;
   const fieldCharts = decodeFieldCharts(p.getAll(P_FIELD_CHART));
   if (fieldCharts.length > 0) out.fieldCharts = fieldCharts;
+  const activeFieldChartIds = new Set(fieldCharts.map((chart) => chart.id));
+  if (out.trackOrder !== undefined) {
+    out.trackOrder = out.trackOrder.filter(
+      (id) => !isFieldChartId(id) || activeFieldChartIds.has(id),
+    );
+  }
+  if (out.collapsed !== undefined) {
+    out.collapsed = out.collapsed.filter(
+      (id) => !isFieldChartId(id) || activeFieldChartIds.has(id),
+    );
+  }
   const dataStart = num(p.get(P_DATA_START));
   const dataEnd = num(p.get(P_DATA_END));
   if (dataStart !== null || dataEnd !== null) {
@@ -729,30 +744,51 @@ export function readViewerUrlState(search: string): ViewerUrlState {
 }
 
 function encodeFieldChart(spec: FieldChartSpec): string {
-  return `${spec.eventName},${spec.field},${spec.kind}`;
+  return `${spec.id},${spec.eventName},${spec.field},${spec.kind}`;
 }
 
 function decodeFieldCharts(values: readonly string[]): FieldChartSpec[] {
-  const charts: FieldChartSpec[] = [];
-  const seen = new Set<string>();
+  const parsed: FieldChartSpec[] = [];
   for (const value of values) {
     const parts = value.split(",");
+    const [id, eventName, field, kind] = parts;
     if (
-      parts.length !== 3 ||
-      parts[0] === "" ||
-      parts[1] === "" ||
-      !isFieldChartKind(parts[2])
+      parts.length !== 4 ||
+      !isFieldChartId(id) ||
+      eventName === undefined ||
+      eventName === "" ||
+      field === undefined ||
+      field === "" ||
+      !isFieldChartKind(kind)
     ) {
       continue;
     }
-    const spec: FieldChartSpec = {
-      eventName: parts[0],
-      field: parts[1],
-      kind: parts[2],
-    };
+    parsed.push({
+      id,
+      eventName,
+      field,
+      kind,
+    });
+  }
+
+  // Parameter order is not state. Numeric id then semantic key provides a
+  // deterministic winner when a URL repeats an id or a chart definition.
+  parsed.sort((left, right) => {
+    const byId = compareFieldChartIds(left.id, right.id);
+    if (byId !== 0) return byId;
+    const leftKey = fieldChartKey(left);
+    const rightKey = fieldChartKey(right);
+    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+  });
+  const charts: FieldChartSpec[] = [];
+  const seenIds = new Set<string>();
+  const seenSpecs = new Set<string>();
+  for (const spec of parsed) {
+    if (seenIds.has(spec.id)) continue;
+    seenIds.add(spec.id);
     const key = fieldChartKey(spec);
-    if (seen.has(key)) continue;
-    seen.add(key);
+    if (seenSpecs.has(key)) continue;
+    seenSpecs.add(key);
     charts.push(spec);
   }
   return charts;

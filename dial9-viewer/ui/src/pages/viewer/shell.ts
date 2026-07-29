@@ -12,10 +12,7 @@ import { html, render, nothing, type TemplateResult } from "lit-html";
 import type { ViewerStore } from "../../store/store.js";
 import type { StoreState } from "../../types/state.js";
 import { tracksTemplate, sizeTracks, type TracksViewModel } from "./tracks.js";
-import {
-  LABEL_W,
-  type TrackId,
-} from "../../lib/canvas/track-layout.js";
+import { type TrackId } from "../../lib/canvas/track-layout.js";
 import { deriveAxisInputs } from "./axis.js";
 import { deriveCpuInputs } from "./cpu.js";
 import { createSpansTrack, type SpansTrackController } from "./spans-track.js";
@@ -32,9 +29,16 @@ import {
   type TrackManageActions,
 } from "./track-management.js";
 import type { KeyBinding } from "../../lib/interact/keyboard.js";
+import {
+  createFieldCharts,
+  type FieldChartsController,
+  type FieldChartsDeps,
+} from "./field-charts.js";
 
 /** Callbacks the shell chrome needs from the page entry. */
 export interface ShellDeps extends ToolbarDeps {
+  /** Dialog and notification dependencies for dynamic field-chart tracks. */
+  fieldCharts: FieldChartsDeps;
   /** Toggle the help overlay (bound to the `?` button and key). */
   toggleHelp(): void;
   /**
@@ -89,6 +93,7 @@ function viewModel(state: StoreState): TracksViewModel {
     // Track management: the order + collapse map the track column reads.
     trackOrder: state.uiPrefs.trackOrder,
     collapsed: state.uiPrefs.collapsed,
+    fieldCharts: state.view.fieldCharts,
     lanesViewportHeight: state.uiPrefs.lanesViewportHeight,
   };
 }
@@ -152,6 +157,7 @@ function shellTemplate(
   taskDetailTrack: TaskDetailTrackController,
   eventsTrack: EventsTrackController,
   queueTrack: QueueTrackController,
+  fieldCharts: FieldChartsController,
 ): TemplateResult {
   return html`
     <header class="d9-toolbar" role="banner">
@@ -212,14 +218,9 @@ function shellTemplate(
               taskDetailTrack,
               eventsTrack,
               queueTrack,
+              fieldCharts,
             )
           : emptyStateTemplate()}
-        <!-- Dynamic field charts are an imperative stack below the fixed
-             tracks. mountFieldCharts owns this binding-free host. -->
-        <div
-          class="d9-field-charts"
-          style="--d9-label-w:${LABEL_W}px"
-        ></div>
       </main>
       ${inspectorTemplate()}
     </div>
@@ -246,8 +247,8 @@ export interface MountedShell {
   toastRegion: HTMLElement;
   /** The track column element (canvas host for sizing). */
   trackColumn: HTMLElement;
-  /** Binding-free host for user-created field charts. */
-  fieldChartRegion: HTMLElement;
+  /** User-created field-chart renderer and inspector actions. */
+  fieldCharts: FieldChartsController;
   /**
    * The issues rail. Exposed so the entry can supply its lane-reveal action
    * after mounting the lanes, which happens after the shell constructs this.
@@ -295,6 +296,11 @@ export function mountShell(
   // rendered while a task is selected.
   const taskDetailTrack = createTaskDetailTrack(store);
   const eventsTrack = createEventsTrack(store);
+  const fieldCharts = createFieldCharts(
+    root.ownerDocument,
+    store,
+    deps.fieldCharts,
+  );
   // Toolbar (file info / analysis / time) and the issues rail: store-wired
   // controllers filling the toolbar slots + the body's left column.
   const toolbar = createToolbar(store, deps);
@@ -319,21 +325,42 @@ export function mountShell(
         taskDetailTrack,
         eventsTrack,
         queueTrack,
+        fieldCharts,
       ),
       root,
     );
     const column = root.querySelector<HTMLElement>(".d9-track-column");
     if (column && vm.hasTrace) {
-      sizeTracks(column, vm, spansTrack, taskDetailTrack, eventsTrack, queueTrack);
+      sizeTracks(
+        column,
+        vm,
+        spansTrack,
+        taskDetailTrack,
+        eventsTrack,
+        queueTrack,
+        fieldCharts,
+      );
     }
   }
 
   // Render the chrome whenever any chrome-affecting slice changes. The shell is
   // chrome, so it renders declaratively from state; track/inspector content
   // components add their own slice subscriptions against this store.
+  let renderedFieldCharts = store.getState().view.fieldCharts;
   const unsubscribe = store.subscribe(
-    ["trace", "viewport", "selection", "poi", "uiPrefs"],
-    () => renderPass(),
+    ["trace", "viewport", "selection", "poi", "uiPrefs", "view"],
+    (state, changed) => {
+      const fieldChartsChanged =
+        state.view.fieldCharts !== renderedFieldCharts;
+      renderedFieldCharts = state.view.fieldCharts;
+      const shellSliceChanged =
+        changed.has("trace") ||
+        changed.has("viewport") ||
+        changed.has("selection") ||
+        changed.has("poi") ||
+        changed.has("uiPrefs");
+      if (shellSliceChanged || fieldChartsChanged) renderPass();
+    },
   );
 
   // Resize reflow: re-render on window resize so the track canvases refit.
@@ -352,7 +379,6 @@ export function mountShell(
 
   const toastRegion = ensureRegion(root, ".d9-toast-region");
   const trackColumn = ensureRegion(root, ".d9-track-column");
-  const fieldChartRegion = ensureRegion(root, ".d9-field-charts");
   const inspectorRegion = ensureRegion(root, ".d9-inspector");
   const minimapRegion = ensureRegion(root, ".d9-minimap");
   const statusRegion = ensureRegion(root, ".d9-status");
@@ -360,7 +386,7 @@ export function mountShell(
   return {
     toastRegion,
     trackColumn,
-    fieldChartRegion,
+    fieldCharts,
     // Exposed so the entry can hand the rail its lane-reveal action once the
     // lanes are mounted (they mount after the shell).
     rail,
@@ -375,6 +401,7 @@ export function mountShell(
       queueTrack.dispose();
       taskDetailTrack.dispose();
       eventsTrack.dispose();
+      fieldCharts.dispose();
       toolbar.dispose();
       rail.dispose();
     },

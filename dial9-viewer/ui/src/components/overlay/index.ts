@@ -61,13 +61,9 @@ function columnGeometry(
   // content instead (hint chips + tracks), floored at the visible height.
   const flowContent =
     trackColumn.querySelector<HTMLElement>(".d9-tracks") ?? trackColumn;
-  const fieldCharts =
-    trackColumn.querySelector<HTMLElement>(".d9-field-charts");
   const hint = trackColumn.querySelector<HTMLElement>(".d9-hint-chips");
   const contentHeight =
-    (hint?.offsetHeight ?? 0) +
-    flowContent.offsetHeight +
-    (fieldCharts?.offsetHeight ?? 0);
+    (hint?.offsetHeight ?? 0) + flowContent.offsetHeight;
   return {
     layout: timePanelLayout({ pw, scrollbarW, viewStart, viewEnd }),
     pw,

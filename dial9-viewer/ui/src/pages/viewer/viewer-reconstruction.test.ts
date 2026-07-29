@@ -162,6 +162,7 @@ describe("viewer deep-link reconstruction", () => {
       spanNavIndex: 5,
       fieldCharts: [
         {
+          id: "fc1",
           eventName: "ProcessResourceUsageEvent",
           field: "user_cpu_ns",
           kind: "counter",
@@ -228,8 +229,12 @@ describe("viewer deep-link reconstruction", () => {
       regionInspectFocus: "same::frame",
       spanNavIndex: 5,
       fieldCharts: [
-        { eventName: "Metric", field: "value", kind: "gauge" },
+        { id: "fc1", eventName: "Metric", field: "value", kind: "gauge" },
       ],
+    });
+    store.update("uiPrefs", {
+      trackOrder: ["cpu", "fc1", "events"],
+      collapsed: { fc1: true },
     });
     expect(store.getState().selection.pollDetail).toBe(oldPoll);
     expect(store.getState().selection.pinnedEvent?.events).toContain(oldEvent);
@@ -254,8 +259,12 @@ describe("viewer deep-link reconstruction", () => {
       regionInspectFocus: "same::frame",
       spanNavIndex: 5,
       fieldCharts: [
-        { eventName: "Metric", field: "value", kind: "gauge" },
+        { id: "fc1", eventName: "Metric", field: "value", kind: "gauge" },
       ],
+    });
+    expect(store.getState().uiPrefs).toMatchObject({
+      trackOrder: ["cpu", "fc1", "events"],
+      collapsed: { fc1: true },
     });
   });
 
@@ -296,6 +305,8 @@ describe("viewer deep-link reconstruction", () => {
       taskIndex: 7,
     });
     store.update("uiPrefs", {
+      trackOrder: ["cpu", "fc1", "events"],
+      collapsed: { queue: true, fc1: true },
       spanFilter: "request_id",
       timeMode: "abs",
       stacksAsFlamegraph: true,
@@ -317,7 +328,7 @@ describe("viewer deep-link reconstruction", () => {
       regionInspectFocus: "old::frame",
       spanNavIndex: 5,
       fieldCharts: [
-        { eventName: "Metric", field: "value", kind: "counter" },
+        { id: "fc1", eventName: "Metric", field: "value", kind: "counter" },
       ],
     });
 
@@ -346,6 +357,8 @@ describe("viewer deep-link reconstruction", () => {
       taskIndex: -1,
     });
     expect(state.uiPrefs).toMatchObject({
+      trackOrder: ["cpu", "events"],
+      collapsed: { queue: true },
       spanFilter: "request_id",
       timeMode: "abs",
       stacksAsFlamegraph: true,

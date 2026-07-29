@@ -3,8 +3,12 @@ import type { CustomTraceEvent } from "../../lib/trace/index.js";
 import type { FieldChartSpec } from "../../types/state.js";
 import {
   hasFieldChartData,
+  compareFieldChartIds,
+  fieldChartLabel,
+  isFieldChartId,
   isGraphableFieldValue,
   materializeFieldChart,
+  nextFieldChartId,
   visibleFieldChartStats,
 } from "./field-chart-model.js";
 
@@ -22,7 +26,7 @@ function event(
 }
 
 function spec(kind: FieldChartSpec["kind"]): FieldChartSpec {
-  return { eventName: "Metric", field: "value", kind };
+  return { id: "fc1", eventName: "Metric", field: "value", kind };
 }
 
 describe("field chart materialization", () => {
@@ -45,6 +49,11 @@ describe("field chart materialization", () => {
       [10, 1],
       [25, 2],
       [30, 3],
+    ]);
+    expect(series.points.map((point) => point.breakBefore)).toEqual([
+      true,
+      true,
+      false,
     ]);
     expect(series.unit).toBe("ns");
   });
@@ -135,6 +144,29 @@ describe("field chart materialization", () => {
     expect(
       hasFieldChartData(materializeFieldChart([event(1, 1)], spec("counter"))),
     ).toBe(false);
+  });
+});
+
+describe("field chart identity and labels", () => {
+  it("validates, allocates and numerically orders short ids", () => {
+    expect(isFieldChartId("fc1")).toBe(true);
+    expect(isFieldChartId("fc0")).toBe(false);
+    expect(isFieldChartId("field1")).toBe(false);
+    expect(nextFieldChartId([
+      { ...spec("gauge"), id: "fc1" },
+      { ...spec("counter"), id: "fc3" },
+    ])).toBe("fc2");
+    expect(["fc10", "fc2", "fc1"].sort(compareFieldChartIds)).toEqual([
+      "fc1",
+      "fc2",
+      "fc10",
+    ]);
+  });
+
+  it("humanizes a field name without rewriting its words", () => {
+    expect(fieldChartLabel("involuntary_context_switches")).toBe(
+      "Involuntary context switches",
+    );
   });
 });
 

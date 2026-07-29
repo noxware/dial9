@@ -1,13 +1,10 @@
-import { html, render, type TemplateResult } from "lit-html";
-import { repeat } from "lit-html/directives/repeat.js";
+import { html, type TemplateResult } from "lit-html";
 import {
-  LABEL_W,
   clampX,
   createCanvasSizer,
   nsToDrawX,
   type CanvasSizer,
 } from "../../lib/canvas/index.js";
-import { lanesScrollbarWidth } from "../../lib/canvas/track-layout.js";
 import { formatFieldValue } from "../../lib/trace/index.js";
 import type { CustomTraceEvent, ParsedTrace } from "../../lib/trace/index.js";
 import type { ViewerStore } from "../../store/store.js";
@@ -24,18 +21,24 @@ import { ESC_PRIORITY } from "./esc-cascade.js";
 import {
   FIELD_CHART_KINDS,
   fieldChartKey,
+  fieldChartLabel,
   hasFieldChartData,
   isFieldChartKind,
   isGraphableFieldValue,
   materializeFieldChart,
+  nextFieldChartId,
   visibleFieldChartRange,
   visibleFieldChartStats,
   type FieldChartInterval,
   type FieldChartPoint,
   type FieldChartSeries,
 } from "./field-chart-model.js";
+import {
+  orderedManagedTrackIds,
+  removeTrackIdsFromLayout,
+} from "./track-management.js";
 
-const ROW_HEIGHT = 96;
+export const FIELD_CHART_TRACK_HEIGHT = 96;
 const CHART_TOP = 24;
 const CHART_BOTTOM = 9;
 const BACKGROUND = "#121b2e";
@@ -52,7 +55,24 @@ export interface FieldChartsDeps {
   notify(message: string, type: FieldChartNoticeType): void;
 }
 
+type FieldChartDefinition = Omit<FieldChartSpec, "id">;
+type FieldChartRequest = Omit<FieldChartSpec, "id" | "kind">;
+
 export interface FieldChartsController {
+  /** Render one row inside the shell-owned unified track column. */
+  rowTemplate(spec: FieldChartSpec, trackHeight: number): TemplateResult;
+  /** Size and paint one field-chart canvas inside the shell render pass. */
+  paint(
+    spec: FieldChartSpec,
+    canvas: HTMLCanvasElement,
+    drawW: number,
+    trackHeight: number,
+    dpr: number,
+    viewStart: number,
+    viewEnd: number,
+  ): void;
+  /** Drop hover geometry when the shared track shell collapses this row. */
+  deactivate(id: string): void;
   /** Whether the inspector should offer a graph action for this field. */
   canGraphField(event: CustomTraceEvent, field: string): boolean;
   /** Create directly from metadata, or open the interpretation dialog. */
@@ -68,6 +88,7 @@ export interface FieldChartsController {
 
 interface CachedSeries {
   trace: ParsedTrace;
+  semanticKey: string;
   series: FieldChartSeries;
 }
 
@@ -83,20 +104,13 @@ interface PaintedChart {
   max: number;
 }
 
-interface RowModel {
-  spec: FieldChartSpec;
-  series: FieldChartSeries;
-  readout: string;
-}
-
 /**
- * Mount the dynamic field-chart stack. Durable state contains only specs;
- * materialized data, canvas state, hit-test geometry and the tooltip all live
- * here and are released when a chart closes.
+ * Create the dynamic field-chart renderer. The shell owns row placement,
+ * collapse and drag; this controller owns only chart data, paint/hit state,
+ * tooltip and the semantic fallback dialog.
  */
-export function mountFieldCharts(
-  host: HTMLElement,
-  trackColumn: HTMLElement,
+export function createFieldCharts(
+  doc: Document,
   store: ViewerStore,
   deps: FieldChartsDeps,
 ): FieldChartsController {
@@ -106,113 +120,140 @@ export function mountFieldCharts(
     HTMLCanvasElement,
     CanvasSizer<CanvasRenderingContext2D>
   >();
-  const tooltip = createTooltip(host.ownerDocument);
-  const dialog = new FieldChartDialog(host.ownerDocument, deps.esc, add);
+  const tooltip = createTooltip(doc);
+  const dialog = new FieldChartDialog(doc, deps.esc, add);
 
   function seriesFor(
     trace: ParsedTrace,
     spec: FieldChartSpec,
   ): FieldChartSeries {
-    const key = fieldChartKey(spec);
-    const existing = cache.get(key);
-    if (existing?.trace === trace) return existing.series;
+    const semanticKey = fieldChartKey(spec);
+    const existing = cache.get(spec.id);
+    if (
+      existing?.trace === trace &&
+      existing.semanticKey === semanticKey
+    ) {
+      return existing.series;
+    }
     const series = materializeFieldChart(trace.customEvents ?? [], spec);
-    cache.set(key, { trace, series });
+    cache.set(spec.id, { trace, semanticKey, series });
     return series;
   }
 
-  function add(spec: FieldChartSpec): boolean {
+  function add(definition: FieldChartDefinition): void {
     const state = store.getState();
     if (
       state.view.fieldCharts.some(
-        (existing) => fieldChartKey(existing) === fieldChartKey(spec),
+        (existing) => fieldChartKey(existing) === fieldChartKey(definition),
       )
     ) {
-      deps.notify(`${spec.eventName} · ${spec.field} is already graphed`, "info");
-      return false;
+      deps.notify(
+        `${definition.eventName} · ${definition.field} is already graphed`,
+        "info",
+      );
+      return;
     }
     const trace = state.trace.trace;
     if (trace === null) {
       deps.notify("Load a trace before creating a field chart", "error");
-      return false;
+      return;
     }
+    const spec: FieldChartSpec = {
+      id: nextFieldChartId(state.view.fieldCharts),
+      ...definition,
+    };
     const series = seriesFor(trace, spec);
     if (!hasFieldChartData(series)) {
-      cache.delete(fieldChartKey(spec));
+      cache.delete(spec.id);
       deps.notify(
         `${spec.eventName} · ${spec.field} has no compatible values for ${kindLabel(spec.kind)}`,
         "error",
       );
-      return false;
+      return;
     }
-    store.update("view", {
-      fieldCharts: [...state.view.fieldCharts, spec],
+    const fieldCharts = [...state.view.fieldCharts, spec];
+    store.update("uiPrefs", {
+      trackOrder: [
+        ...orderedManagedTrackIds(
+          state.uiPrefs.trackOrder,
+          state.view.fieldCharts.map((chart) => chart.id),
+        ),
+        spec.id,
+      ],
     });
-    return true;
+    store.update("view", {
+      fieldCharts,
+    });
   }
 
   function remove(spec: FieldChartSpec): void {
-    const key = fieldChartKey(spec);
-    const current = store.getState().view.fieldCharts;
-    const next = current.filter((item) => fieldChartKey(item) !== key);
+    const state = store.getState();
+    const current = state.view.fieldCharts;
+    const next = current.filter((item) => item.id !== spec.id);
     if (next.length === current.length) return;
     tooltip.hide();
-    cache.delete(key);
-    painted.delete(key);
+    cache.delete(spec.id);
+    painted.delete(spec.id);
+    store.update(
+      "uiPrefs",
+      removeTrackIdsFromLayout(
+        state.uiPrefs.trackOrder,
+        state.uiPrefs.collapsed,
+        [spec.id],
+      ),
+    );
     store.update("view", { fieldCharts: next });
   }
 
-  function rows(): RowModel[] {
+  function rowTemplate(
+    spec: FieldChartSpec,
+    trackHeight: number,
+  ): TemplateResult {
     const state = store.getState();
     const trace = state.trace.trace;
-    if (trace === null) return [];
-    return state.view.fieldCharts.map((spec) => {
-      const series = seriesFor(trace, spec);
-      const stats = visibleFieldChartStats(
-        series,
-        state.viewport.viewStart,
-        state.viewport.viewEnd,
-      );
-      return {
-        spec,
-        series,
-        readout:
-          stats === null
-            ? "No values in view"
-            : `avg ${formatReadoutValue(stats.avg, series.unit)} · max ${formatReadoutValue(stats.max, series.unit)}`,
-      };
-    });
-  }
-
-  function rowTemplate(row: RowModel): TemplateResult {
-    const key = fieldChartKey(row.spec);
-    const title = `${row.spec.eventName} · ${row.spec.field}`;
+    const series = trace === null ? null : seriesFor(trace, spec);
+    const stats =
+      series === null
+        ? null
+        : visibleFieldChartStats(
+            series,
+            state.viewport.viewStart,
+            state.viewport.viewEnd,
+          );
+    const readout =
+      stats === null || series === null
+        ? "No values in view"
+        : `avg ${formatReadoutValue(stats.avg, series.unit)} · max ${formatReadoutValue(stats.max, series.unit)}`;
+    const title = `${spec.eventName} · ${spec.field}`;
+    const label = fieldChartLabel(spec.field);
     return html`
       <div
-        class="d9-field-chart"
-        data-field-chart-key=${key}
-        style="height:${ROW_HEIGHT}px"
+        class="d9-track d9-field-chart"
+        data-track-id=${spec.id}
+        style="height:${trackHeight}px"
       >
-        <div class="d9-field-chart-label" title=${title}>
-          <span>${title}</span>
+        <div class="d9-track-label" id="d9-track-label-${spec.id}">
+          <span class="d9-track-name" title=${title}>${label}</span>
         </div>
-        <div class="d9-field-chart-body">
-          <span class="d9-field-chart-readout">${row.readout}</span>
+        <div class="d9-track-canvas-wrap d9-field-chart-body">
+          <span class="d9-field-chart-readout">${readout}</span>
           <button
             type="button"
             class="d9-field-chart-close"
             title="Close chart"
             aria-label=${`Close ${title}`}
-            @click=${() => remove(row.spec)}
+            @click=${() => remove(spec)}
           >
             ×
           </button>
           <canvas
-            class="d9-field-chart-canvas"
-            data-field-chart-canvas=${key}
-            aria-label=${`${title}, ${kindLabel(row.spec.kind)} chart`}
+            class="d9-track-canvas d9-field-chart-canvas"
+            data-track-canvas=${spec.id}
+            aria-labelledby="d9-track-label-${spec.id}"
+            aria-label=${`${title}, ${kindLabel(spec.kind)} chart`}
             role="img"
-            @mousemove=${(event: MouseEvent) => onPointerMove(event, key)}
+            @mousemove=${(event: MouseEvent) =>
+              onPointerMove(event, spec.id)}
             @mouseleave=${() => tooltip.hide()}
           ></canvas>
         </div>
@@ -220,61 +261,36 @@ export function mountFieldCharts(
     `;
   }
 
-  function renderPass(): void {
-    const activeRows = rows();
-    const activeKeys = new Set(activeRows.map((row) => fieldChartKey(row.spec)));
-    for (const key of cache.keys()) {
-      if (!activeKeys.has(key)) cache.delete(key);
-    }
-    for (const key of painted.keys()) {
-      if (!activeKeys.has(key)) painted.delete(key);
-    }
-    if (activeRows.length === 0) tooltip.hide();
-
-    render(
-      html`${repeat(
-        activeRows,
-        (row) => fieldChartKey(row.spec),
-        rowTemplate,
-      )}`,
-      host,
-    );
-
+  function paint(
+    spec: FieldChartSpec,
+    canvas: HTMLCanvasElement,
+    drawW: number,
+    trackHeight: number,
+    dpr: number,
+    viewStart: number,
+    viewEnd: number,
+  ): void {
     const state = store.getState();
-    const drawW =
-      trackColumn.clientWidth - LABEL_W - lanesScrollbarWidth(trackColumn);
-    const dpr =
-      (typeof devicePixelRatio === "number" ? devicePixelRatio : 1) || 1;
-    if (drawW <= 0) return;
-
-    const canvases = new Map<string, HTMLCanvasElement>();
-    for (const canvas of host.querySelectorAll<HTMLCanvasElement>(
-      "canvas[data-field-chart-canvas]",
-    )) {
-      const key = canvas.dataset["fieldChartCanvas"];
-      if (key !== undefined) canvases.set(key, canvas);
+    const trace = state.trace.trace;
+    if (trace === null || drawW <= 0) return;
+    let sizer = sizers.get(canvas);
+    if (sizer === undefined) {
+      sizer = createCanvasSizer<CanvasRenderingContext2D>(canvas);
+      sizers.set(canvas, sizer);
     }
-    for (const row of activeRows) {
-      const key = fieldChartKey(row.spec);
-      const canvas = canvases.get(key);
-      if (canvas === undefined) continue;
-      let sizer = sizers.get(canvas);
-      if (sizer === undefined) {
-        sizer = createCanvasSizer(canvas);
-        sizers.set(canvas, sizer);
-      }
-      const ctx = sizer.ensure(drawW, ROW_HEIGHT, dpr);
-      const chart = paintChart(
+    const ctx = sizer.ensure(drawW, trackHeight, dpr);
+    painted.set(
+      spec.id,
+      paintChart(
         ctx,
-        row.spec,
-        row.series,
-        state.viewport.viewStart,
-        state.viewport.viewEnd,
+        spec,
+        seriesFor(trace, spec),
+        viewStart,
+        viewEnd,
         drawW,
-        ROW_HEIGHT,
-      );
-      painted.set(key, chart);
-    }
+        trackHeight,
+      ),
+    );
   }
 
   function onPointerMove(event: MouseEvent, key: string): void {
@@ -309,13 +325,24 @@ export function mountFieldCharts(
     );
   }
 
-  const unsubscribe = store.subscribe(
-    ["trace", "viewport", "view"],
-    () => renderPass(),
-  );
-  renderPass();
+  const unsubscribe = store.subscribe(["view"], (state) => {
+    const active = new Set(state.view.fieldCharts.map((chart) => chart.id));
+    for (const id of cache.keys()) {
+      if (!active.has(id)) cache.delete(id);
+    }
+    for (const id of painted.keys()) {
+      if (!active.has(id)) painted.delete(id);
+    }
+    if (active.size === 0) tooltip.hide();
+  });
 
   return {
+    rowTemplate,
+    paint,
+    deactivate(id): void {
+      painted.delete(id);
+      tooltip.hide();
+    },
     canGraphField(event, field): boolean {
       return (
         isFieldChartKind(event.kinds?.[field]) ||
@@ -338,15 +365,27 @@ export function mountFieldCharts(
       const trace = state.trace.trace;
       if (trace === null || state.view.fieldCharts.length === 0) return;
       const valid: FieldChartSpec[] = [];
-      let invalid = 0;
+      const invalidIds: string[] = [];
       for (const spec of state.view.fieldCharts) {
         if (hasFieldChartData(seriesFor(trace, spec))) valid.push(spec);
-        else invalid++;
+        else invalidIds.push(spec.id);
       }
-      if (invalid === 0) return;
+      if (invalidIds.length === 0) return;
+      for (const id of invalidIds) {
+        cache.delete(id);
+        painted.delete(id);
+      }
+      store.update(
+        "uiPrefs",
+        removeTrackIdsFromLayout(
+          state.uiPrefs.trackOrder,
+          state.uiPrefs.collapsed,
+          invalidIds,
+        ),
+      );
       store.update("view", { fieldCharts: valid });
       deps.notify(
-        `${invalid} field chart${invalid === 1 ? "" : "s"} from the URL had no compatible trace data`,
+        `${invalidIds.length} field chart${invalidIds.length === 1 ? "" : "s"} from the URL had no compatible trace data`,
         "error",
       );
     },
@@ -356,7 +395,6 @@ export function mountFieldCharts(
       tooltip.dispose();
       cache.clear();
       painted.clear();
-      render(html``, host);
     },
   };
 }
@@ -377,11 +415,17 @@ function paintChart(
   const chartTop = CHART_TOP;
   const chartHeight = Math.max(0, height - CHART_TOP - CHART_BOTTOM);
   const range = visibleFieldChartRange(series, viewStart, viewEnd);
+  const paintStart =
+    series.kind === "gauge" ? Math.max(0, range.start - 1) : range.start;
+  const paintEnd =
+    series.kind === "gauge"
+      ? Math.min(series.points.length, range.end + 1)
+      : range.end;
   let min = 0;
   let max = 0;
   let hasData = false;
   if (series.kind === "gauge") {
-    for (let i = range.start; i < range.end; i++) {
+    for (let i = paintStart; i < paintEnd; i++) {
       const value = series.points[i]!.value;
       min = Math.min(min, value);
       max = Math.max(max, value);
@@ -404,8 +448,8 @@ function paintChart(
         paintPoints(
           ctx,
           series.points,
-          range.start,
-          range.end,
+          paintStart,
+          paintEnd,
           viewStart,
           viewEnd,
           drawW,
@@ -488,6 +532,18 @@ function paintPoints(
   min: number,
   max: number,
 ): void {
+  ctx.strokeStyle = SERIES;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let i = start; i < end; i++) {
+    const point = points[i]!;
+    const x = nsToDrawX(point.timestamp, viewStart, viewEnd, drawW);
+    const y = valueY(point.value, min, max, top, height);
+    if (i === start || point.breakBefore) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
   ctx.fillStyle = SERIES;
   for (let i = start; i < end; i++) {
     const point = points[i]!;
@@ -664,15 +720,15 @@ class FieldChartDialog {
   readonly #dialog: HTMLDialogElement;
   readonly #title: HTMLHeadingElement;
   readonly #select: HTMLSelectElement;
-  readonly #submit: (spec: FieldChartSpec) => boolean;
+  readonly #submit: (spec: FieldChartDefinition) => void;
   readonly #unregisterEsc: () => void;
-  #pending: Omit<FieldChartSpec, "kind"> | null = null;
+  #pending: FieldChartRequest | null = null;
   #restoreFocus: HTMLElement | null = null;
 
   constructor(
     doc: Document,
     esc: EscCascade,
-    submit: (spec: FieldChartSpec) => boolean,
+    submit: (spec: FieldChartDefinition) => void,
   ) {
     this.#submit = submit;
     this.#dialog = doc.createElement("dialog");
@@ -712,9 +768,9 @@ class FieldChartDialog {
       if (this.#pending === null || !isFieldChartKind(this.#select.value)) {
         return;
       }
-      if (this.#submit({ ...this.#pending, kind: this.#select.value })) {
-        this.close();
-      }
+      const spec = { ...this.#pending, kind: this.#select.value };
+      this.close();
+      this.#submit(spec);
     });
     this.#dialog.addEventListener("cancel", (event) => {
       event.preventDefault();
@@ -733,7 +789,7 @@ class FieldChartDialog {
   }
 
   open(
-    request: Omit<FieldChartSpec, "kind">,
+    request: FieldChartRequest,
     restoreFocus: HTMLElement | undefined,
   ): void {
     this.#pending = request;
