@@ -1,9 +1,8 @@
 // Per-track collapse + drag-reorder for the unified track column. This module
 // owns:
 //
-//   - which tracks are user-manageable (collapse + reorder): the four built-in
-//     analysis surfaces plus live field charts. The two structural tracks
-//     (timeline/lanes) and the selection-only task-detail track are fixed.
+//   - which tracks are user-manageable (collapse + reorder). Structural and
+//     selection-only tracks remain fixed.
 //   - the ordering resolution (uiPrefs.trackOrder -> the ordered TrackSpec
 //     list), robust to unknown/missing ids so a stored order predating a new
 //     track still resolves.
@@ -11,8 +10,7 @@
 //   - the collapse predicate + label-only height.
 //   - the store actions (toggle collapse / reorder) the shell's caret + grip
 //     handlers dispatch.
-//   - localStorage persistence for built-in tracks. Dynamic field-chart layout
-//     is URL-owned and deliberately excluded from localStorage.
+//   - localStorage persistence. Field-chart layout is URL-owned and excluded.
 //
 // Track pinning is out of scope. This operates on the track list/order +
 // per-track height only; it does not touch the per-track render delegation.
@@ -42,6 +40,10 @@ export const MANAGEABLE_TRACK_IDS: readonly TrackId[] = [
 ];
 
 const STATIC_MANAGEABLE = new Set<string>(MANAGEABLE_TRACK_IDS);
+
+function isLocallyPersistedTrackId(id: string): boolean {
+  return !isFieldChartId(id);
+}
 
 /** True when a currently-present track can be collapsed and reordered. */
 export function isManageableTrack(
@@ -276,9 +278,7 @@ function storageSet(key: string, value: string): void {
 }
 
 /**
- * Read persisted built-in track prefs, or null when none are stored / the
- * stored value is unusable. Dynamic ids are discarded even if an older or
- * hand-edited blob contains them.
+ * Read persisted track prefs, excluding URL-owned field-chart ids.
  */
 export function loadTrackPrefs(): TrackPrefs | null {
   const raw = storageGet(TRACK_PREFS_STORAGE_KEY);
@@ -290,12 +290,12 @@ export function loadTrackPrefs(): TrackPrefs | null {
     const trackOrder = Array.isArray(obj.trackOrder)
       ? obj.trackOrder.filter(
           (value): value is string =>
-            typeof value === "string" && STATIC_MANAGEABLE.has(value),
+            typeof value === "string" && isLocallyPersistedTrackId(value),
         )
       : [];
     const collapsed = Object.fromEntries(
       Object.entries(parseBoolMap(obj.collapsed)).filter(([id]) =>
-        STATIC_MANAGEABLE.has(id),
+        isLocallyPersistedTrackId(id),
       ),
     );
     const cr = (obj as { collapsedRuntimes?: unknown }).collapsedRuntimes;
@@ -316,14 +316,14 @@ export function loadTrackPrefs(): TrackPrefs | null {
   }
 }
 
-/** Persist built-in track prefs + runtime folds + lanes height. */
+/** Persist track prefs, excluding URL-owned field-chart ids. */
 export function saveTrackPrefs(prefs: TrackPrefs): void {
   const trackOrder = prefs.trackOrder.filter((id) =>
-    STATIC_MANAGEABLE.has(id),
+    isLocallyPersistedTrackId(id),
   );
   const collapsed = Object.fromEntries(
     Object.entries(prefs.collapsed).filter(([id]) =>
-      STATIC_MANAGEABLE.has(id),
+      isLocallyPersistedTrackId(id),
     ),
   );
   storageSet(

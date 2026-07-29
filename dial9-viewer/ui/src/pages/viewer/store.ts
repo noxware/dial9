@@ -53,10 +53,9 @@ export function initialViewerState(): StoreState {
       // Analysis surfaces are visible by default. The unified column has no
       // per-panel folds; every surface starts expanded.
       panelCollapsed: { spans: false, events: false, cpu: false, queue: false },
-      // Track management. Empty resting state: built-in catalogue order,
-      // followed by any dynamic field charts, and nothing collapsed.
-      // hydrateTrackPrefs (main.ts) overlays built-in local preferences on
-      // boot; the store stays pure (no localStorage here, so it is testable).
+      // Track management. Empty resting state resolves to the default order
+      // with nothing collapsed. hydrateTrackPrefs (main.ts) overlays local
+      // preferences on boot; the store itself remains storage-independent.
       trackOrder: [],
       collapsed: {},
       collapsedRuntimes: {},

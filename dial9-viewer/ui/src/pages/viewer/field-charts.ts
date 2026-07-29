@@ -33,10 +33,7 @@ import {
   type FieldChartPoint,
   type FieldChartSeries,
 } from "./field-chart-model.js";
-import {
-  orderedManagedTrackIds,
-  removeTrackIdsFromLayout,
-} from "./track-management.js";
+import { removeTrackIdsFromLayout } from "./track-management.js";
 
 export const FIELD_CHART_TRACK_HEIGHT = 96;
 const CHART_TOP = 24;
@@ -171,18 +168,8 @@ export function createFieldCharts(
       );
       return;
     }
-    const fieldCharts = [...state.view.fieldCharts, spec];
-    store.update("uiPrefs", {
-      trackOrder: [
-        ...orderedManagedTrackIds(
-          state.uiPrefs.trackOrder,
-          state.view.fieldCharts.map((chart) => chart.id),
-        ),
-        spec.id,
-      ],
-    });
     store.update("view", {
-      fieldCharts,
+      fieldCharts: [...state.view.fieldCharts, spec],
     });
   }
 

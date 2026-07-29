@@ -358,13 +358,13 @@ describe("persistence: uiPrefs survives reload (headline DoD)", () => {
     vi.stubGlobal("localStorage", fakeLocalStorage());
 
     saveTrackPrefs({
-      trackOrder: ["cpu", "fc2", "queue", "fc1"],
-      collapsed: { cpu: true, fc1: true },
+      trackOrder: ["cpu", "fc2", "future-track", "queue", "fc1"],
+      collapsed: { cpu: true, fc1: true, "future-track": true },
     });
 
     expect(loadTrackPrefs()).toEqual({
-      trackOrder: ["cpu", "queue"],
-      collapsed: { cpu: true },
+      trackOrder: ["cpu", "future-track", "queue"],
+      collapsed: { cpu: true, "future-track": true },
     });
   });
 
@@ -373,15 +373,15 @@ describe("persistence: uiPrefs survives reload (headline DoD)", () => {
     ls.setItem(
       TRACK_PREFS_STORAGE_KEY,
       JSON.stringify({
-        trackOrder: ["cpu", "fc1", "events"],
-        collapsed: { queue: true, fc1: true },
+        trackOrder: ["cpu", "fc1", "future-track", "events"],
+        collapsed: { queue: true, fc1: true, "future-track": true },
       }),
     );
     vi.stubGlobal("localStorage", ls);
 
     expect(loadTrackPrefs()).toEqual({
-      trackOrder: ["cpu", "events"],
-      collapsed: { queue: true },
+      trackOrder: ["cpu", "future-track", "events"],
+      collapsed: { queue: true, "future-track": true },
     });
   });
 

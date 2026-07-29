@@ -250,18 +250,16 @@ export interface UiPrefsSlice {
    */
   panelCollapsed: Readonly<Record<FoldablePanelKind, boolean>>;
   /**
-   * Track order for the unified column's built-in analysis tracks and dynamic
-   * field charts. Empty = catalogue order followed by field-chart id order.
-   * The complete layout is URL-owned; only built-in ids are mirrored to
-   * localStorage.
+   * Track order for the unified column's manageable tracks. Empty resolves to
+   * their default order. The complete layout is URL-owned; field-chart ids are
+   * excluded from localStorage.
    */
   trackOrder: readonly string[];
   /**
    * Per-track collapsed state. Track id -> true when the user collapsed it to
    * label-only height via the track-label caret. Absent or false = expanded
-   * (analysis surfaces visible by default). Built-in analysis tracks and
-   * dynamic field charts are collapsible. The complete state is URL-owned;
-   * only built-in ids are mirrored to localStorage.
+   * (analysis surfaces visible by default). The complete state is URL-owned;
+   * field-chart ids are excluded from localStorage.
    */
   collapsed: Readonly<Record<string, boolean>>;
   /**
