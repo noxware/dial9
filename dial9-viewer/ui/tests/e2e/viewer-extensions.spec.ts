@@ -152,7 +152,9 @@ test("creates and closes a counter view from a custom-event field", async ({
     `${eventName} · user_cpu_ns · Counter`,
   );
   await expect(panel).toBeVisible();
-  await expect(panel.locator(".d9-extension-readout")).not.toContainText("/s");
+  const readout = panel.locator(".d9-extension-readout");
+  await expect(readout).not.toContainText("/s");
+  await expect(readout).not.toContainText("min");
   await panel.getByRole("button", { name: /^Close / }).click();
   await expect(panel).toHaveCount(0);
 });

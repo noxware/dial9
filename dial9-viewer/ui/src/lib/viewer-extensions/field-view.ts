@@ -145,12 +145,6 @@ function fieldViewManifest(
           ...itemUnit,
         },
         {
-          label: "min",
-          column: "value",
-          reduce: "min",
-          ...itemUnit,
-        },
-        {
           label: "max",
           column: "value",
           reduce: "max",

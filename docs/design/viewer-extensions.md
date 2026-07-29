@@ -288,7 +288,7 @@ extensions. Missing or non-numeric operands are encoded through the validity
 bitmap and create gaps. Counter deltas retain the field's original unit.
 
 The generated panel composes the corresponding graph, tooltip, and visible
-`avg`/`min`/`max` readout. Closing it drops the renderer, table store, and all
+`avg`/`max` readout. Closing it drops the renderer, table store, and all
 references to its typed buffers; replacing the trace closes every interactive
 view. This path does not instantiate WASM or encode the guest ABI.
 
