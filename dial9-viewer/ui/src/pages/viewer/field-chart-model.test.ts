@@ -155,7 +155,7 @@ describe("field chart identity and labels", () => {
     expect(nextFieldChartId([
       { ...spec("gauge"), id: "fc1" },
       { ...spec("counter"), id: "fc3" },
-    ])).toBe("fc2");
+    ])).toBe("fc4");
     expect(["fc10", "fc2", "fc1"].sort(compareFieldChartIds)).toEqual([
       "fc1",
       "fc2",

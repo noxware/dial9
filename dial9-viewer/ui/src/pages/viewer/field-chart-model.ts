@@ -79,15 +79,20 @@ export function isFieldChartId(value: unknown): value is string {
   return typeof value === "string" && FIELD_CHART_ID.test(value);
 }
 
-/** Allocate the first unused short id. */
+/** Allocate an id after every active chart so a new track appends by default. */
 export function nextFieldChartId(
   charts: readonly FieldChartSpec[],
 ): string {
-  const used = new Set(charts.map((chart) => chart.id));
-  for (let next = 1; ; next++) {
-    const id = `fc${next}`;
-    if (!used.has(id)) return id;
+  let max: string | null = null;
+  for (const chart of charts) {
+    if (
+      isFieldChartId(chart.id) &&
+      (max === null || compareFieldChartIds(max, chart.id) < 0)
+    ) {
+      max = chart.id;
+    }
   }
+  return `fc${max === null ? 1n : BigInt(max.slice(2)) + 1n}`;
 }
 
 /** Stable numeric ordering used when a URL omits `track-order`. */
