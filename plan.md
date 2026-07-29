@@ -105,17 +105,24 @@ resident_bytes: u64,
 
 ## Bonus: vistas compartibles por URL
 
-- Sincronizar la lista ordenada de specs en un parámetro versionado
-  `field-charts`. Su valor estructurado codifica event name, field y kind; no
-  incluye datos, estadísticas ni unit.
-- `field-charts` representa qué gráficos dinámicos están abiertos. No reemplaza
+- Representar cada gráfico abierto con un parámetro repetible `field-chart`,
+  cuyo valor es `event,field,kind`:
+
+```text
+?trace=demo.d9&field-chart=ProcessResourceUsageEvent,user_cpu_ns,counter&field-chart=ProcessResourceUsageEvent,resident_bytes,gauge
+```
+
+- El orden de los parámetros `field-chart` determina el orden de los gráficos.
+  Sólo contienen sus specs; no incluyen datos, estadísticas ni unit.
+- `field-chart` representa qué gráficos dinámicos están abiertos. No reemplaza
   `collapsed`, que continúa controlando la visibilidad de los tracks existentes.
 - Al abrir un link, restaurar primero las specs y materializar sus series
   después de cargar el trace indicado por la URL.
 - Crear o cerrar un panel actualiza la URL mediante el mecanismo de
   sincronización existente.
-- Validar y deduplicar los parámetros recibidos. Ignorar entradas inválidas y
-  mostrar un toast si una spec válida no encuentra datos compatibles.
+- Aceptar únicamente entradas con tres partes y un `kind` reconocido.
+  Deduplicarlas, ignorar las inválidas y mostrar un toast si una spec válida no
+  encuentra datos compatibles.
 - La carga inicial conserva las specs restauradas desde la URL. Reemplazar
   posteriormente el source limpia los paneles anteriores; Set/Clear Range los
   conserva.
@@ -132,8 +139,9 @@ resident_bytes: u64,
   negativos, nulls, timestamps repetidos y `bigint`/`u64` string.
 - UI: creación directa, modal fallback, readout visible, tooltip, deduplicación
   y cierre sin caches retenidos.
-- URL: round trip de múltiples paneles y caracteres especiales, orden estable,
-  deduplicación, cierre y restauración diferida hasta que cargue el trace.
+- URL: round trip de múltiples parámetros `field-chart`, escaping, orden
+  estable, deduplicación, cierre y restauración diferida hasta que cargue el
+  trace.
 - Ejecutar tests Rust enfocados, `npm run check:types`, `npm test` y
   `cargo build -p dial9-viewer`.
 - No modificar ningún archivo del legacy viewer.
