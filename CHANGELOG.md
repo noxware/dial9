@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.2](https://github.com/noxware/dial9-tokio-telemetry/compare/dial9-tokio-telemetry-v0.4.0-alpha.1...dial9-tokio-telemetry-v0.4.0-alpha.2) - 2026-08-11
+
+### Other
+
+- update Cargo.toml dependencies
+
 ### Added
 
 - In-memory writer (`InMemoryWriter`): run the trace pipeline with no filesystem dependency, encoded segments are held in process memory and shipped by the existing processor pipeline ([#435](https://github.com/dial9-rs/dial9/pull/435))
