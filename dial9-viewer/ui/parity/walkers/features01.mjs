@@ -13,9 +13,9 @@
 //   - dev-server seed: single segment at traces/2026-04-09/1900/... — hence
 //     the pinned page clock (lib/browser.mjs DEV_SEED_CLOCK) and the
 //     April-window helpers (lib/actions.mjs);
-//   - the seeded key has six post-date path components — an UNKNOWN layout.
-//     The page renders unknown keys raw, sorts the raw table, dates
-//     day-crossing axis spans, and drives the bucket filter from config.
+//   - the seeded key uses the default service/host/boot layout. The page
+//     parses it into the raw table, dates day-crossing axis spans, and drives
+//     the bucket filter from config.
 
 import {
   expect,
@@ -549,25 +549,16 @@ export const registry = {
 
   // ── I. Cross-cutting behaviors ──
   I2: async ({ page, pageUrl }) => {
-    // parseKey runs on every displayed key. The seeded key has an extra
-    // path component: an UNKNOWN layout, which the page renders raw.
+    // parseKey runs on every displayed key. The dev seed uses the default
+    // service/host/boot layout, so each field gets its own column.
     await gotoBrowserPage(page, pageUrl);
     await rawSearchSeededRows(page);
-    const rawCell = page.locator("#raw-body tr td.rawkey");
-    expect((await rawCell.count()) === 1, "raw-key cell missing for the unknown-layout key");
-    expect(
-      (await rawCell.getAttribute("colspan")) === "3",
-      "raw-key cell does not span the Service/Host/Boot columns",
-    );
-    const text = (await rawCell.textContent()).trim();
-    expect(
-      /^traces\/2026-04-09\/1900\/demo-service\/local\/host-0\/abcd\/\d+-0\.bin\.gz$/.test(text),
-      `raw-key cell was "${text}"`,
-    );
-    // The layout-independent filename epoch still fills Trace Start.
-    const traceStart = await textOf(page, "#raw-body tr td:nth-child(3)");
+    expect((await textOf(page, "#raw-body tr td:nth-child(2)")) === "demo-service", "service was not parsed");
+    expect((await textOf(page, "#raw-body tr td:nth-child(3)")) === "host-0", "host was not parsed");
+    expect((await textOf(page, "#raw-body tr td:nth-child(4)")) === "abcd", "boot ID was not parsed");
+    const traceStart = await textOf(page, "#raw-body tr td:nth-child(5)");
     expect(/^\d{4}-\d{2}-\d{2} /.test(traceStart), `Trace Start cell was "${traceStart}"`);
-    return "unknown-layout key rendered raw (full key across Service/Host/Boot); epoch kept";
+    return "default-layout key parsed as demo-service / host-0 / abcd; epoch kept";
   },
 
   I4: async ({ page, pageUrl }) => {
