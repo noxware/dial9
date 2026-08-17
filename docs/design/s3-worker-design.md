@@ -21,8 +21,8 @@ Application Process              Worker Thread (dedicated tokio current_thread r
 └─────────────────┘             └──────────────────────────────────┘
                                            │
                                            ▼
-                        S3: {bucket}/{prefix}/{date-time}/
-                            {service}/{instance}/
+                        S3: {bucket}/{prefix}/date={date}/time={HHMM}/
+                            service={service}/instance={instance}/boot={boot_id}/
                             {epoch_secs}-{index}.bin.gz
 
 * SymbolizeProcessor is included when cpu-profiling is enabled.
@@ -51,20 +51,27 @@ Sealed:   trace.3.bin          (atomic rename)
 
 **Problem:** The primary access pattern is incident correlation — "what was happening across all services at time T?" This means time should be the first index in the key hierarchy.
 
-**Decision:** Time (1-minute bucket) is the first component after the optional prefix:
+**Decision:** Time (1-minute bucket) is the first component after the optional
+prefix. Named partitions remove positional ambiguity and leave room for future
+fields:
 
 ```
-{prefix}/{date-time}/{service}/{instance}/{epoch_secs}-{index}.bin.gz
+{prefix}/date={YYYY-MM-DD}/time={HHMM}/service={service}/instance={instance}/boot={boot_id}/{epoch_secs}-{index}.bin.gz
 ```
 
-Example: `traces/2026-03-07/2030/checkout-api/us-east-1/i-0abc123/1741384542-3.bin.gz`
+Example: `traces/date=2026-03-07/time=2030/service=checkout-api/instance=us-east-1%2Fi-0abc123/boot=abcd-42/1741384542-3.bin.gz`
+
+Values in named partitions use Hive path escaping, so `/`, `%`, and `=` become
+`%2F`, `%25`, and `%3D`. This keeps values such as an `instance_path` containing
+slashes inside one partition. The optional prefix is opaque and keeps its
+literal path structure.
 
 **Why time-first instead of service-first?**
 
 | Layout | Incident query ("what happened at 8:30pm?") | Single-service query |
 |--------|------------------------------------------|---------------------|
-| `{time}/{service}/...` | `ListObjects(prefix=traces/2026-03-07/2030/)` — one call, all services | `ListObjects(prefix=traces/2026-03-07/2030/checkout-api/)` — still one call |
-| `{service}/{time}/...` | N calls, one per service — must know all service names upfront | `ListObjects(prefix=traces/checkout-api/2026-03-07/2030/)` — one call |
+| `{time}/{service}/...` | `ListObjects(prefix=traces/date=2026-03-07/time=2030/)` — one call, all services | `ListObjects(prefix=traces/date=2026-03-07/time=2030/service=checkout-api/)` — still one call |
+| `{service}/{time}/...` | N calls, one per service — must know all service names upfront | `ListObjects(prefix=traces/service=checkout-api/date=2026-03-07/time=2030/)` — one call |
 
 Time-first is strictly better for incident correlation and no worse for single-service queries. The only case where service-first wins is "list all time ranges for one service" — but that's a rare access pattern compared to "what happened during this incident."
 
@@ -297,17 +304,22 @@ Pipeline stage metrics are prefixed with the processor name automatically.
 ## S3 Object Layout
 
 ```
-s3://{bucket}/{prefix}/{date-time}/{service}/{instance}/{boot_id}/{epoch_secs}-{index}.bin.gz
+s3://{bucket}/{prefix}/date={YYYY-MM-DD}/time={HHMM}/service={service}/instance={instance}/boot={boot_id}/{epoch_secs}-{index}.bin.gz
 ```
 
-- `{date-time}`: `2026-03-07/2030` — 1-minute bucket (enables time-range queries across all services)
-- `{service}`: user-provided service name
-- `{instance}`: `us-east-1/i-0abc123` or `dc-west/rack4-host7` (opaque string)
-- `{boot_id}`: 4 lowercase alpha chars generated per process start (disambiguates segment indices across restarts — see issue #225)
+- `date` and `time`: UTC `2026-03-07` and `2030` — 1-minute bucket (enables time-range queries across all services)
+- `service`: user-provided service name
+- `instance`: opaque instance path, Hive-escaped in the key
+- `boot`: boot id generated per process start (disambiguates segment indices across restarts — see issue #225)
 - `{epoch_secs}`: Unix epoch seconds (parsed from `SegmentMetadata` header, falls back to file mtime)
 - `{index}`: segment index from RotatingWriter
 
 Extension is `.bin.gz` when compressed, `.bin` when not.
+
+The uploader applies Hive path escaping to every named partition value. The
+viewer decodes one `%HH` layer and continues to read the historical positional
+layout during migration. A custom `S3KeyFn` remains opaque and bypasses this
+default convention.
 
 **Metadata headers** (set via S3 SDK `.metadata()` — the SDK auto-adds the `x-amz-meta-` prefix):
 ```

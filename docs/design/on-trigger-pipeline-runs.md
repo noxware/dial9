@@ -179,8 +179,8 @@ can be narrower than the requested window:
   "segments_processed": 12,
   "metadata": { "reason": "idle-ratio-drop" },
   "segments": [
-    "traces/2026-06-09/1425/checkout-api/i-0abc/1741384200-1.bin.gz",
-    "traces/2026-06-09/1430/checkout-api/i-0abc/1741384542-3.bin.gz"
+    "traces/date=2026-06-09/time=1425/service=checkout-api/instance=i-0abc/boot=abcd-42/1741384200-1.bin.gz",
+    "traces/date=2026-06-09/time=1430/service=checkout-api/instance=i-0abc/boot=abcd-42/1741384542-3.bin.gz"
   ]
 }
 ```
@@ -352,10 +352,10 @@ Pipeline stages read this metadata the same way they already read keys like
   (comma-joined when the segment belongs to more than one dump), and emit each
   `dump.{key}` pair as user metadata with the `dump.` prefix stripped (pairs
   that are not valid S3 user metadata, or that collide with the reserved keys,
-  are skipped with a rate-limited warning). The key layout is today's
-  continuous-mode layout, unchanged. The uploader also records the key it just
+  are skipped with a rate-limited warning). The key layout is the configured
+  continuous-mode layout. The uploader also records the key it just
   wrote against each of those dump ids so it can build their manifests later.
-- Absent (continuous mode): emit today's continuous-mode object, unchanged.
+- Absent (continuous mode): emit the normal continuous-mode object.
 
 The manifest's `metadata` map holds the raw caller keys (un-namespaced, as
 passed to `with_metadata`), not the `dump.`-prefixed segment keys.
@@ -520,8 +520,7 @@ behavior; presence flips the worker into triggered mode. `build` returns the
 existing guard regardless; no new axis on the builder's phantom-state
 machinery.
 
-Implementation note on the S3 uploader: `object_key` in
-`background_task/s3.rs` is unchanged; both modes produce the same key layout
+Implementation note on the S3 uploader: both modes produce the same key layout
 for trace objects. The dump-specific behavior is additive: when
 `metadata.get("dump_id")` is present, the uploader attaches `dump-id` as
 per-object S3 user metadata and records the written key against the `dump_id`;
