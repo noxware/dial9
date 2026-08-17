@@ -50,6 +50,12 @@ fn parse_source_key(key: &str) -> Option<(String, String, String)> {
     crate::source_key::scope_fields(key)
 }
 
+/// Parquet uses empty strings to represent source metadata that is unavailable
+/// on directly opened or custom keys.
+fn unknown_source_fields() -> (String, String, String) {
+    (String::new(), String::new(), String::new())
+}
+
 /// Extract CPU samples from raw (already gunzipped) trace bytes.
 ///
 /// Events are sorted by timestamp within the segment to correctly infer
@@ -143,12 +149,8 @@ pub(crate) fn decode_samples_with_stats(
     let mut stacks_dict: FxHashMap<[u8; 16], Vec<String>> = FxHashMap::default();
     let mut stack_cache: FxHashMap<Vec<u64>, [u8; 16]> = FxHashMap::default();
     let mut samples = Vec::new();
-    let (parsed_date, parsed_service, parsed_host) = match parse_source_key(source_key) {
-        Some(fields) => fields,
-        // Empty strings are the established Parquet representation for source
-        // metadata that is unavailable on directly opened or custom keys.
-        None => (String::new(), String::new(), String::new()),
-    };
+    let (parsed_date, parsed_service, parsed_host) =
+        parse_source_key(source_key).unwrap_or_else(unknown_source_fields);
 
     for event in &events {
         match event {
@@ -372,10 +374,10 @@ fn extract_boot_id_from_path(source_key: &str) -> String {
 ///   a best-effort fallback (directory portion) that cannot guarantee stability.
 fn extract_boot_id_from_path_qualified(source_key: &str) -> (String, bool) {
     let parsed = dial9_core::source_key::parse_source_key(source_key);
-    if parsed.layout == dial9_core::source_key::SourceKeyLayout::Hive {
-        if let Some(boot_id) = parsed.boot_id {
-            return (boot_id, true);
-        }
+    if parsed.layout == dial9_core::source_key::SourceKeyLayout::Hive
+        && let Some(boot_id) = parsed.boot_id
+    {
+        return (boot_id, true);
     }
 
     // Strip s3://bucket/ prefix if present
