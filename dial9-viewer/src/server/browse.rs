@@ -60,12 +60,12 @@ pub struct BrowseResponse {
 /// Granularity of the time prefixes scanned in S3.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Granularity {
-    /// `{date}/{HH}` — a full hour.
+    /// Two-character hour prefix in either supported layout.
     Hour,
-    /// `{date}/{HH}{minute/10}` — a 10-minute bucket (matches `HHM0`..=`HHM9`).
+    /// Three-character 10-minute prefix in either supported layout.
     #[cfg_attr(not(test), allow(dead_code))]
     TenMinute,
-    /// `{date}/{HHMM}` — a single minute.
+    /// Four-character minute prefix in either supported layout.
     Minute,
 }
 

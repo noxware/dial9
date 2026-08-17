@@ -150,8 +150,8 @@ outright, rather than folding them, is a possible future addition).
 ## Finding a dump in S3
 
 Dumped trace objects land in the **same S3 location** as continuous-mode
-uploads, under today's key layout, each carrying a `dump-id` value as S3 user
-metadata (the ULID minted at trigger time, also returned on the receipt). A
+uploads, under the configured key layout, each carrying a `dump-id` value as
+S3 user metadata (the ULID minted at trigger time, also returned on the receipt). A
 segment that falls inside the forward windows of several concurrent dumps
 carries all of their ids as a comma-joined `dump-id` value, and its key appears
 in each of those dumps' manifests. The trace files are never relocated.
