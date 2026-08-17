@@ -70,6 +70,15 @@ test("parseKey decodes one Hive escaping layer", () => {
   assert.strictEqual(p.service, "payments%2Fapi");
 });
 
+test("parseKey does not build a scope from malformed Hive values", () => {
+  const rawKey =
+    "date=2026-08-14/time=1937/service=bad%2/instance=host/" +
+    "boot=boot/1786736220-3.bin.gz";
+  const p = scope.parseKey(rawKey);
+  assert.strictEqual(p.service, "");
+  assert.strictEqual(p.host, rawKey);
+});
+
 test("parseKey: historical boot-id layout with prefix", () => {
   const p = scope.parseKey("traces/2026-04-09/1910/checkout-api/us-east-1/abcd-123213/1744224000-3.bin.gz");
   assert.strictEqual(p.service, "checkout-api");

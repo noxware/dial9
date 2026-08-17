@@ -71,11 +71,12 @@
       const boot = partitionValue(parts[start + 4], "boot");
       if (date !== undefined && time !== undefined && service !== undefined &&
           instance !== undefined && boot !== undefined) {
-        if (date !== null && dateRe.test(date) && time !== null && timeRe.test(time)) {
+        if (date !== null && dateRe.test(date) && time !== null && timeRe.test(time) &&
+            service !== null && instance !== null && boot !== null) {
           return {
-            service: service || "",
-            host: instance === null ? key : instance,
-            bootId: boot || "",
+            service,
+            host: instance,
+            bootId: boot,
             epoch,
             segIndex,
           };
