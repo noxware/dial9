@@ -10,9 +10,9 @@
 // walk-rows entry lists them as NOT-TRIGGERABLE without driving them.
 //
 // Environment assumptions:
-//   - dev-server seed: single segment at traces/date=2026-04-09/time=1900/... — hence
+//   - dev-server seed: single segment at traces/date=2026-08-06/time=0025/... — hence
 //     the pinned page clock (lib/browser.mjs DEV_SEED_CLOCK) and the
-//     April-window helpers (lib/actions.mjs);
+//     demo-window helpers (lib/actions.mjs);
 //   - the seeded key uses the default Hive-style layout; the page decodes its
 //     service and instance, dates day-crossing axis spans, and drives the
 //     bucket filter from config.
@@ -21,7 +21,7 @@ import {
   expect,
   textOf,
   gotoBrowserPage,
-  searchAprilWindow,
+  searchDemoWindow,
   dragSelectRowZero,
   altDragZoom,
   rawSearchSeededRows,
@@ -313,7 +313,7 @@ export const registry = {
   // ── F. Browse view: density heatmap ──
   F4: async ({ page, pageUrl }) => {
     await gotoBrowserPage(page, pageUrl);
-    await searchAprilWindow(page);
+    await searchDemoWindow(page);
     const rows = page.locator("#heatmap-labels .row");
     expect((await rows.count()) === 1, "expected 1 host row for the single seeded host");
     const label = (await rows.first().textContent()).trim();
@@ -326,7 +326,7 @@ export const registry = {
 
   F6: async ({ page, pageUrl }) => {
     await gotoBrowserPage(page, pageUrl);
-    await searchAprilWindow(page);
+    await searchDemoWindow(page);
     const painted = await page.evaluate(() => {
       const c = document.getElementById("heatmap-canvas");
       const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
@@ -340,24 +340,23 @@ export const registry = {
 
   F10: async ({ page, pageUrl }) => {
     await gotoBrowserPage(page, pageUrl);
-    await searchAprilWindow(page);
+    await searchDemoWindow(page);
     const ticks = page.locator("#heatmap-axis .tick");
     const n = await ticks.count();
     expect(n >= 2, `expected >=2 axis ticks, got ${n}`);
-    // The seeded segment crosses day boundaries, so ticks carry the date.
-    // Single-day spans keep the compact HH:MM:SS form.
+    // The seeded segment stays within one day, so ticks use the compact form.
     for (const t of await ticks.allTextContents()) {
       expect(
-        /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(t.trim()),
-        `tick "${t}" not date-carrying on a day-crossing span`,
+        /^\d{2}:\d{2}:\d{2}$/.test(t.trim()),
+        `tick "${t}" not time-only on a same-day span`,
       );
     }
-    return `${n} date-carrying ticks rendered (day-crossing span)`;
+    return `${n} time-only ticks rendered (same-day span)`;
   },
 
   F11: async ({ page, pageUrl }) => {
     await gotoBrowserPage(page, pageUrl);
-    await searchAprilWindow(page);
+    await searchDemoWindow(page);
     const hint = await textOf(page, "#heatmap-hint");
     expect(/Drag to select a window/.test(hint), "interaction hint missing");
     await page.waitForSelector("#heatmap-hint .legend .bar", { state: "visible" });
@@ -368,7 +367,7 @@ export const registry = {
 
   F12: async ({ page, pageUrl }) => {
     await gotoBrowserPage(page, pageUrl);
-    await searchAprilWindow(page);
+    await searchDemoWindow(page);
     await dragSelectRowZero(page);
     await page.waitForSelector("#heatmap-sel", { state: "visible" });
     const count = await textOf(page, "#selection-count");
@@ -378,7 +377,7 @@ export const registry = {
 
   F13: async ({ page, pageUrl }) => {
     await gotoBrowserPage(page, pageUrl);
-    await searchAprilWindow(page);
+    await searchDemoWindow(page);
     await clickRowZero(page);
     await page.waitForFunction(
       () => /1 segment/.test(document.getElementById("selection-count").textContent),
@@ -389,7 +388,7 @@ export const registry = {
 
   F14: async ({ page, pageUrl }) => {
     await gotoBrowserPage(page, pageUrl);
-    await searchAprilWindow(page);
+    await searchDemoWindow(page);
     await altDragZoom(page);
     await page.waitForSelector("#heatmap-reset-zoom", { state: "visible", timeout: 5_000 });
     return "Alt+drag zoomed (Reset zoom button appeared)";
@@ -397,7 +396,7 @@ export const registry = {
 
   F15: async ({ page, pageUrl }) => {
     await gotoBrowserPage(page, pageUrl);
-    await searchAprilWindow(page);
+    await searchDemoWindow(page);
     await altDragZoom(page);
     await page.waitForSelector("#heatmap-reset-zoom", { state: "visible", timeout: 5_000 });
     await page.locator("#heatmap-plot").dblclick({ position: { x: 200, y: HEATMAP_ROW_H / 2 } });
@@ -407,7 +406,7 @@ export const registry = {
 
   F16: async ({ page, pageUrl }) => {
     await gotoBrowserPage(page, pageUrl);
-    await searchAprilWindow(page);
+    await searchDemoWindow(page);
     await page.waitForSelector("#heatmap-reset-zoom", { state: "hidden" });
     await altDragZoom(page);
     await page.waitForSelector("#heatmap-reset-zoom", { state: "visible", timeout: 5_000 });
@@ -418,7 +417,7 @@ export const registry = {
 
   F17: async ({ page, pageUrl }) => {
     await gotoBrowserPage(page, pageUrl);
-    await searchAprilWindow(page);
+    await searchDemoWindow(page);
     await dragSelectRowZero(page);
     await page.waitForSelector("#heatmap-labels .row.sel", { timeout: 5_000 });
     await page.waitForSelector("#heatmap-sel", { state: "visible" });
@@ -427,7 +426,7 @@ export const registry = {
 
   F18: async ({ page, pageUrl }) => {
     await gotoBrowserPage(page, pageUrl);
-    await searchAprilWindow(page);
+    await searchDemoWindow(page);
     await dragSelectRowZero(page);
     await page.click("header h1"); // outside #heatmap-view and #actions-bar
     await page.waitForSelector("#heatmap-sel", { state: "hidden" });
@@ -523,7 +522,7 @@ export const registry = {
   // ── H. Actions bar ──
   H1: async ({ page, pageUrl }) => {
     await gotoBrowserPage(page, pageUrl);
-    await searchAprilWindow(page);
+    await searchDemoWindow(page);
     await dragSelectRowZero(page);
     const count = await textOf(page, "#selection-count");
     expect(
@@ -536,7 +535,7 @@ export const registry = {
 
   H2: async ({ page, pageUrl }) => {
     await gotoBrowserPage(page, pageUrl);
-    await searchAprilWindow(page);
+    await searchDemoWindow(page);
     await dragSelectRowZero(page);
     const url = await popupUrl(page, () => page.click("#view-btn"));
     expect(/viewer\.html\?/.test(url), `popup was ${url}`);
@@ -561,7 +560,7 @@ export const registry = {
 
   I4: async ({ page, pageUrl }) => {
     await gotoBrowserPage(page, pageUrl);
-    await searchAprilWindow(page);
+    await searchDemoWindow(page);
     await dragSelectRowZero(page);
     const url = await popupUrl(page, () => page.click("#view-btn"));
     const params = new URL(url).searchParams;
