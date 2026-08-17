@@ -11,8 +11,8 @@ import { chromium } from "playwright";
 // hit-testing all depend on layout, so the viewport is part of the contract.
 export const VIEWPORT = { width: 1440, height: 900 };
 
-// The dev-server seeds exactly one segment under the FIXED date path
-// `traces/2026-04-09/1900/...` (dial9-viewer/src/bin/dev_server.rs). The
+// The dev-server seeds exactly one segment under the fixed partition path
+// `traces/date=2026-04-09/time=1900/...` (dial9-viewer/src/bin/dev_server.rs). The
 // page's relative time windows ("Last 1hr" quick range, raw search's implicit
 // last-30-days window) are computed from Date.now(), so on a real clock the
 // seeded key drifts out of every reachable window. Checks that

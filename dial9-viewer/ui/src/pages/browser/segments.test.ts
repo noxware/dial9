@@ -15,11 +15,11 @@ import {
   unknownGroupPath,
 } from "./segments.js";
 
-// Documented layout: {prefix}/{date}/{HHMM}/{service}/{instance}/{boot}/{epoch}-{i}.bin
+// Current Hive-style layout.
 const knownKey = (
   epoch: number,
   { service = "api", host = "host-1", boot = "boot-a", seg = 0 } = {},
-) => `traces/2026-04-09/1910/${service}/${host}/${boot}/${epoch}-${seg}.bin.gz`;
+) => `traces/date=2026-04-09/time=1910/service=${service}/instance=${host}/boot=${boot}/${epoch}-${seg}.bin.gz`;
 
 // Six post-date components match no documented layout -> layout "unknown".
 const unknownKey = (epoch: number, dir = "traces/2026-04-09/1900/demo/local/host-0/abcd") =>

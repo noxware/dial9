@@ -82,9 +82,9 @@ pub async fn list_services(
             let Some(service) = key_service(&object.key) else {
                 continue;
             };
-            let hosts = hosts_by_service.entry(service.to_string()).or_default();
+            let hosts = hosts_by_service.entry(service).or_default();
             if let Some(host) = key_host(&object.key) {
-                hosts.insert(host.to_string());
+                hosts.insert(host);
             }
         }
         let services = hosts_by_service.keys().cloned().collect();
@@ -121,25 +121,39 @@ pub async fn list_services(
     for result in results {
         let (minute_prefix, children) = result.map_err(storage_error_response)?;
         let service_root = format!("{minute_prefix}/");
+        let hive = minute_prefix
+            .rsplit('/')
+            .next()
+            .is_some_and(|part| part.starts_with("time="));
         for child in children {
-            if let Some(service) = child
+            let Some(segment) = child
                 .strip_prefix(&service_root)
                 .and_then(|rest| rest.strip_suffix('/'))
                 .filter(|rest| !rest.is_empty() && !rest.contains('/'))
-            {
-                services.insert(service.to_string());
-                service_roots.push((service.to_string(), child));
+            else {
+                continue;
+            };
+            let service = if hive {
+                segment
+                    .strip_prefix("service=")
+                    .and_then(dial9_core::source_key::hive_unescape)
+            } else {
+                Some(segment.to_string())
+            };
+            if let Some(service) = service {
+                services.insert(service.clone());
+                service_roots.push((service, child, hive));
             }
         }
     }
 
     let host_results = futures::stream::iter(service_roots)
-        .map(|(service, service_root)| {
+        .map(|(service, service_root, hive)| {
             let backend = backend.clone();
             let bucket = bucket.clone();
             async move {
                 let children = backend.list_prefixes(&bucket, &service_root).await?;
-                Ok::<_, crate::storage::StorageError>((service, service_root, children))
+                Ok::<_, crate::storage::StorageError>((service, service_root, hive, children))
             }
         })
         .buffer_unordered(LIST_CONCURRENCY)
@@ -152,17 +166,27 @@ pub async fn list_services(
         .map(|service| (service, BTreeSet::new()))
         .collect::<BTreeMap<_, _>>();
     for result in host_results {
-        let (service, service_root, children) = result.map_err(storage_error_response)?;
+        let (service, service_root, hive, children) = result.map_err(storage_error_response)?;
         let hosts = hosts_by_service
             .get_mut(&service)
             .expect("discovered service must have a metadata entry");
         for child in children {
-            if let Some(host) = child
+            let Some(segment) = child
                 .strip_prefix(&service_root)
                 .and_then(|rest| rest.strip_suffix('/'))
                 .filter(|rest| !rest.is_empty() && !rest.contains('/'))
-            {
-                hosts.insert(host.to_string());
+            else {
+                continue;
+            };
+            let host = if hive {
+                segment
+                    .strip_prefix("instance=")
+                    .and_then(dial9_core::source_key::hive_unescape)
+            } else {
+                Some(segment.to_string())
+            };
+            if let Some(host) = host {
+                hosts.insert(host);
             }
         }
     }

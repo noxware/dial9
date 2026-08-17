@@ -8,6 +8,7 @@ mod s3;
 mod s3;
 pub mod server;
 pub mod simulator;
+mod source_key;
 pub mod storage;
 mod trace_shape;
 

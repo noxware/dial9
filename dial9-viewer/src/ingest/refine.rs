@@ -480,10 +480,9 @@ fn sampling_cap(files_matched: usize, max_files_override: Option<usize>) -> usiz
 
 /// Generate time-scoped listing prefixes from the scope's time range.
 ///
-/// Key layout: `{base_prefix}/{YYYY-MM-DD}/{HHMM}/{service}/{host}/…`, where
-/// `HHMM` is the segment's actual start time **down to the minute** (e.g.
-/// `1940`), not rounded to the hour — the producer creates a fresh directory
-/// every minute (`1930/`, `1931/`, …, `1939/`).
+/// Emits both the Hive-style 0.5 layout and historical positional prefixes so
+/// mixed buckets remain queryable during migration. `HHMM` is the segment's
+/// actual start time down to the minute.
 ///
 /// When the query window is narrow (≤ 2 hours), we emit **per-minute** prefixes
 /// (e.g. `2026-06-22/1303`) padded by 2 minutes on each side. A service-scoped
@@ -527,11 +526,18 @@ fn time_scoped_prefixes(source_prefixes: &[String], scope: &Scope) -> Vec<String
             let mut t = padded_start;
             while t <= padded_end {
                 let (date, hhmm) = epoch_to_date_hour(t);
-                let minute_prefix = format!("{base_slash}{date}/{hhmm}");
-                prefixes.push(match scope.service.as_deref() {
-                    Some(service) => format!("{minute_prefix}/{service}/"),
-                    None => minute_prefix,
-                });
+                let hive_prefix = format!("{base_slash}date={date}/time={hhmm}");
+                let historical_prefix = format!("{base_slash}{date}/{hhmm}");
+                if let Some(service) = scope.service.as_deref() {
+                    prefixes.push(format!(
+                        "{hive_prefix}/service={}/",
+                        dial9_core::source_key::hive_escape(service)
+                    ));
+                    prefixes.push(format!("{historical_prefix}/{service}/"));
+                } else {
+                    prefixes.push(hive_prefix);
+                    prefixes.push(historical_prefix);
+                }
                 t += 60;
             }
         }
@@ -553,6 +559,7 @@ fn time_scoped_prefixes(source_prefixes: &[String], scope: &Scope) -> Vec<String
             while t <= end_hour {
                 let (date, hhmm) = epoch_to_date_hour(t);
                 let hh = &hhmm[..2];
+                prefixes.push(format!("{base_slash}date={date}/time={hh}"));
                 prefixes.push(format!("{base_slash}{date}/{hh}"));
                 t += 3600;
             }
@@ -704,6 +711,7 @@ mod tests {
         let prefixes = time_scoped_prefixes(&["traces".to_string()], &scope);
         // Minute-level: should contain exact minute prefixes
         assert!(prefixes.contains(&"traces/2026-06-19/1258".to_string())); // 2 min before
+        assert!(prefixes.contains(&"traces/date=2026-06-19/time=1258".to_string()));
         assert!(prefixes.contains(&"traces/2026-06-19/1300".to_string()));
         assert!(prefixes.contains(&"traces/2026-06-19/1359".to_string()));
         assert!(prefixes.contains(&"traces/2026-06-19/1402".to_string())); // 2 min after
@@ -724,6 +732,7 @@ mod tests {
         };
         let prefixes = time_scoped_prefixes(&["traces".to_string()], &scope);
         assert!(prefixes.contains(&"traces/2026-06-19/12".to_string()));
+        assert!(prefixes.contains(&"traces/date=2026-06-19/time=12".to_string()));
         assert!(prefixes.contains(&"traces/2026-06-19/13".to_string()));
         assert!(prefixes.contains(&"traces/2026-06-19/16".to_string()));
         assert!(prefixes.contains(&"traces/2026-06-19/17".to_string()));
@@ -742,10 +751,13 @@ mod tests {
         let prefixes = time_scoped_prefixes(&["traces".to_string()], &scope);
 
         assert!(
-            prefixes.iter().all(|prefix| prefix.ends_with("/shale/")),
+            prefixes.iter().all(|prefix| {
+                prefix.ends_with("/shale/") || prefix.ends_with("/service=shale/")
+            }),
             "service-scoped LIST prefixes must exclude sibling services: {prefixes:?}"
         );
         assert!(prefixes.contains(&"traces/2026-06-19/1300/shale/".to_string()));
+        assert!(prefixes.contains(&"traces/date=2026-06-19/time=1300/service=shale/".to_string()));
     }
 
     #[test]
@@ -761,7 +773,9 @@ mod tests {
         let prefixes = time_scoped_prefixes(&["traces".to_string()], &scope);
 
         assert!(
-            prefixes.iter().all(|prefix| prefix.ends_with("/shale/")),
+            prefixes.iter().all(|prefix| {
+                prefix.ends_with("/shale/") || prefix.ends_with("/service=shale/")
+            }),
             "wide service scopes must not fall back to all-service hour prefixes: {prefixes:?}"
         );
         assert!(prefixes.contains(&"traces/2026-06-19/1300/shale/".to_string()));
@@ -780,6 +794,7 @@ mod tests {
         };
         let prefixes = time_scoped_prefixes(&["".to_string()], &scope);
         assert!(prefixes.contains(&"2026-06-19/1300".to_string()));
+        assert!(prefixes.contains(&"date=2026-06-19/time=1300".to_string()));
     }
 
     #[test]
@@ -800,6 +815,11 @@ mod tests {
             prefixes.iter().any(|p| real_key.starts_with(p.as_str())),
             "no generated prefix is a prefix of {real_key}; prefixes = {prefixes:?}"
         );
+        let hive_key = "date=2026-06-19/time=1340/service=shale/instance=host-a/boot=boot-1/1781876400-0.bin.gz";
+        assert!(
+            prefixes.iter().any(|p| hive_key.starts_with(p.as_str())),
+            "no generated prefix is a prefix of {hive_key}; prefixes = {prefixes:?}"
+        );
     }
 
     #[test]
@@ -815,10 +835,10 @@ mod tests {
             hosts: vec![],
         };
         let prefixes = time_scoped_prefixes(&["".to_string()], &scope);
-        // Should be a small number of minute-level prefixes, not hundreds
+        // Two layouts per minute should still be a small listing fan-out.
         assert!(
-            prefixes.len() <= 7,
-            "expected ≤7 prefixes for 60s window, got {}",
+            prefixes.len() <= 14,
+            "expected ≤14 prefixes for 60s window, got {}",
             prefixes.len()
         );
         // Must match the actual file path from the bug report

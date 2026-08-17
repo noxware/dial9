@@ -102,8 +102,8 @@ async fn demo_simulator_drives_browser_objects_and_aggregate_views_without_s3() 
         "the requested four-minute window should have virtual coverage"
     );
     let key = objects[0]["key"].as_str().unwrap();
-    assert!(key.starts_with("traces/"));
-    assert!(key.contains("/simulated-service/host-001/"));
+    assert!(key.starts_with("traces/date="));
+    assert!(key.contains("/service=simulated-service/instance=host-001/"));
 
     let (status, object) = get(
         &app,

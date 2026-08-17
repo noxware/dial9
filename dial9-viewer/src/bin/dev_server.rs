@@ -63,25 +63,23 @@ async fn main() -> anyhow::Result<()> {
 
         // Upload the full trace as a single gzipped segment
         let full_compressed = gzip_bytes(&demo_data);
+        let key = "traces/date=2026-04-09/time=1900/service=demo-service/instance=local%2Fhost-0/boot=abcd/1775761200-0.bin.gz";
         client
             .put_object()
             .bucket(bucket)
-            .key("traces/2026-04-09/1900/demo-service/local/host-0/abcd/1744224000-0.bin.gz")
+            .key(key)
             .body(full_compressed.into())
             .send()
             .await?;
-        tracing::info!(
-            key = "traces/2026-04-09/1900/demo-service/local/host-0/abcd/1744224000-0.bin.gz",
-            size = demo_data.len(),
-            "seeded full demo trace"
-        );
+        tracing::info!(key, size = demo_data.len(), "seeded full demo trace");
     } else {
         tracing::warn!("demo-trace.bin not found, seeding with synthetic data");
         for i in 0..5 {
             let data = format!("synthetic trace segment {i}");
             let compressed = gzip_bytes(data.as_bytes());
+            let epoch_secs = 1_775_761_800 + i * 60;
             let key = format!(
-                "traces/2026-04-09/191{i}/test-svc/us-east-1/host-1/xyzw/1744224{i}00-0.bin.gz"
+                "traces/date=2026-04-09/time=191{i}/service=test-svc/instance=us-east-1%2Fhost-1/boot=xyzw/{epoch_secs}-0.bin.gz"
             );
             client
                 .put_object()
@@ -160,7 +158,7 @@ async fn main() -> anyhow::Result<()> {
         default_prefix.as_deref().unwrap_or("(none)")
     );
     tracing::info!("try: http://localhost:{port}/");
-    tracing::info!("search for: 2026-04-09/");
+    tracing::info!("search for: date=2026-04-09/");
 
     axum::serve(listener, app)
         .with_graceful_shutdown(async {

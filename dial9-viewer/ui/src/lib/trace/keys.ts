@@ -49,7 +49,7 @@ export interface UnknownTraceKey {
 export type ParsedTraceKey = KnownTraceKey | UnknownTraceKey;
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const FILE_RE = /^(\d+)-(\d+)\.bin/;
+const FILE_RE = /^(\d+)-(\d+)\.bin(?:\.gz)?$/;
 
 function known(
   service: string,
@@ -65,30 +65,23 @@ function known(
  * Parse an S3 trace key into service / host / boot / segment metadata.
  *
  * Default layout:
+ *   {prefix}/date={YYYY-MM-DD}/time={HHMM}/service={service}/instance={instance}/boot={boot_id}/{epoch}-{index}.bin[.gz]
+ * Historical layout (with boot id):
  *   {prefix}/{YYYY-MM-DD}/{HHMM}/{service}/{instance}/{boot_id}/{epoch}-{index}.bin[.gz]
- * Legacy layout (older, no boot id):
+ * Older historical layout (no boot id):
  *   {prefix}/{YYYY-MM-DD}/{HHMM}/{service}/{instance}/{epoch}-{index}.bin[.gz]
  *
- * We find the date-shaped segment and count components between it and the
- * filename to distinguish. Keys with a date segment but a component count
- * matching neither layout are `layout: "unknown"` (see the defect-fix note
- * above). Keys with NO date-shaped segment fall back to best-effort
- * positional parsing when they have enough components, and are otherwise
- * `unknown` too.
+ * Documented layouts are recognized from the filename backwards, so an opaque
+ * prefix cannot be mistaken for a partition. Keys with a date-like segment but
+ * no recognized suffix are `layout: "unknown"` (see the defect-fix note
+ * above). Keys with no date-like segment fall back to best-effort positional
+ * parsing when they have enough components, and are otherwise `unknown` too.
  *
  * Parsing is pure: call `formatEpoch(key.epoch, { localTz })` at render time
  * rather than reading a page-global timezone toggle.
  */
 export function parseKey(key: string): ParsedTraceKey {
   const parts = key.split("/");
-  let dateIdx = -1;
-  for (let i = parts.length - 1; i >= 0; i--) {
-    // split() never yields holes; the index is in range.
-    if (DATE_RE.test(parts[i]!)) {
-      dateIdx = i;
-      break;
-    }
-  }
   const file = parts[parts.length - 1] ?? "";
   const match = FILE_RE.exec(file);
   let epoch = 0;
@@ -97,23 +90,38 @@ export function parseKey(key: string): ParsedTraceKey {
     epoch = parseInt(match[1]!, 10);
     segIndex = match[2]!;
   }
-  if (dateIdx >= 0) {
-    // Components after the date, not including the date itself.
-    const below = parts.length - 1 - dateIdx;
-    if (below === 5) {
+  if (parts.length >= 6) {
+    const start = parts.length - 6;
+    const date = partitionValue(parts[start]!, "date");
+    const time = partitionValue(parts[start + 1]!, "time");
+    const service = partitionValue(parts[start + 2]!, "service");
+    const instance = partitionValue(parts[start + 3]!, "instance");
+    const boot = partitionValue(parts[start + 4]!, "boot");
+    if (date !== undefined && time !== undefined && service !== undefined &&
+        instance !== undefined && boot !== undefined) {
+      if (date !== null && DATE_RE.test(date) && time !== null && TIME_RE.test(time) &&
+          service !== null && instance !== null && boot !== null) {
+        return known(service, instance, boot, epoch, segIndex);
+      }
+      return { layout: "unknown", rawKey: key, epoch, segIndex };
+    }
+    if (DATE_RE.test(parts[start]!) && TIME_RE.test(parts[start + 1]!)) {
       return known(
-        parts[dateIdx + 2]!,
-        parts[dateIdx + 3]!,
-        parts[dateIdx + 4]!,
+        parts[start + 2]!,
+        parts[start + 3]!,
+        parts[start + 4]!,
         epoch,
         segIndex
       );
     }
-    if (below === 4) {
-      return known(parts[dateIdx + 2]!, parts[dateIdx + 3]!, "", epoch, segIndex);
+  }
+  if (parts.length >= 5) {
+    const start = parts.length - 5;
+    if (DATE_RE.test(parts[start]!) && TIME_RE.test(parts[start + 1]!)) {
+      return known(parts[start + 2]!, parts[start + 3]!, "", epoch, segIndex);
     }
-    // A date-shaped segment with an undocumented component count: the
-    // legacy code shifted columns positionally here. Flag it instead.
+  }
+  if (parts.some((part) => DATE_RE.test(part) || part.startsWith("date="))) {
     return { layout: "unknown", rawKey: key, epoch, segIndex };
   }
   // No date-shaped segment anywhere: positional, best-effort (custom prefix
@@ -131,18 +139,40 @@ export function parseKey(key: string): ParsedTraceKey {
 }
 
 /**
- * Everything before the first `YYYY-MM-DD` path segment of an S3 key - the
- * authoritative key prefix handed to the aggregation endpoints. "" when no
- * date segment is found.
+ * Everything before a recognized source-key suffix. This is the authoritative
+ * key prefix handed to aggregation endpoints; "" when no suffix is found.
  */
 export function extractPrefix(key: string): string {
   const parts = key.split("/");
-  for (let i = 0; i < parts.length; i++) {
-    if (DATE_RE.test(parts[i]!)) {
-      return parts.slice(0, i).join("/");
+  if (parts.length >= 6) {
+    const start = parts.length - 6;
+    if (["date", "time", "service", "instance", "boot"].every(
+      (name, offset) => parts[start + offset]!.startsWith(`${name}=`),
+    )) return parts.slice(0, start).join("/");
+    if (DATE_RE.test(parts[start]!) && TIME_RE.test(parts[start + 1]!)) {
+      return parts.slice(0, start).join("/");
+    }
+  }
+  if (parts.length >= 5) {
+    const start = parts.length - 5;
+    if (DATE_RE.test(parts[start]!) && TIME_RE.test(parts[start + 1]!)) {
+      return parts.slice(0, start).join("/");
     }
   }
   return "";
+}
+
+const TIME_RE = /^\d{4}$/;
+
+/** `undefined` means wrong field name; `null` means malformed escaping. */
+function partitionValue(segment: string, name: string): string | null | undefined {
+  const prefix = `${name}=`;
+  if (!segment.startsWith(prefix)) return undefined;
+  try {
+    return decodeURIComponent(segment.slice(prefix.length));
+  } catch {
+    return null;
+  }
 }
 
 /** Formatting options shared by `formatEpoch` / `traceTitleParams`. */

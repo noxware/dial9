@@ -74,6 +74,9 @@ pub(crate) mod sealed;
 pub mod shared_state;
 /// `Source` trait: pluggable flush-thread data sources.
 pub mod source;
+/// Shared parsing and escaping for dial9 source-file keys.
+#[doc(hidden)]
+pub mod source_key;
 /// Test-only record/drain/write helpers.
 #[cfg(feature = "test-util")]
 pub mod test_util;

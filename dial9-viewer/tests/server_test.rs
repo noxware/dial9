@@ -446,11 +446,12 @@ async fn browse_fans_out_across_time_buckets() {
     let (s3, base, _dir) = setup_s3_test("traces-bucket", Some("traces-bucket".into()), None).await;
     let client = reqwest::Client::new();
 
-    // 2026-04-09 19:10:00Z .. 19:25:00Z — keys use {date}/{HHMM}/...
+    // 2026-04-09 19:10:00Z .. 19:25:00Z, split across the new and historical
+    // layouts to exercise migration listings.
     put_object(
         &s3,
         "traces-bucket",
-        "2026-04-09/1910/svc/hostA/1000-0.bin.gz",
+        "date=2026-04-09/time=1910/service=svc/instance=hostA/boot=boot/1000-0.bin.gz",
         &gzip_bytes(b"a"),
     )
     .await;
@@ -464,7 +465,7 @@ async fn browse_fans_out_across_time_buckets() {
     put_object(
         &s3,
         "traces-bucket",
-        "2026-04-09/1925/svc/hostC/1002-0.bin.gz",
+        "date=2026-04-09/time=1925/service=svc/instance=hostC/boot=boot/1002-0.bin.gz",
         &gzip_bytes(b"c"),
     )
     .await;
@@ -555,7 +556,7 @@ async fn browse_uses_minute_granularity_for_short_window() {
     put_object(
         &s3,
         "traces-bucket",
-        "2026-04-09/1910/svc/host/1000-0.bin.gz",
+        "date=2026-04-09/time=1910/service=svc/instance=host/boot=boot/1000-0.bin.gz",
         &gzip_bytes(b"a"),
     )
     .await;
@@ -585,8 +586,8 @@ async fn browse_uses_minute_granularity_for_short_window() {
     check!(objects[0]["key"].as_str().unwrap().contains("1910"));
 }
 
-/// A selected service uses exact `{date}/{HHMM}/{service}/` prefixes even for a
-/// window that would otherwise use broad hour prefixes.
+/// A selected service uses exact service prefixes even for a window that would
+/// otherwise use broad hour prefixes.
 #[tokio::test]
 async fn browse_filters_exact_service_for_wide_window() {
     let (s3, base, _dir) = setup_s3_test("traces-bucket", Some("traces-bucket".into()), None).await;
@@ -596,7 +597,9 @@ async fn browse_filters_exact_service_for_wide_window() {
         put_object(
             &s3,
             "traces-bucket",
-            &format!("2026-04-09/1910/{service}/host/1000-0.bin.gz"),
+            &format!(
+                "date=2026-04-09/time=1910/service={service}/instance=host/boot=boot/1000-0.bin.gz"
+            ),
             &gzip_bytes(payload),
         )
         .await;
@@ -615,7 +618,12 @@ async fn browse_filters_exact_service_for_wide_window() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let objects = body["objects"].as_array().unwrap();
     check!(objects.len() == 1);
-    check!(objects[0]["key"].as_str().unwrap().contains("/api/"));
+    check!(
+        objects[0]["key"]
+            .as_str()
+            .unwrap()
+            .contains("/service=api/")
+    );
 }
 
 #[tokio::test]
@@ -625,8 +633,9 @@ async fn services_discovers_sorted_unique_services_without_browse_objects() {
 
     for key in [
         "2026-04-09/1925/worker/host-a/1000-0.bin.gz",
-        "2026-04-09/1925/api/host-a/1000-0.bin.gz",
-        "2026-04-09/1926/api/host-b/1001-0.bin.gz",
+        "date=2026-04-09/time=1925/service=api/instance=host-a/boot=boot/1000-0.bin.gz",
+        "date=2026-04-09/time=1926/service=api/instance=host-b/boot=boot/1001-0.bin.gz",
+        "date=2026-04-09/time=1926/service=payments%2Fapi/instance=us-east-1%2Fi-0abc123/boot=boot/1001-1.bin.gz",
         "2026-04-09/2010/outside/host/1002-0.bin.gz",
     ] {
         put_object(&s3, "traces-bucket", key, &gzip_bytes(b"trace")).await;
@@ -643,11 +652,12 @@ async fn services_discovers_sorted_unique_services_without_browse_objects() {
         .unwrap();
     check!(resp.status().as_u16() == 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    check!(body["services"] == serde_json::json!(["api", "worker"]));
+    check!(body["services"] == serde_json::json!(["api", "payments/api", "worker"]));
     check!(
         body["service_metadata"]
             == serde_json::json!([
                 {"service": "api", "host_count": 2},
+                {"service": "payments/api", "host_count": 1},
                 {"service": "worker", "host_count": 1}
             ])
     );
@@ -717,7 +727,7 @@ async fn services_honors_default_and_request_prefix() {
 }
 
 #[tokio::test]
-async fn browse_empty_service_is_unfiltered_and_invalid_service_is_rejected() {
+async fn browse_empty_service_is_unfiltered_and_escaped_service_is_supported() {
     let (s3, base, _dir) = setup_s3_test("traces-bucket", Some("traces-bucket".into()), None).await;
     let client = reqwest::Client::new();
 
@@ -730,6 +740,13 @@ async fn browse_empty_service_is_unfiltered_and_invalid_service_is_rejected() {
         )
         .await;
     }
+    put_object(
+        &s3,
+        "traces-bucket",
+        "date=2026-04-09/time=1910/service=api%2Fworker/instance=host%2Fa/boot=boot/1000-0.bin.gz",
+        &gzip_bytes(b"trace"),
+    )
+    .await;
 
     let from = 1_775_761_680;
     let to = from + 22 * 60;
@@ -742,7 +759,7 @@ async fn browse_empty_service_is_unfiltered_and_invalid_service_is_rejected() {
         .unwrap();
     check!(resp.status().as_u16() == 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    check!(body["objects"].as_array().unwrap().len() == 2);
+    check!(body["objects"].as_array().unwrap().len() == 3);
 
     let resp = client
         .get(format!(
@@ -751,7 +768,16 @@ async fn browse_empty_service_is_unfiltered_and_invalid_service_is_rejected() {
         .send()
         .await
         .unwrap();
-    check!(resp.status().as_u16() == 400);
+    check!(resp.status().as_u16() == 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let objects = body["objects"].as_array().unwrap();
+    check!(objects.len() == 1);
+    check!(
+        objects[0]["key"]
+            .as_str()
+            .unwrap()
+            .contains("service=api%2Fworker")
+    );
 }
 
 /// `/api/browse` rejects a window where `to` precedes `from`.

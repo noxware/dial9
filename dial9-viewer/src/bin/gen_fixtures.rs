@@ -4,7 +4,7 @@
 //! checks stop carrying NOT-TRIGGERABLE holes (features/01 "Live validation
 //! results"):
 //!
-//!   - `dial9-fixtures` (bucket): multi-host / multi-service #225 layouts
+//!   - `dial9-fixtures` (bucket): multi-host / multi-service Hive-style layouts
 //!     driving the heatmap's boot-count annotation (F5), seam tiling (F7),
 //!     coverage-gap hatching (F8) and boot-change dividers (F9), plus a
 //!     10-segment windowing host and a multi-runtime (#596) segment;
@@ -193,11 +193,9 @@ fn fixture_epoch(h: u8, m: u8, s: u8) -> i64 {
         .unix_timestamp()
 }
 
-/// Default #225 key layout:
-/// `{prefix}/{YYYY-MM-DD}/{HHMM}/{service}/{instance}/{boot_id}/{epoch}-{index}.bin.gz`
-/// with the date/HHMM path derived FROM the epoch so they always agree
-/// (unlike the demo key, whose filename epoch mismatches its date path —
-/// features/01 finding 3).
+/// Default source-file key layout:
+/// `{prefix}/date={YYYY-MM-DD}/time={HHMM}/service={service}/instance={instance}/boot={boot_id}/{epoch}-{index}.bin.gz`
+/// with the date/HHMM path derived FROM the epoch so they always agree.
 fn layout_key(
     prefix: &str,
     service: &str,
@@ -214,7 +212,14 @@ fn layout_key(
         dt.day()
     );
     let hhmm = format!("{:02}{:02}", dt.hour(), dt.minute());
-    let tail = format!("{date}/{hhmm}/{service}/{host}/{boot}/{epoch_s}-{index}.bin.gz");
+    let tail = format!(
+        "date={}/time={}/service={}/instance={}/boot={}/{epoch_s}-{index}.bin.gz",
+        dial9_core::source_key::hive_escape(&date),
+        dial9_core::source_key::hive_escape(&hhmm),
+        dial9_core::source_key::hive_escape(service),
+        dial9_core::source_key::hive_escape(host),
+        dial9_core::source_key::hive_escape(boot),
+    );
     if prefix.is_empty() {
         tail
     } else {

@@ -48,7 +48,7 @@ export async function gotoBrowserPage(page, pageUrl) {
 /**
  * Browse-tab search over a window that contains the dev seed's segment.
  * The narrow window also lets the service-discovery feeler observe the
- * `2026-04-09/1900` bucket. Waits for the heatmap to render.
+ * `date=2026-04-09/time=1900` bucket. Waits for the heatmap to render.
  */
 export async function searchAprilWindow(page) {
   await page.fill("#range-from", "2026-04-09T18:55");

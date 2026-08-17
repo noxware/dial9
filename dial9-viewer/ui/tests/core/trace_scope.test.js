@@ -49,7 +49,28 @@ test("extractPrefix returns everything before the date", () => {
   assert.strictEqual(scope.extractPrefix("2026-06-29/1915/svc/h/b/1-1.bin.gz"), "");
 });
 
-test("parseKey: new layout with prefix (full field set)", () => {
+test("parseKey reads escaped Hive partitions from an opaque prefix", () => {
+  const hiveKey =
+    "company/date=archive/%25/date=2026-08-14/time=1937/" +
+    "service=payments%2Fapi/instance=us-east-1%2Fi%3D0%25abc/" +
+    "boot=boot%2Fid/1786736220-3.bin.gz";
+  const p = scope.parseKey(hiveKey);
+  assert.strictEqual(p.service, "payments/api");
+  assert.strictEqual(p.host, "us-east-1/i=0%abc");
+  assert.strictEqual(p.bootId, "boot/id");
+  assert.strictEqual(p.epoch, 1786736220);
+  assert.strictEqual(scope.extractPrefix(hiveKey), "company/date=archive/%25");
+});
+
+test("parseKey decodes one Hive escaping layer", () => {
+  const p = scope.parseKey(
+    "date=2026-08-14/time=1937/service=payments%252Fapi/" +
+      "instance=host/boot=boot/1786736220-3.bin.gz",
+  );
+  assert.strictEqual(p.service, "payments%2Fapi");
+});
+
+test("parseKey: historical boot-id layout with prefix", () => {
   const p = scope.parseKey("traces/2026-04-09/1910/checkout-api/us-east-1/abcd-123213/1744224000-3.bin.gz");
   assert.strictEqual(p.service, "checkout-api");
   assert.strictEqual(p.host, "us-east-1");

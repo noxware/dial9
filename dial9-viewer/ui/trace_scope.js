@@ -45,48 +45,67 @@
 
   // Parse an S3 trace key into its {service, host, bootId, epoch, segIndex}.
   // Mirrors the key layouts the browser understands:
+  //   {prefix}/date={YYYY-MM-DD}/time={HHMM}/service={service}/instance={instance}/boot={boot_id}/{epoch}-{i}.bin[.gz]
   //   {prefix}/{YYYY-MM-DD}/{HHMM}/{service}/{instance}/{boot_id}/{epoch}-{i}.bin[.gz]
   //   {prefix}/{YYYY-MM-DD}/{HHMM}/{service}/{instance}/{epoch}-{i}.bin[.gz]   (legacy)
-  // Find the date-shaped segment and count components after it to disambiguate;
-  // fall back to best-effort positional parsing for custom layouts.
+  // Recognize the documented suffix from the right so arbitrary prefixes do
+  // not shift fields; fall back to positional parsing only for custom layouts.
   function parseKey(key) {
     const parts = key.split("/");
     const dateRe = /^\d{4}-\d{2}-\d{2}$/;
-    let dateIdx = -1;
-    for (let i = parts.length - 1; i >= 0; i--) {
-      if (dateRe.test(parts[i])) {
-        dateIdx = i;
-        break;
-      }
-    }
+    const timeRe = /^\d{4}$/;
     const file = parts[parts.length - 1];
-    const match = file.match(/^(\d+)-(\d+)\.bin/);
+    const match = file.match(/^(\d+)-(\d+)\.bin(?:\.gz)?$/);
     let epoch = 0;
     let segIndex = "";
     if (match) {
       epoch = parseInt(match[1], 10);
       segIndex = match[2];
     }
-    if (dateIdx >= 0) {
-      const below = parts.length - 1 - dateIdx;
-      if (below === 5) {
+    if (parts.length >= 6) {
+      const start = parts.length - 6;
+      const date = partitionValue(parts[start], "date");
+      const time = partitionValue(parts[start + 1], "time");
+      const service = partitionValue(parts[start + 2], "service");
+      const instance = partitionValue(parts[start + 3], "instance");
+      const boot = partitionValue(parts[start + 4], "boot");
+      if (date !== undefined && time !== undefined && service !== undefined &&
+          instance !== undefined && boot !== undefined) {
+        if (date !== null && dateRe.test(date) && time !== null && timeRe.test(time)) {
+          return {
+            service: service || "",
+            host: instance === null ? key : instance,
+            bootId: boot || "",
+            epoch,
+            segIndex,
+          };
+        }
+        return { service: "", host: key, bootId: "", epoch, segIndex };
+      }
+      if (dateRe.test(parts[start]) && timeRe.test(parts[start + 1])) {
         return {
-          service: parts[dateIdx + 2],
-          host: parts[dateIdx + 3],
-          bootId: parts[dateIdx + 4],
+          service: parts[start + 2],
+          host: parts[start + 3],
+          bootId: parts[start + 4],
           epoch,
           segIndex,
         };
       }
-      if (below === 4) {
+    }
+    if (parts.length >= 5) {
+      const start = parts.length - 5;
+      if (dateRe.test(parts[start]) && timeRe.test(parts[start + 1])) {
         return {
-          service: parts[dateIdx + 2],
-          host: parts[dateIdx + 3],
+          service: parts[start + 2],
+          host: parts[start + 3],
           bootId: "",
           epoch,
           segIndex,
         };
       }
+    }
+    if (parts.some((part) => dateRe.test(part) || part.startsWith("date="))) {
+      return { service: "", host: key, bootId: "", epoch, segIndex };
     }
     if (parts.length >= 5) {
       return {
@@ -105,10 +124,34 @@
   function extractPrefix(key) {
     const parts = key.split("/");
     const dateRe = /^\d{4}-\d{2}-\d{2}$/;
-    for (let i = 0; i < parts.length; i++) {
-      if (dateRe.test(parts[i])) return parts.slice(0, i).join("/");
+    const timeRe = /^\d{4}$/;
+    if (parts.length >= 6) {
+      const start = parts.length - 6;
+      if (["date", "time", "service", "instance", "boot"].every(
+        (name, offset) => parts[start + offset].startsWith(name + "="),
+      )) return parts.slice(0, start).join("/");
+      if (dateRe.test(parts[start]) && timeRe.test(parts[start + 1])) {
+        return parts.slice(0, start).join("/");
+      }
+    }
+    if (parts.length >= 5) {
+      const start = parts.length - 5;
+      if (dateRe.test(parts[start]) && timeRe.test(parts[start + 1])) {
+        return parts.slice(0, start).join("/");
+      }
     }
     return "";
+  }
+
+  // `undefined`: wrong field name. `null`: malformed percent escape.
+  function partitionValue(segment, name) {
+    const prefix = name + "=";
+    if (!segment.startsWith(prefix)) return undefined;
+    try {
+      return decodeURIComponent(segment.slice(prefix.length));
+    } catch (_) {
+      return null;
+    }
   }
 
   // One viewer `trace=` component per key, each pointing at /api/object (which

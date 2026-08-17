@@ -36,10 +36,9 @@ import type { TimeRange } from "../../types/trace.js";
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
 
-// Default layout: {prefix}/{date}/{HHMM}/{service}/{instance}/{boot}/
-// {epoch}-{index}.bin.gz.
+// Current Hive-style layout.
 const key = (epoch: number, index = 0): string =>
-  `traces/2026-07-08/1030/svc-a/host-1/boot-1/${epoch}-${index}.bin.gz`;
+  `traces/date=2026-07-08/time=1030/service=svc-a/instance=host-1/boot=boot-1/${epoch}-${index}.bin.gz`;
 
 const range = (startNs: number, endNs: number): TimeRange => ({ startNs, endNs });
 
