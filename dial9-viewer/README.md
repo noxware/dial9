@@ -42,9 +42,10 @@ dial9 serve --simulator synthetic \
   --local
 ```
 
-Simulator objects use the production Hive-style source-key layout and the
-normal viewer storage API. The catalog is virtual: every requested time range
-has deterministic segments, and trace bytes are rendered only when fetched.
+Simulator objects use the production Hive-style layout for segment object keys
+and the normal viewer storage API. The catalog is virtual: every requested time
+range has deterministic segments, and trace bytes are rendered only when
+fetched.
 Flamegraph, span, and Tokio-stat rollups are written to a process-local
 temporary directory and removed when the server exits. Run `dial9 serve
 --help` for all simulator size, duration, and symbol options. Synthetic symbol
@@ -52,8 +53,8 @@ names remain anonymous placeholders by default; `--simulator-symbols
 realistic` emits deterministic Rust-like names for more representative
 flamegraphs.
 
-The S3 Browser reads both the default Hive-style source-key layout and
-historical positional keys, so mixed buckets remain browseable.
+The S3 Browser reads both the default Hive-style layout for segment object keys
+and historical positional keys, so mixed buckets remain browseable.
 
 ## Cargo features
 

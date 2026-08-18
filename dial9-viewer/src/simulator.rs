@@ -375,8 +375,8 @@ impl SimulatorBackend {
     }
 
     fn parse_key(&self, key: &str) -> Result<PayloadCoordinates, StorageError> {
-        let parsed = dial9_core::source_key::parse_source_key(key);
-        if parsed.layout != dial9_core::source_key::SourceKeyLayout::Hive
+        let parsed = dial9_core::segment_object_key::parse_segment_object_key(key);
+        if parsed.layout != dial9_core::segment_object_key::SegmentObjectKeyLayout::Hive
             || parsed.prefix.as_deref() != Some(self.prefix.as_str())
             || parsed.service.as_deref() != Some(self.service.as_str())
         {
@@ -1232,11 +1232,11 @@ fn simulator_key(
         .context("simulator segment sequence out of range")?;
     let tail = format!(
         "date={}/time={}/service={}/instance={}/boot={}/{epoch_secs}-{sequence}.bin.gz",
-        dial9_core::source_key::hive_escape(&date),
-        dial9_core::source_key::hive_escape(&minute),
-        dial9_core::source_key::hive_escape(service),
-        dial9_core::source_key::hive_escape(host),
-        dial9_core::source_key::hive_escape(boot_id),
+        dial9_core::segment_object_key::hive_escape(&date),
+        dial9_core::segment_object_key::hive_escape(&minute),
+        dial9_core::segment_object_key::hive_escape(service),
+        dial9_core::segment_object_key::hive_escape(host),
+        dial9_core::segment_object_key::hive_escape(boot_id),
     );
     if prefix.is_empty() {
         Ok(tail)

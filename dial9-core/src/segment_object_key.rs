@@ -1,8 +1,8 @@
-//! Dial9 source-file key layout and Hive path escaping.
+//! Dial9 segment object key layout and Hive path escaping.
 
-/// The recognized source-file directory layout.
+/// The recognized segment object key layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SourceKeyLayout {
+pub enum SegmentObjectKeyLayout {
     /// `date=…/time=…/service=…/instance=…/boot=…/{epoch}-{index}.bin[.gz]`.
     Hive,
     /// Historical layout with a boot-id directory.
@@ -13,13 +13,13 @@ pub enum SourceKeyLayout {
     Unknown,
 }
 
-/// Semantic fields recovered from a source-file key.
+/// Semantic fields recovered from a segment object key.
 ///
 /// Hive fields are optional independently: malformed escaping invalidates that
 /// field without hiding the filename or other valid fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParsedSourceKey {
-    pub layout: SourceKeyLayout,
+pub struct ParsedSegmentObjectKey {
+    pub layout: SegmentObjectKeyLayout,
     pub prefix: Option<String>,
     pub date: Option<String>,
     pub time: Option<String>,
@@ -78,8 +78,8 @@ pub fn hive_unescape(value: &str) -> Option<String> {
     String::from_utf8(decoded).ok()
 }
 
-/// Parse a dial9 source-file key, including historical layouts.
-pub fn parse_source_key(key: &str) -> ParsedSourceKey {
+/// Parse a dial9 segment object key, including historical layouts.
+pub fn parse_segment_object_key(key: &str) -> ParsedSegmentObjectKey {
     let path = strip_s3(key);
     let parts: Vec<&str> = path.split('/').collect();
     let filename = parts.last().copied().unwrap_or_default().to_string();
@@ -96,8 +96,8 @@ pub fn parse_source_key(key: &str) -> ParsedSourceKey {
             partition_value(parts[start + 3], "instance"),
             partition_value(parts[start + 4], "boot"),
         ) {
-            return ParsedSourceKey {
-                layout: SourceKeyLayout::Hive,
+            return ParsedSegmentObjectKey {
+                layout: SegmentObjectKeyLayout::Hive,
                 prefix: Some(parts[..start].join("/")),
                 date: date.filter(|value| is_date(value)),
                 time: time.filter(|value| is_time(value)),
@@ -111,8 +111,8 @@ pub fn parse_source_key(key: &str) -> ParsedSourceKey {
         }
 
         if is_date(parts[start]) && is_time(parts[start + 1]) {
-            return ParsedSourceKey {
-                layout: SourceKeyLayout::PositionalWithBoot,
+            return ParsedSegmentObjectKey {
+                layout: SegmentObjectKeyLayout::PositionalWithBoot,
                 prefix: Some(parts[..start].join("/")),
                 date: Some(parts[start].to_string()),
                 time: Some(parts[start + 1].to_string()),
@@ -129,8 +129,8 @@ pub fn parse_source_key(key: &str) -> ParsedSourceKey {
     if parts.len() >= 5 {
         let start = parts.len() - 5;
         if is_date(parts[start]) && is_time(parts[start + 1]) {
-            return ParsedSourceKey {
-                layout: SourceKeyLayout::PositionalWithoutBoot,
+            return ParsedSegmentObjectKey {
+                layout: SegmentObjectKeyLayout::PositionalWithoutBoot,
                 prefix: Some(parts[..start].join("/")),
                 date: Some(parts[start].to_string()),
                 time: Some(parts[start + 1].to_string()),
@@ -144,8 +144,8 @@ pub fn parse_source_key(key: &str) -> ParsedSourceKey {
         }
     }
 
-    ParsedSourceKey {
-        layout: SourceKeyLayout::Unknown,
+    ParsedSegmentObjectKey {
+        layout: SegmentObjectKeyLayout::Unknown,
         prefix: None,
         date: None,
         time: None,
@@ -263,10 +263,10 @@ mod tests {
 
     #[test]
     fn parses_hive_layout_from_the_right() {
-        let parsed = parse_source_key(
+        let parsed = parse_segment_object_key(
             "company/date=archive/%25/date=2026-08-14/time=1937/service=payments%2Fapi/instance=us-east-1%2Fi-0abc123/boot=abcd-4242/1786736220-3.bin.gz",
         );
-        assert_eq!(parsed.layout, SourceKeyLayout::Hive);
+        assert_eq!(parsed.layout, SegmentObjectKeyLayout::Hive);
         assert_eq!(parsed.prefix.as_deref(), Some("company/date=archive/%25"));
         assert_eq!(parsed.date.as_deref(), Some("2026-08-14"));
         assert_eq!(parsed.time.as_deref(), Some("1937"));
@@ -279,10 +279,10 @@ mod tests {
 
     #[test]
     fn malformed_hive_field_does_not_hide_other_fields() {
-        let parsed = parse_source_key(
+        let parsed = parse_segment_object_key(
             "date=2026-08-14/time=1937/service=bad%2/instance=host%2Fone/boot=boot/1786736220-3.bin.gz",
         );
-        assert_eq!(parsed.layout, SourceKeyLayout::Hive);
+        assert_eq!(parsed.layout, SegmentObjectKeyLayout::Hive);
         assert_eq!(parsed.service, None);
         assert_eq!(parsed.instance.as_deref(), Some("host/one"));
         assert_eq!(parsed.boot_id.as_deref(), Some("boot"));
@@ -291,23 +291,25 @@ mod tests {
 
     #[test]
     fn parses_both_historical_layouts() {
-        let current =
-            parse_source_key("traces/2026-04-09/1910/service/host/boot/1744224000-3.bin.gz");
-        assert_eq!(current.layout, SourceKeyLayout::PositionalWithBoot);
+        let current = parse_segment_object_key(
+            "traces/2026-04-09/1910/service/host/boot/1744224000-3.bin.gz",
+        );
+        assert_eq!(current.layout, SegmentObjectKeyLayout::PositionalWithBoot);
         assert_eq!(current.prefix.as_deref(), Some("traces"));
         assert_eq!(current.service.as_deref(), Some("service"));
         assert_eq!(current.instance.as_deref(), Some("host"));
         assert_eq!(current.boot_id.as_deref(), Some("boot"));
 
-        let legacy = parse_source_key("traces/2026-04-09/1910/service/host/1744224000-3.bin.gz");
-        assert_eq!(legacy.layout, SourceKeyLayout::PositionalWithoutBoot);
+        let legacy =
+            parse_segment_object_key("traces/2026-04-09/1910/service/host/1744224000-3.bin.gz");
+        assert_eq!(legacy.layout, SegmentObjectKeyLayout::PositionalWithoutBoot);
         assert_eq!(legacy.boot_id, None);
     }
 
     #[test]
     fn unknown_layout_keeps_filename_metadata() {
-        let parsed = parse_source_key("custom/path/1744224000-3.bin.gz");
-        assert_eq!(parsed.layout, SourceKeyLayout::Unknown);
+        let parsed = parse_segment_object_key("custom/path/1744224000-3.bin.gz");
+        assert_eq!(parsed.layout, SegmentObjectKeyLayout::Unknown);
         assert_eq!(parsed.filename, "1744224000-3.bin.gz");
         assert_eq!(parsed.epoch_secs, Some(1_744_224_000));
         assert_eq!(parsed.segment_index, Some(3));

@@ -114,9 +114,9 @@ fn bucket_segment(source_bucket: &str) -> String {
 /// The hash is only the leaf; the source bucket is derived from `source_key`.
 fn samples_part_key(output_prefix: &str, source_key: &str) -> String {
     let (date, service, host) = required_scope_fields(source_key);
-    let date = dial9_core::source_key::hive_escape(&date);
-    let service = dial9_core::source_key::hive_escape(&service);
-    let host = dial9_core::source_key::hive_escape(&host);
+    let date = dial9_core::segment_object_key::hive_escape(&date);
+    let service = dial9_core::segment_object_key::hive_escape(&service);
+    let host = dial9_core::segment_object_key::hive_escape(&host);
     format!(
         "{root}/samples/service={service}/date={date}/host={host}/{leaf}.parquet",
         root = versioned_root(output_prefix, &parse_source_bucket(source_key)),
@@ -144,9 +144,9 @@ fn polls_part_key(output_prefix: &str, source_key: &str) -> String {
 
 fn spans_part_key(output_prefix: &str, source_key: &str) -> String {
     let (date, service, host) = required_scope_fields(source_key);
-    let date = dial9_core::source_key::hive_escape(&date);
-    let service = dial9_core::source_key::hive_escape(&service);
-    let host = dial9_core::source_key::hive_escape(&host);
+    let date = dial9_core::segment_object_key::hive_escape(&date);
+    let service = dial9_core::segment_object_key::hive_escape(&service);
+    let host = dial9_core::segment_object_key::hive_escape(&host);
     format!(
         "{root}/spans/service={service}/date={date}/host={host}/{leaf}.parquet",
         root = versioned_root(output_prefix, &parse_source_bucket(source_key)),
@@ -632,7 +632,7 @@ fn folded_set_prefix(output_prefix: &str, source_bucket: &str, service: Option<&
     match service {
         Some(service) => format!(
             "{prefix}service={}/",
-            dial9_core::source_key::hive_escape(service)
+            dial9_core::segment_object_key::hive_escape(service)
         ),
         None => prefix,
     }

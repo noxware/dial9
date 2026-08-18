@@ -193,7 +193,7 @@ fn fixture_epoch(h: u8, m: u8, s: u8) -> i64 {
         .unix_timestamp()
 }
 
-/// Default source-file key layout:
+/// Default segment object key layout:
 /// `{prefix}/date={YYYY-MM-DD}/time={HHMM}/service={service}/instance={instance}/boot={boot_id}/{epoch}-{index}.bin.gz`
 /// with the date/HHMM path derived FROM the epoch so they always agree.
 fn layout_key(
@@ -214,11 +214,11 @@ fn layout_key(
     let hhmm = format!("{:02}{:02}", dt.hour(), dt.minute());
     let tail = format!(
         "date={}/time={}/service={}/instance={}/boot={}/{epoch_s}-{index}.bin.gz",
-        dial9_core::source_key::hive_escape(&date),
-        dial9_core::source_key::hive_escape(&hhmm),
-        dial9_core::source_key::hive_escape(service),
-        dial9_core::source_key::hive_escape(host),
-        dial9_core::source_key::hive_escape(boot),
+        dial9_core::segment_object_key::hive_escape(&date),
+        dial9_core::segment_object_key::hive_escape(&hhmm),
+        dial9_core::segment_object_key::hive_escape(service),
+        dial9_core::segment_object_key::hive_escape(host),
+        dial9_core::segment_object_key::hive_escape(boot),
     );
     if prefix.is_empty() {
         tail

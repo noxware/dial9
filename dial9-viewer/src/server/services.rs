@@ -136,7 +136,7 @@ pub async fn list_services(
             let service = if hive {
                 segment
                     .strip_prefix("service=")
-                    .and_then(dial9_core::source_key::hive_unescape)
+                    .and_then(dial9_core::segment_object_key::hive_unescape)
             } else {
                 Some(segment.to_string())
             };
@@ -181,7 +181,7 @@ pub async fn list_services(
             let host = if hive {
                 segment
                     .strip_prefix("instance=")
-                    .and_then(dial9_core::source_key::hive_unescape)
+                    .and_then(dial9_core::segment_object_key::hive_unescape)
             } else {
                 Some(segment.to_string())
             };

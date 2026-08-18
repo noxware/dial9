@@ -1,10 +1,10 @@
-use dial9_core::source_key::{SourceKeyLayout, parse_source_key};
+use dial9_core::segment_object_key::{SegmentObjectKeyLayout, parse_segment_object_key};
 
 /// Semantic fields used by both scope filtering and persisted Parquet rows.
 /// Returns `None` when a required field is missing or malformed.
 pub(crate) fn scope_fields(key: &str) -> Option<(String, String, String)> {
-    let parsed = parse_source_key(key);
-    if parsed.layout != SourceKeyLayout::Unknown {
+    let parsed = parse_segment_object_key(key);
+    if parsed.layout != SegmentObjectKeyLayout::Unknown {
         return Some((parsed.date?, parsed.service?, parsed.instance?));
     }
 

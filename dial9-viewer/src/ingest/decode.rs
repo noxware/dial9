@@ -373,8 +373,8 @@ fn extract_boot_id_from_path(source_key: &str) -> String {
 /// - `is_namespaced = false`: the path is flat/legacy. The returned value is
 ///   a best-effort fallback (directory portion) that cannot guarantee stability.
 fn extract_boot_id_from_path_qualified(source_key: &str) -> (String, bool) {
-    let parsed = dial9_core::source_key::parse_source_key(source_key);
-    if parsed.layout == dial9_core::source_key::SourceKeyLayout::Hive
+    let parsed = dial9_core::segment_object_key::parse_segment_object_key(source_key);
+    if parsed.layout == dial9_core::segment_object_key::SegmentObjectKeyLayout::Hive
         && let Some(boot_id) = parsed.boot_id
     {
         return (boot_id, true);

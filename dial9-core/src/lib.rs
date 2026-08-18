@@ -69,14 +69,14 @@ pub mod sampling;
 pub mod schema_extensions;
 /// Sealed-segment detection. The segment types are public via [`pipeline`].
 pub(crate) mod sealed;
+/// Shared parsing and escaping for dial9 segment object keys.
+#[doc(hidden)]
+pub mod segment_object_key;
 /// Runtime-agnostic recording state shared across threads.
 #[doc(hidden)]
 pub mod shared_state;
 /// `Source` trait: pluggable flush-thread data sources.
 pub mod source;
-/// Shared parsing and escaping for dial9 source-file keys.
-#[doc(hidden)]
-pub mod source_key;
 /// Test-only record/drain/write helpers.
 #[cfg(feature = "test-util")]
 pub mod test_util;

@@ -13,7 +13,7 @@ use dial9_core::pipeline::{
     ProcessError, ProcessErrorKind, SegmentData, SegmentProcessor, SegmentRef,
 };
 use dial9_core::rate_limited;
-use dial9_core::source_key::hive_escape;
+use dial9_core::segment_object_key::hive_escape;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;

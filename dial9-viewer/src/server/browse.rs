@@ -263,11 +263,11 @@ async fn browse_s3(
 }
 
 pub(super) fn key_service(key: &str) -> Option<String> {
-    dial9_core::source_key::parse_source_key(key).service
+    dial9_core::segment_object_key::parse_segment_object_key(key).service
 }
 
 pub(super) fn key_host(key: &str) -> Option<String> {
-    dial9_core::source_key::parse_source_key(key).instance
+    dial9_core::segment_object_key::parse_segment_object_key(key).instance
 }
 
 /// Build exact minute prefixes ending at a selected service segment.
@@ -280,7 +280,7 @@ fn service_time_prefixes(base: &str, from: i64, to: i64, service: &str) -> (Vec<
             .is_some_and(|part| part.starts_with("time="))
         {
             prefix.push_str("/service=");
-            prefix.push_str(&dial9_core::source_key::hive_escape(service));
+            prefix.push_str(&dial9_core::segment_object_key::hive_escape(service));
             prefix.push('/');
         } else {
             prefix.push('/');
