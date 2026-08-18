@@ -33,6 +33,15 @@ pub struct ParsedSegmentObjectKey {
     pub segment_index: Option<u32>,
 }
 
+#[derive(Default)]
+struct HiveFields {
+    date: Option<String>,
+    time: Option<String>,
+    service: Option<String>,
+    instance: Option<String>,
+    boot_id: Option<String>,
+}
+
 /// Escape a Hive partition-path value using Hive's canonical ASCII table.
 ///
 /// This intentionally preserves empty strings instead of substituting Hive's
@@ -89,29 +98,23 @@ pub fn parse_segment_object_key(key: &str) -> ParsedSegmentObjectKey {
         .map(|(epoch, index)| (Some(epoch), Some(index)))
         .unwrap_or((None, None));
 
+    if let Some((start, fields)) = parse_hive_partitions(&parts[..parts.len() - 1]) {
+        return ParsedSegmentObjectKey {
+            layout: SegmentObjectKeyLayout::Hive,
+            prefix: Some(parts[..start].join("/")),
+            date: fields.date,
+            time: fields.time,
+            service: fields.service,
+            instance: fields.instance,
+            boot_id: fields.boot_id,
+            filename,
+            epoch_secs,
+            segment_index,
+        };
+    }
+
     if parts.len() >= 6 {
         let start = parts.len() - 6;
-        if let (Some(date), Some(time), Some(service), Some(instance), Some(boot_id)) = (
-            partition_value(parts[start], "date"),
-            partition_value(parts[start + 1], "time"),
-            partition_value(parts[start + 2], "service"),
-            partition_value(parts[start + 3], "instance"),
-            partition_value(parts[start + 4], "boot"),
-        ) {
-            return ParsedSegmentObjectKey {
-                layout: SegmentObjectKeyLayout::Hive,
-                prefix: Some(parts[..start].join("/")),
-                date: date.filter(|value| is_date(value)),
-                time: time.filter(|value| is_time(value)),
-                service,
-                instance,
-                boot_id,
-                filename,
-                epoch_secs,
-                segment_index,
-            };
-        }
-
         if is_date(parts[start]) && is_time(parts[start + 1]) {
             return ParsedSegmentObjectKey {
                 layout: SegmentObjectKeyLayout::PositionalWithBoot,
@@ -168,11 +171,49 @@ fn strip_s3(key: &str) -> &str {
     }
 }
 
-fn partition_value(segment: &str, name: &str) -> Option<Option<String>> {
-    segment
-        .strip_prefix(name)
-        .and_then(|value| value.strip_prefix('='))
-        .map(hive_unescape)
+fn parse_hive_partitions(parts: &[&str]) -> Option<(usize, HiveFields)> {
+    for start in (0..parts.len()).rev() {
+        if !parts[start].starts_with("date=") {
+            continue;
+        }
+
+        let mut fields = HiveFields::default();
+        let (mut saw_date, mut saw_time, mut saw_service, mut saw_instance) =
+            (false, false, false, false);
+        let mut valid = true;
+
+        for segment in &parts[start..] {
+            let Some((name, encoded_value)) = segment.split_once('=') else {
+                valid = false;
+                break;
+            };
+            match name {
+                "date" => {
+                    saw_date = true;
+                    fields.date = hive_unescape(encoded_value).filter(|value| is_date(value));
+                }
+                "time" => {
+                    saw_time = true;
+                    fields.time = hive_unescape(encoded_value).filter(|value| is_time(value));
+                }
+                "service" => {
+                    saw_service = true;
+                    fields.service = hive_unescape(encoded_value);
+                }
+                "instance" => {
+                    saw_instance = true;
+                    fields.instance = hive_unescape(encoded_value);
+                }
+                "boot" => fields.boot_id = hive_unescape(encoded_value),
+                _ => {}
+            }
+        }
+
+        if valid && saw_date && saw_time && saw_service && saw_instance {
+            return Some((start, fields));
+        }
+    }
+    None
 }
 
 fn parse_filename(filename: &str) -> Option<(i64, u32)> {
@@ -277,6 +318,20 @@ mod tests {
         assert_eq!(parsed.boot_id.as_deref(), Some("abcd-4242"));
         assert_eq!(parsed.epoch_secs, Some(1_786_736_220));
         assert_eq!(parsed.segment_index, Some(3));
+    }
+
+    #[test]
+    fn parses_hive_fields_by_name_with_optional_boot() {
+        let parsed = parse_segment_object_key(
+            "traces/date=2026-08-14/region=uy/instance=host%2Fone/service=svc/time=1937/1786736220-3.bin.gz",
+        );
+        assert_eq!(parsed.layout, SegmentObjectKeyLayout::Hive);
+        assert_eq!(parsed.prefix.as_deref(), Some("traces"));
+        assert_eq!(parsed.date.as_deref(), Some("2026-08-14"));
+        assert_eq!(parsed.time.as_deref(), Some("1937"));
+        assert_eq!(parsed.service.as_deref(), Some("svc"));
+        assert_eq!(parsed.instance.as_deref(), Some("host/one"));
+        assert_eq!(parsed.boot_id, None);
     }
 
     #[test]

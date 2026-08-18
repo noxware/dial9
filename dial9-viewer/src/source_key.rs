@@ -44,7 +44,7 @@ mod tests {
     #[test]
     fn malformed_structured_keys_do_not_use_the_custom_fallback() {
         for key in [
-            "traces/date=2026-08-14/time=1937/service=svc/instance=host/1-0.bin.gz",
+            "traces/date=2026-08-14/time=1937/service=bad%2/instance=host/1-0.bin.gz",
             "traces/2026-08-14/1937/service/host/boot/extra/1-0.bin.gz",
         ] {
             assert_eq!(scope_fields(key), None, "{key}");
@@ -53,6 +53,16 @@ mod tests {
         assert_eq!(
             scope_fields("custom/prefix/service/host/1-0.bin.gz"),
             Some(("custom".into(), "service".into(), "host".into()))
+        );
+    }
+
+    #[test]
+    fn hive_scope_fields_are_named_and_boot_is_optional() {
+        assert_eq!(
+            scope_fields(
+                "traces/date=2026-08-14/region=uy/instance=host%2Fone/service=svc/time=1937/1-0.bin.gz"
+            ),
+            Some(("2026-08-14".into(), "svc".into(), "host/one".into()))
         );
     }
 }

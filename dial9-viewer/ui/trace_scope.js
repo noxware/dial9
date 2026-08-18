@@ -62,27 +62,23 @@
       epoch = parseInt(match[1], 10);
       segIndex = match[2];
     }
+    const hive = parseHivePartitions(parts);
+    if (hive) {
+      if (hive.date !== null && dateRe.test(hive.date) &&
+          hive.time !== null && timeRe.test(hive.time) &&
+          hive.service !== null && hive.instance !== null && hive.boot !== null) {
+        return {
+          service: hive.service,
+          host: hive.instance,
+          bootId: hive.boot || "",
+          epoch,
+          segIndex,
+        };
+      }
+      return { service: "", host: key, bootId: "", epoch, segIndex };
+    }
     if (parts.length >= 6) {
       const start = parts.length - 6;
-      const date = partitionValue(parts[start], "date");
-      const time = partitionValue(parts[start + 1], "time");
-      const service = partitionValue(parts[start + 2], "service");
-      const instance = partitionValue(parts[start + 3], "instance");
-      const boot = partitionValue(parts[start + 4], "boot");
-      if (date !== undefined && time !== undefined && service !== undefined &&
-          instance !== undefined && boot !== undefined) {
-        if (date !== null && dateRe.test(date) && time !== null && timeRe.test(time) &&
-            service !== null && instance !== null && boot !== null) {
-          return {
-            service,
-            host: instance,
-            bootId: boot,
-            epoch,
-            segIndex,
-          };
-        }
-        return { service: "", host: key, bootId: "", epoch, segIndex };
-      }
       if (dateRe.test(parts[start]) && timeRe.test(parts[start + 1])) {
         return {
           service: parts[start + 2],
@@ -126,11 +122,10 @@
     const parts = key.split("/");
     const dateRe = /^\d{4}-\d{2}-\d{2}$/;
     const timeRe = /^\d{4}$/;
+    const hive = parseHivePartitions(parts);
+    if (hive) return parts.slice(0, hive.start).join("/");
     if (parts.length >= 6) {
       const start = parts.length - 6;
-      if (["date", "time", "service", "instance", "boot"].every(
-        (name, offset) => parts[start + offset].startsWith(name + "="),
-      )) return parts.slice(0, start).join("/");
       if (dateRe.test(parts[start]) && timeRe.test(parts[start + 1])) {
         return parts.slice(0, start).join("/");
       }
@@ -144,12 +139,39 @@
     return "";
   }
 
-  // `undefined`: wrong field name. `null`: malformed percent escape.
-  function partitionValue(segment, name) {
-    const prefix = name + "=";
-    if (!segment.startsWith(prefix)) return undefined;
+  function parseHivePartitions(parts) {
+    for (let start = parts.length - 2; start >= 0; start--) {
+      if (!parts[start].startsWith("date=")) continue;
+
+      const values = new Map();
+      let valid = true;
+      for (const segment of parts.slice(start, -1)) {
+        const separator = segment.indexOf("=");
+        if (separator < 0) {
+          valid = false;
+          break;
+        }
+        const name = segment.slice(0, separator);
+        if (!["date", "time", "service", "instance", "boot"].includes(name)) continue;
+        values.set(name, decodePartitionValue(segment.slice(separator + 1)));
+      }
+      if (valid && ["date", "time", "service", "instance"].every((name) => values.has(name))) {
+        return {
+          start,
+          date: values.get("date"),
+          time: values.get("time"),
+          service: values.get("service"),
+          instance: values.get("instance"),
+          boot: values.get("boot"),
+        };
+      }
+    }
+    return null;
+  }
+
+  function decodePartitionValue(value) {
     try {
-      return decodeURIComponent(segment.slice(prefix.length));
+      return decodeURIComponent(value);
     } catch (_) {
       return null;
     }

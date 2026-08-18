@@ -33,6 +33,21 @@ describe("parseKey: Hive-style layout", () => {
     expect(parsed.service).toBe("payments%2Fapi");
   });
 
+  it("parses fields by name, ignores unknown fields, and allows missing boot", () => {
+    const reordered =
+      "traces/date=2026-08-14/region=uy/instance=host%2Fone/" +
+      "service=svc/time=1937/1786736220-3.bin.gz";
+    expect(parseKey(reordered)).toEqual({
+      layout: "known",
+      service: "svc",
+      host: "host/one",
+      bootId: "",
+      epoch: 1786736220,
+      segIndex: "3",
+    });
+    expect(extractPrefix(reordered)).toBe("traces");
+  });
+
   it("keeps a malformed partition key visible as unknown", () => {
     const rawKey =
       "date=2026-08-14/time=1937/service=bad%2/instance=host/" +

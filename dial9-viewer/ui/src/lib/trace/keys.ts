@@ -13,8 +13,7 @@ export interface KnownTraceKey {
   service: string;
   host: string;
   /**
-   * Boot id from the current layout; "" for the legacy layout and the
-   * positional fallback, which carry no boot id on the path.
+   * Boot id from the current layout; "" when the path carries no boot id.
    */
   bootId: string;
   /**
@@ -90,21 +89,17 @@ export function parseKey(key: string): ParsedTraceKey {
     epoch = parseInt(match[1]!, 10);
     segIndex = match[2]!;
   }
+  const hive = parseHivePartitions(parts);
+  if (hive) {
+    if (hive.date !== null && DATE_RE.test(hive.date) &&
+        hive.time !== null && TIME_RE.test(hive.time) &&
+        hive.service !== null && hive.instance !== null && hive.boot !== null) {
+      return known(hive.service, hive.instance, hive.boot ?? "", epoch, segIndex);
+    }
+    return { layout: "unknown", rawKey: key, epoch, segIndex };
+  }
   if (parts.length >= 6) {
     const start = parts.length - 6;
-    const date = partitionValue(parts[start]!, "date");
-    const time = partitionValue(parts[start + 1]!, "time");
-    const service = partitionValue(parts[start + 2]!, "service");
-    const instance = partitionValue(parts[start + 3]!, "instance");
-    const boot = partitionValue(parts[start + 4]!, "boot");
-    if (date !== undefined && time !== undefined && service !== undefined &&
-        instance !== undefined && boot !== undefined) {
-      if (date !== null && DATE_RE.test(date) && time !== null && TIME_RE.test(time) &&
-          service !== null && instance !== null && boot !== null) {
-        return known(service, instance, boot, epoch, segIndex);
-      }
-      return { layout: "unknown", rawKey: key, epoch, segIndex };
-    }
     if (DATE_RE.test(parts[start]!) && TIME_RE.test(parts[start + 1]!)) {
       return known(
         parts[start + 2]!,
@@ -144,11 +139,10 @@ export function parseKey(key: string): ParsedTraceKey {
  */
 export function extractPrefix(key: string): string {
   const parts = key.split("/");
+  const hive = parseHivePartitions(parts);
+  if (hive) return parts.slice(0, hive.start).join("/");
   if (parts.length >= 6) {
     const start = parts.length - 6;
-    if (["date", "time", "service", "instance", "boot"].every(
-      (name, offset) => parts[start + offset]!.startsWith(`${name}=`),
-    )) return parts.slice(0, start).join("/");
     if (DATE_RE.test(parts[start]!) && TIME_RE.test(parts[start + 1]!)) {
       return parts.slice(0, start).join("/");
     }
@@ -164,12 +158,48 @@ export function extractPrefix(key: string): string {
 
 const TIME_RE = /^\d{4}$/;
 
-/** `undefined` means wrong field name; `null` means malformed escaping. */
-function partitionValue(segment: string, name: string): string | null | undefined {
-  const prefix = `${name}=`;
-  if (!segment.startsWith(prefix)) return undefined;
+interface HivePartitions {
+  start: number;
+  date: string | null;
+  time: string | null;
+  service: string | null;
+  instance: string | null;
+  boot: string | null | undefined;
+}
+
+function parseHivePartitions(parts: string[]): HivePartitions | null {
+  for (let start = parts.length - 2; start >= 0; start--) {
+    if (!parts[start]!.startsWith("date=")) continue;
+
+    const values = new Map<string, string | null>();
+    let valid = true;
+    for (const segment of parts.slice(start, -1)) {
+      const separator = segment.indexOf("=");
+      if (separator < 0) {
+        valid = false;
+        break;
+      }
+      const name = segment.slice(0, separator);
+      if (!["date", "time", "service", "instance", "boot"].includes(name)) continue;
+      values.set(name, decodePartitionValue(segment.slice(separator + 1)));
+    }
+    if (valid && ["date", "time", "service", "instance"].every((name) => values.has(name))) {
+      return {
+        start,
+        date: values.get("date")!,
+        time: values.get("time")!,
+        service: values.get("service")!,
+        instance: values.get("instance")!,
+        boot: values.get("boot"),
+      };
+    }
+  }
+  return null;
+}
+
+function decodePartitionValue(value: string): string | null {
   try {
-    return decodeURIComponent(segment.slice(prefix.length));
+    return decodeURIComponent(value);
   } catch {
     return null;
   }
