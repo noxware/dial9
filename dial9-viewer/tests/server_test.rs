@@ -447,7 +447,7 @@ async fn browse_fans_out_across_time_buckets() {
     let client = reqwest::Client::new();
 
     // 2026-04-09 19:10:00Z .. 19:25:00Z, split across the new and historical
-    // layouts to exercise migration listings.
+    // layouts to exercise mixed-layout listings.
     put_object(
         &s3,
         "traces-bucket",

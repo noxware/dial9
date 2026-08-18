@@ -480,22 +480,12 @@ fn sampling_cap(files_matched: usize, max_files_override: Option<usize>) -> usiz
 
 /// Generate time-scoped listing prefixes from the scope's time range.
 ///
-/// Emits both the Hive-style 0.5 layout and historical positional prefixes so
-/// mixed buckets remain queryable during migration. `HHMM` is the segment's
-/// actual start time down to the minute.
-///
-/// When the query window is narrow (≤ 2 hours), we emit **per-minute** prefixes
-/// (e.g. `2026-06-22/1303`) padded by 2 minutes on each side. A service-scoped
-/// query always uses exact minute prefixes ending in `/{service}/`, regardless
-/// of window width, because the service component follows the full `HHMM`
-/// component in the key. This excludes sibling services at S3 LIST time.
-///
-/// Wider all-service windows (> 2 hours) use **per-hour** prefixes (e.g.
-/// `2026-06-22/13`) padded by 1 hour. Both paths are capped at 72 hours.
-///
-/// Host pruning remains in-memory in `scope_matches`.
-///
-/// Falls back to the raw `source_prefixes` when no time range is given.
+/// Emits Hive-style and historical positional prefixes for compatibility.
+/// Service scopes and windows up to two hours use minute buckets with two
+/// minutes of padding; wider all-service windows use hour buckets with one hour
+/// of padding. Both paths are capped at 72 hours. Service partitions are
+/// included in the listing prefix, while host pruning remains in-memory in
+/// `scope_matches`. Without a time range, returns the raw `source_prefixes`.
 fn time_scoped_prefixes(source_prefixes: &[String], scope: &Scope) -> Vec<String> {
     let (Some(start_ns), Some(end_ns)) = (scope.start_ns, scope.end_ns) else {
         return source_prefixes.to_vec();

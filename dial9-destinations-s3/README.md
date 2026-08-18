@@ -12,7 +12,7 @@ dial9 = { version = "0.5", features = ["worker-s3"] }
 
 ## Default object keys
 
-Version 0.5 writes trace segments using a time-first Hive-style layout:
+The default uploader writes trace segments using a time-first Hive-style layout:
 
 ```text
 {prefix}/date={YYYY-MM-DD}/time={HHMM}/service={service}/instance={instance}/boot={boot_id}/{epoch_secs}-{index}.bin[.gz]

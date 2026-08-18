@@ -187,8 +187,9 @@ fn required_scope_fields(key: &str) -> (String, String, String) {
     parse_scope_fields(key).expect("aggregation source key must have parsed scope fields")
 }
 
-/// The host path component of a source key (empty when the key has no host
-/// segment). Used to count distinct hosts for the coverage's fleet-spread badge.
+/// The parsed host component used for the coverage's fleet-spread badge.
+///
+/// Panics when the key has no reliable scope fields.
 pub(crate) fn host_of(key: &str) -> String {
     required_scope_fields(key).2
 }

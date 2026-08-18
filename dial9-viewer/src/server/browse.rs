@@ -22,7 +22,7 @@ use crate::storage::{ObjectInfo, StorageBackend, StorageError};
 const PER_PREFIX_CAP: usize = 10_000;
 
 /// Bound on how many time buckets a single browse request may fan out to. Each
-/// bucket emits one current and one historical prefix during the 0.5 migration.
+/// bucket emits one Hive-style and one historical prefix.
 const MAX_TIME_BUCKETS: usize = 2_000;
 
 /// Max S3 list calls in flight at once. Overlaps the network-bound list calls
@@ -536,7 +536,7 @@ mod tests {
         assert_eq!(key_host("boot/trace.0.bin"), None);
     }
 
-    /// Empty base prefix yields a bare `{date}/{time}` prefix (no leading slash).
+    /// An empty base adds no leading slash to either layout.
     #[test]
     fn empty_base_has_no_leading_slash() {
         let (prefixes, _) = time_prefixes("", 1_781_032_200, 1_781_032_200, Granularity::TenMinute);

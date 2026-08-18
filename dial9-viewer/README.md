@@ -52,8 +52,8 @@ names remain anonymous placeholders by default; `--simulator-symbols
 realistic` emits deterministic Rust-like names for more representative
 flamegraphs.
 
-The S3 Browser reads both the 0.5 Hive-style source-key layout and historical
-positional keys, so mixed buckets remain browseable during migration.
+The S3 Browser reads both the default Hive-style source-key layout and
+historical positional keys, so mixed buckets remain browseable.
 
 ## Cargo features
 

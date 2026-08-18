@@ -317,9 +317,8 @@ s3://{bucket}/{prefix}/date={YYYY-MM-DD}/time={HHMM}/service={service}/instance=
 Extension is `.bin.gz` when compressed, `.bin` when not.
 
 The uploader applies Hive path escaping to every named partition value. The
-viewer decodes one `%HH` layer and continues to read the historical positional
-layout during migration. A custom `S3KeyFn` remains opaque and bypasses this
-default convention.
+viewer decodes one `%HH` layer and also reads the historical positional layout.
+A custom `S3KeyFn` remains opaque and bypasses this default convention.
 
 **Metadata headers** (set via S3 SDK `.metadata()` — the SDK auto-adds the `x-amz-meta-` prefix):
 ```

@@ -128,8 +128,8 @@ S3 browser's 🔥 button builds a scope from the heatmap selection's hosts +
 `[t0,t1]` and drives the [[refinement-loop]] when the server advertises
 `aggregation_enabled` via `/api/config`.
 
-During the 0.5 migration the viewer lists both this layout and the historical
-positional layout; the uploader writes only the Hive-style form.
+The viewer also lists the historical positional layout; the uploader writes
+only the Hive-style form.
 _Avoid_: query (use "scope" for the selection, "query" for the request).
 
 ## Worker attribution
