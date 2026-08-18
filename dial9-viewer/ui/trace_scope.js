@@ -48,8 +48,8 @@
   //   {prefix}/date={YYYY-MM-DD}/time={HHMM}/service={service}/instance={instance}/boot={boot_id}/{epoch}-{i}.bin[.gz]
   //   {prefix}/{YYYY-MM-DD}/{HHMM}/{service}/{instance}/{boot_id}/{epoch}-{i}.bin[.gz]
   //   {prefix}/{YYYY-MM-DD}/{HHMM}/{service}/{instance}/{epoch}-{i}.bin[.gz]   (legacy)
-  // Recognize the documented suffix from the right so arbitrary prefixes do
-  // not shift fields; fall back to positional parsing only for custom layouts.
+  // Hive fields are matched by name, unknown fields are ignored, and boot is
+  // optional. Prefixes remain opaque; historical layouts stay positional.
   function parseKey(key) {
     const parts = key.split("/");
     const dateRe = /^\d{4}-\d{2}-\d{2}$/;

@@ -4,7 +4,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SegmentObjectKeyLayout {
-    /// `date=…/time=…/service=…/instance=…/boot=…/{epoch}-{index}.bin[.gz]`.
+    /// Hive-style named partitions.
     Hive,
     /// Historical layout with a boot-id directory.
     PositionalWithBoot,
@@ -16,8 +16,8 @@ pub enum SegmentObjectKeyLayout {
 
 /// Semantic fields recovered from a segment object key.
 ///
-/// Hive fields are optional independently: malformed escaping invalidates that
-/// field without hiding the filename or other valid fields.
+/// A malformed Hive value is `None` without hiding other valid fields. The
+/// `boot` partition is optional when reading.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ParsedSegmentObjectKey {

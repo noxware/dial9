@@ -65,16 +65,15 @@ function known(
  *
  * Default layout:
  *   {prefix}/date={YYYY-MM-DD}/time={HHMM}/service={service}/instance={instance}/boot={boot_id}/{epoch}-{index}.bin[.gz]
+ * Hive fields are matched by name; unknown fields are ignored and boot is optional.
  * Historical layout (with boot id):
  *   {prefix}/{YYYY-MM-DD}/{HHMM}/{service}/{instance}/{boot_id}/{epoch}-{index}.bin[.gz]
  * Older historical layout (no boot id):
  *   {prefix}/{YYYY-MM-DD}/{HHMM}/{service}/{instance}/{epoch}-{index}.bin[.gz]
  *
- * Documented layouts are recognized from the filename backwards, so an opaque
- * prefix cannot be mistaken for a partition. Keys with a date-like segment but
- * no recognized suffix are `layout: "unknown"` (see the defect-fix note
- * above). Keys with no date-like segment fall back to best-effort positional
- * parsing when they have enough components, and are otherwise `unknown` too.
+ * Layouts are recognized from the filename backwards so an opaque prefix is
+ * not mistaken for a partition. Date-like but unsupported layouts are
+ * `unknown`; dateless keys retain the best-effort positional fallback.
  *
  * Parsing is pure: call `formatEpoch(key.epoch, { localTz })` at render time
  * rather than reading a page-global timezone toggle.
