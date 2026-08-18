@@ -2,6 +2,7 @@
 
 /// The recognized segment object key layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SegmentObjectKeyLayout {
     /// `date=…/time=…/service=…/instance=…/boot=…/{epoch}-{index}.bin[.gz]`.
     Hive,
@@ -18,6 +19,7 @@ pub enum SegmentObjectKeyLayout {
 /// Hive fields are optional independently: malformed escaping invalidates that
 /// field without hiding the filename or other valid fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ParsedSegmentObjectKey {
     pub layout: SegmentObjectKeyLayout,
     pub prefix: Option<String>,
