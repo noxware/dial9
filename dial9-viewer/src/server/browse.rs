@@ -21,9 +21,8 @@ use crate::storage::{ObjectInfo, StorageBackend, StorageError};
 /// truncated so the UI warns rather than silently showing partial data.
 const PER_PREFIX_CAP: usize = 10_000;
 
-/// Bound on how many time buckets a single browse request may fan out to. Each
-/// bucket emits one Hive-style and one historical prefix.
-const MAX_TIME_BUCKETS: usize = 2_000;
+/// Bound on how many time prefixes a single browse request may fan out to.
+const MAX_PREFIXES: usize = 2_000;
 
 /// Max S3 list calls in flight at once. Overlaps the network-bound list calls
 /// without exhausting the connection pool on a wide fan-out.
@@ -52,7 +51,7 @@ pub struct BrowseParams {
 pub struct BrowseResponse {
     pub objects: Vec<ObjectInfo>,
     /// True if any list was truncated — a prefix exceeded [`PER_PREFIX_CAP`], or
-    /// the range exceeded [`MAX_TIME_BUCKETS`]. The UI shows a warning so the user
+    /// the range exceeded [`MAX_PREFIXES`]. The UI shows a warning so the user
     /// knows some traces may be missing.
     pub truncated: bool,
 }
@@ -320,7 +319,7 @@ pub(super) fn minute_time_prefixes(base: &str, from: i64, to: i64) -> (Vec<Strin
 ///
 /// Emits both `{base}/date={YYYY-MM-DD}/time={HHMM}` and the historical
 /// `{base}/{YYYY-MM-DD}/{HHMM}` form in UTC. Returns the prefixes and whether
-/// the range was clamped at [`MAX_TIME_BUCKETS`].
+/// the range was clamped at [`MAX_PREFIXES`].
 fn time_prefixes(base: &str, from: i64, to: i64, gran: Granularity) -> (Vec<String>, bool) {
     let step = match gran {
         Granularity::Hour => 3600,
@@ -334,10 +333,9 @@ fn time_prefixes(base: &str, from: i64, to: i64, gran: Granularity) -> (Vec<Stri
 
     let mut prefixes = Vec::new();
     let mut truncated = false;
-    let mut buckets = 0;
     let mut t = start;
     while t <= to {
-        if buckets >= MAX_TIME_BUCKETS {
+        if prefixes.len() + 2 > MAX_PREFIXES {
             truncated = true;
             break;
         }
@@ -345,7 +343,6 @@ fn time_prefixes(base: &str, from: i64, to: i64, gran: Granularity) -> (Vec<Stri
             prefixes.push(join_prefix(base, &format!("date={date}/time={time}")));
             prefixes.push(join_prefix(base, &format!("{date}/{time}")));
         }
-        buckets += 1;
         t += step;
     }
     (prefixes, truncated)
@@ -546,13 +543,9 @@ mod tests {
     /// A range too wide for the prefix cap is reported truncated.
     #[test]
     fn oversized_range_truncates() {
-        let (prefixes, truncated) = time_prefixes(
-            "",
-            0,
-            MAX_TIME_BUCKETS as i64 * 600 * 2,
-            Granularity::TenMinute,
-        );
+        let (prefixes, truncated) =
+            time_prefixes("", 0, MAX_PREFIXES as i64 * 600 * 2, Granularity::TenMinute);
         assert!(truncated);
-        assert_eq!(prefixes.len(), MAX_TIME_BUCKETS * 2);
+        assert_eq!(prefixes.len(), MAX_PREFIXES);
     }
 }
