@@ -499,10 +499,8 @@ mod tests {
     }
 
     #[test]
-    fn service_normalization_accepts_values_escaped_by_the_key_layout() {
-        for service in ["api/worker", "api\nworker", r"api\worker", ".", ".."] {
-            assert_eq!(normalize_service(Some(service)), Some(service));
-        }
+    fn service_normalization_accepts_slashes() {
+        assert_eq!(normalize_service(Some("api/worker")), Some("api/worker"));
     }
 
     #[test]

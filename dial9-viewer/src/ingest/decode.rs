@@ -42,10 +42,6 @@ pub(crate) use types::{
 
 /// Wire value of the `CpuProfile` CPU-sample source (periodic on-CPU sample).
 const SOURCE_CPU_PROFILE: u8 = 0;
-/// Parse `(date, service, host)` from a source key.
-///
-/// This MUST stay in lockstep with `aggregate::parse_scope_fields`: the scope
-/// filter and the Parquet columns must agree on these values.
 fn parse_source_key(key: &str) -> Option<(String, String, String)> {
     crate::source_key::scope_fields(key)
 }
@@ -367,9 +363,8 @@ fn extract_boot_id_from_path(source_key: &str) -> String {
 /// `dial9_core::boot_id::generate_boot_id`.
 ///
 /// Returns `(boot_id, is_namespaced)`:
-/// - `is_namespaced = true`: the path has the expected structure and the
-///   boot_id directory matches the known format. This is authoritative for
-///   cross-segment identity.
+/// - `is_namespaced = true`: the layout identifies the boot id unambiguously.
+///   This is authoritative for cross-segment identity.
 /// - `is_namespaced = false`: the path is flat/legacy. The returned value is
 ///   a best-effort fallback (directory portion) that cannot guarantee stability.
 fn extract_boot_id_from_path_qualified(source_key: &str) -> (String, bool) {

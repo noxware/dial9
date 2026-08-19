@@ -90,10 +90,9 @@ export async function altDragZoom(page) {
 }
 
 /**
- * Raw-search that yields the seeded row. The raw query is the key sub-prefix
- * BEFORE the date layer; the dev seed has none, so the query is left empty
- * and the implicit last-30-days window (from the pinned clock) reaches the
- * demo seed. Waits for the results table.
+ * Raw-search that yields the seeded row. The configured prefix is already
+ * applied, so the additional raw sub-prefix stays empty. The pinned clock
+ * keeps the seed inside the implicit last-30-days window.
  */
 export async function rawSearchSeededRows(page) {
   await page.click("#tab-raw");

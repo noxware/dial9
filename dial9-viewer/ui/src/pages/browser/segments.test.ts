@@ -15,7 +15,7 @@ import {
   unknownGroupPath,
 } from "./segments.js";
 
-// Current Hive-style layout.
+// Default Hive-style layout.
 const knownKey = (
   epoch: number,
   { service = "api", host = "host-1", boot = "boot-a", seg = 0 } = {},

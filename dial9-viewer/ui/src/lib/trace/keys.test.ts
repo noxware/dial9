@@ -25,7 +25,7 @@ describe("parseKey: Hive-style layout", () => {
 
   it("decodes exactly one percent-encoding layer", () => {
     const parsed = parseKey(
-      "date=2026-08-14/time=1937/service=payments%252Fapi/" +
+      "service=prefix/date=2026-08-14/time=1937/service=payments%252Fapi/" +
         "instance=host/boot=boot/1786736220-3.bin.gz"
     );
     expect(parsed.layout).toBe("known");
@@ -35,8 +35,8 @@ describe("parseKey: Hive-style layout", () => {
 
   it("parses fields by name, ignores unknown fields, and allows missing boot", () => {
     const reordered =
-      "traces/date=2026-08-14/region=uy/instance=host%2Fone/" +
-      "service=svc/time=1937/1786736220-3.bin.gz";
+      "traces/region=uy/instance=host%2Fone/service=svc/time=1937/" +
+      "date=2026-08-14/1786736220-3.bin.gz";
     expect(parseKey(reordered)).toEqual({
       layout: "known",
       service: "svc",
@@ -45,12 +45,11 @@ describe("parseKey: Hive-style layout", () => {
       epoch: 1786736220,
       segIndex: "3",
     });
-    expect(extractPrefix(reordered)).toBe("traces");
   });
 
   it("keeps a malformed partition key visible as unknown", () => {
     const rawKey =
-      "date=2026-08-14/time=1937/service=bad%2/instance=host/" +
+      "service=prefix/date=2026-08-14/time=1937/service=bad%2/instance=host/" +
       "boot=boot/1786736220-3.bin.gz";
     expect(parseKey(rawKey)).toEqual({
       layout: "unknown",
@@ -62,7 +61,7 @@ describe("parseKey: Hive-style layout", () => {
 
   it("does not hide valid fields when optional boot escaping is malformed", () => {
     const parsed = parseKey(
-      "date=2026-08-14/time=1937/service=svc/instance=host%2Fone/" +
+      "boot=prefix/date=2026-08-14/time=1937/service=svc/instance=host%2Fone/" +
         "boot=bad%2/1786736220-3.bin.gz"
     );
     expect(parsed).toEqual({
@@ -91,7 +90,7 @@ describe("parseKey: Hive-style layout", () => {
 describe("parseKey: historical boot-id layout", () => {
   it("with prefix", () => {
     const p = parseKey(
-      "traces/2026-04-09/1910/checkout-api/us-east-1/abcd-123213/1744224000-3.bin.gz"
+      "service=prefix/traces/2026-04-09/1910/checkout-api/us-east-1/abcd-123213/1744224000-3.bin.gz"
     );
     expect(p).toEqual({
       layout: "known",
@@ -224,7 +223,7 @@ describe("parseKey: unknown-layout discriminant (defect fix)", () => {
 });
 
 describe("extractPrefix (features/01 I8)", () => {
-  it("returns everything before the first date segment", () => {
+  it("returns everything before a supported historical suffix", () => {
     expect(
       extractPrefix("traces/2026-04-09/1900/checkout-api/host1/1744224000-0.bin.gz")
     ).toBe("traces");

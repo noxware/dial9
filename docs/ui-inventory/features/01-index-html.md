@@ -202,7 +202,7 @@ The headline feature. `doTimeRangeSearch` (`1150-1245`) fetches, the `renderHeat
 | I5. Credentialed fetch | `apiFetch` spreads `Dial9Creds.headers()` into every `/api/*` call.                                                                                                    | `442-445`                                    |
 | I6. HTML escaping      | `esc()` escapes any key/text injected into innerHTML (sample keys, table rows).                                                                                        | `976-980`                                    |
 | I7. Backend endpoints  | `[2026-07-08]` `/api/config`, `/api/prefixes`, `/api/browse` (replaced `/api/search`, removed in #582; the old endpoint now 404s), `/api/object`, `/api/buckets`, `/api/credentials/check`.                                                                | throughout                                   |
-| I8. Scope-prefix extraction | `[2026-07-08]` NEW in #570. `extractPrefix(key)` recognizes the complete Hive-style or historical suffix from the right and returns everything before it. This keeps an opaque prefix containing `=` or date-like names intact. Empty string when no supported suffix is found. | Internal (used by H3/H6 URL building).                                   | `src/lib/trace/keys.ts`                                   |
+| I8. Scope-prefix extraction | `[2026-07-08]` NEW in #570. `extractPrefix(key)` infers the prefix from recognized Hive fields or a historical suffix. Empty string when neither is found. | Internal (used by H3/H6 URL building).                                   | `src/lib/trace/keys.ts`                                   |
 
 ---
 

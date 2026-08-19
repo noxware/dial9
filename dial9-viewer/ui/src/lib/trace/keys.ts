@@ -13,7 +13,7 @@ export interface KnownTraceKey {
   service: string;
   host: string;
   /**
-   * Boot id from the current layout; "" when the path carries no boot id.
+   * Boot id from the Hive or historical layout; "" when absent.
    */
   bootId: string;
   /**
@@ -71,9 +71,9 @@ function known(
  * Older historical layout (no boot id):
  *   {prefix}/{YYYY-MM-DD}/{HHMM}/{service}/{instance}/{epoch}-{index}.bin[.gz]
  *
- * Layouts are recognized from the filename backwards so an opaque prefix is
- * not mistaken for a partition. Date-like but unsupported layouts are
- * `unknown`; dateless keys retain the best-effort positional fallback.
+ * Named fields are read from right to left, so the last occurrence wins.
+ * Date-like but unsupported positional layouts are `unknown`; dateless keys
+ * retain the best-effort positional fallback.
  *
  * Parsing is pure: call `formatEpoch(key.epoch, { localTz })` at render time
  * rather than reading a page-global timezone toggle.
@@ -88,6 +88,17 @@ export function parseKey(key: string): ParsedTraceKey {
     epoch = parseInt(match[1]!, 10);
     segIndex = match[2]!;
   }
+  const historical = historicalLayout(parts);
+  if (historical) {
+    const { start, hasBoot } = historical;
+    return known(
+      parts[start + 2]!,
+      parts[start + 3]!,
+      hasBoot ? parts[start + 4]! : "",
+      epoch,
+      segIndex
+    );
+  }
   const hive = parseHivePartitions(parts);
   if (hive) {
     if (
@@ -101,24 +112,6 @@ export function parseKey(key: string): ParsedTraceKey {
       return known(hive.service, hive.instance, hive.boot ?? "", epoch, segIndex);
     }
     return { layout: "unknown", rawKey: key, epoch, segIndex };
-  }
-  if (parts.length >= 6) {
-    const start = parts.length - 6;
-    if (DATE_RE.test(parts[start]!) && TIME_RE.test(parts[start + 1]!)) {
-      return known(
-        parts[start + 2]!,
-        parts[start + 3]!,
-        parts[start + 4]!,
-        epoch,
-        segIndex
-      );
-    }
-  }
-  if (parts.length >= 5) {
-    const start = parts.length - 5;
-    if (DATE_RE.test(parts[start]!) && TIME_RE.test(parts[start + 1]!)) {
-      return known(parts[start + 2]!, parts[start + 3]!, "", epoch, segIndex);
-    }
   }
   if (parts.some((part) => DATE_RE.test(part) || part.startsWith("date="))) {
     return { layout: "unknown", rawKey: key, epoch, segIndex };
@@ -138,29 +131,36 @@ export function parseKey(key: string): ParsedTraceKey {
 }
 
 /**
- * Everything before a recognized source-key suffix. This is the authoritative
- * key prefix handed to aggregation endpoints; "" when no suffix is found.
+ * Best-effort prefix inferred from recognized Hive fields or a historical
+ * suffix. Returns "" when neither is found.
  */
 export function extractPrefix(key: string): string {
   const parts = key.split("/");
+  const historical = historicalLayout(parts);
+  if (historical) return parts.slice(0, historical.start).join("/");
   const hive = parseHivePartitions(parts);
   if (hive) return parts.slice(0, hive.start).join("/");
-  if (parts.length >= 6) {
-    const start = parts.length - 6;
-    if (DATE_RE.test(parts[start]!) && TIME_RE.test(parts[start + 1]!)) {
-      return parts.slice(0, start).join("/");
-    }
-  }
-  if (parts.length >= 5) {
-    const start = parts.length - 5;
-    if (DATE_RE.test(parts[start]!) && TIME_RE.test(parts[start + 1]!)) {
-      return parts.slice(0, start).join("/");
-    }
-  }
   return "";
 }
 
 const TIME_RE = /^\d{4}$/;
+
+interface HistoricalLayout {
+  start: number;
+  hasBoot: boolean;
+}
+
+function historicalLayout(parts: string[]): HistoricalLayout | null {
+  for (const hasBoot of [true, false]) {
+    const width = hasBoot ? 6 : 5;
+    if (parts.length < width) continue;
+    const start = parts.length - width;
+    if (DATE_RE.test(parts[start]!) && TIME_RE.test(parts[start + 1]!)) {
+      return { start, hasBoot };
+    }
+  }
+  return null;
+}
 
 interface HivePartitions {
   start: number;
@@ -172,33 +172,29 @@ interface HivePartitions {
 }
 
 function parseHivePartitions(parts: string[]): HivePartitions | null {
-  for (let start = parts.length - 2; start >= 0; start--) {
-    if (!parts[start]!.startsWith("date=")) continue;
+  const values = new Map<string, string | null>();
+  let start = parts.length - 1;
 
-    const values = new Map<string, string | null>();
-    let valid = true;
-    for (const segment of parts.slice(start, -1)) {
-      const separator = segment.indexOf("=");
-      if (separator < 0) {
-        valid = false;
-        break;
-      }
-      const name = segment.slice(0, separator);
-      if (!["date", "time", "service", "instance", "boot"].includes(name)) continue;
-      values.set(name, decodePartitionValue(segment.slice(separator + 1)));
-    }
-    if (valid) {
-      return {
-        start,
-        date: values.get("date"),
-        time: values.get("time"),
-        service: values.get("service"),
-        instance: values.get("instance"),
-        boot: values.get("boot"),
-      };
-    }
+  for (let i = parts.length - 2; i >= 0; i--) {
+    const segment = parts[i]!;
+    const separator = segment.indexOf("=");
+    if (separator < 0) continue;
+    const name = segment.slice(0, separator);
+    if (!["date", "time", "service", "instance", "boot"].includes(name)) continue;
+    if (values.has(name)) continue;
+    start = i;
+    values.set(name, decodePartitionValue(segment.slice(separator + 1)));
   }
-  return null;
+
+  if (values.size === 0) return null;
+  return {
+    start,
+    date: values.get("date"),
+    time: values.get("time"),
+    service: values.get("service"),
+    instance: values.get("instance"),
+    boot: values.get("boot"),
+  };
 }
 
 function decodePartitionValue(value: string): string | null {

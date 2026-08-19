@@ -377,7 +377,6 @@ impl SimulatorBackend {
     fn parse_key(&self, key: &str) -> Result<PayloadCoordinates, StorageError> {
         let parsed = dial9_core::segment_object_key::parse_segment_object_key(key);
         if parsed.layout != dial9_core::segment_object_key::SegmentObjectKeyLayout::Hive
-            || parsed.prefix.as_deref() != Some(self.prefix.as_str())
             || parsed.service.as_deref() != Some(self.service.as_str())
         {
             return Err(StorageError::NotFound(key.to_string()));

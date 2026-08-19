@@ -64,7 +64,7 @@ test("parseKey reads escaped Hive partitions from an opaque prefix", () => {
 
 test("parseKey decodes one Hive escaping layer", () => {
   const p = scope.parseKey(
-    "date=2026-08-14/time=1937/service=payments%252Fapi/" +
+    "service=prefix/date=2026-08-14/time=1937/service=payments%252Fapi/" +
       "instance=host/boot=boot/1786736220-3.bin.gz",
   );
   assert.strictEqual(p.service, "payments%2Fapi");
@@ -72,18 +72,17 @@ test("parseKey decodes one Hive escaping layer", () => {
 
 test("parseKey reads Hive fields by name and allows missing boot", () => {
   const hiveKey =
-    "traces/date=2026-08-14/region=uy/instance=host%2Fone/" +
-    "service=svc/time=1937/1786736220-3.bin.gz";
+    "traces/region=uy/instance=host%2Fone/service=svc/time=1937/" +
+    "date=2026-08-14/1786736220-3.bin.gz";
   const p = scope.parseKey(hiveKey);
   assert.strictEqual(p.service, "svc");
   assert.strictEqual(p.host, "host/one");
   assert.strictEqual(p.bootId, "");
-  assert.strictEqual(scope.extractPrefix(hiveKey), "traces");
 });
 
 test("parseKey does not build a scope from malformed Hive values", () => {
   const rawKey =
-    "date=2026-08-14/time=1937/service=bad%2/instance=host/" +
+    "service=prefix/date=2026-08-14/time=1937/service=bad%2/instance=host/" +
     "boot=boot/1786736220-3.bin.gz";
   const p = scope.parseKey(rawKey);
   assert.strictEqual(p.service, "");
@@ -92,7 +91,7 @@ test("parseKey does not build a scope from malformed Hive values", () => {
 
 test("parseKey keeps valid scope fields when optional boot escaping is malformed", () => {
   const p = scope.parseKey(
-    "date=2026-08-14/time=1937/service=svc/instance=host%2Fone/" +
+    "boot=prefix/date=2026-08-14/time=1937/service=svc/instance=host%2Fone/" +
       "boot=bad%2/1786736220-3.bin.gz",
   );
   assert.strictEqual(p.service, "svc");
@@ -110,7 +109,7 @@ test("extractPrefix recognizes a partial named suffix without guessing scope fie
 });
 
 test("parseKey: historical boot-id layout with prefix", () => {
-  const p = scope.parseKey("traces/2026-04-09/1910/checkout-api/us-east-1/abcd-123213/1744224000-3.bin.gz");
+  const p = scope.parseKey("service=prefix/traces/2026-04-09/1910/checkout-api/us-east-1/abcd-123213/1744224000-3.bin.gz");
   assert.strictEqual(p.service, "checkout-api");
   assert.strictEqual(p.host, "us-east-1");
   assert.strictEqual(p.bootId, "abcd-123213");

@@ -17,9 +17,8 @@ export const VIEWPORT = { width: 1440, height: 900 };
 // last-30-days window) are computed from Date.now(), so on a real clock the
 // seeded key drifts out of every reachable window. Checks that
 // target the browser page pin the page's clock (Date only — timers keep
-// running, so debounces behave) to the evening of the seed date. This keeps
-// the recorded access paths (search the demo window, raw-search
-// rows) re-derivable against the same seed forever.
+// running, so debounces behave) near the seeded segment. This keeps the
+// recorded access paths re-derivable against the same seed forever.
 export const DEV_SEED_CLOCK = "2026-08-06T01:00:00Z";
 export const FIXTURE_CLOCK = "2026-04-09T21:00:00Z";
 

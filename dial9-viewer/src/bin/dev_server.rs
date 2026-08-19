@@ -16,6 +16,8 @@
 ///                              features/01 D4/#471).
 use std::io::Write;
 
+use dial9_core::segment_object_key::format_hive_segment_object_key;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -64,8 +66,14 @@ async fn main() -> anyhow::Result<()> {
         // Upload the full trace as a single gzipped segment
         let full_compressed = gzip_bytes(&demo_data);
         let epoch_secs = 1_785_975_935;
-        let key = format!(
-            "traces/date=2026-08-06/time=0025/service=demo-service/instance=local%2Fhost-0/boot=abcd/{epoch_secs}-0.bin.gz"
+        let key = format_hive_segment_object_key(
+            Some("traces"),
+            "2026-08-06",
+            "0025",
+            "demo-service",
+            "local/host-0",
+            "abcd",
+            &format!("{epoch_secs}-0.bin.gz"),
         );
         client
             .put_object()
@@ -82,8 +90,14 @@ async fn main() -> anyhow::Result<()> {
             let data = format!("synthetic trace segment {i}");
             let compressed = gzip_bytes(data.as_bytes());
             let epoch_secs = 1_785_976_200 + i * 60;
-            let key = format!(
-                "traces/date=2026-08-06/time=003{i}/service=test-svc/instance=us-east-1%2Fhost-1/boot=xyzw/{epoch_secs}-0.bin.gz"
+            let key = format_hive_segment_object_key(
+                Some("traces"),
+                "2026-08-06",
+                &format!("003{i}"),
+                "test-svc",
+                "us-east-1/host-1",
+                "xyzw",
+                &format!("{epoch_secs}-0.bin.gz"),
             );
             client
                 .put_object()

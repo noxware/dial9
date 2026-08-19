@@ -48,8 +48,8 @@
   //   {prefix}/date={YYYY-MM-DD}/time={HHMM}/service={service}/instance={instance}/boot={boot_id}/{epoch}-{i}.bin[.gz]
   //   {prefix}/{YYYY-MM-DD}/{HHMM}/{service}/{instance}/{boot_id}/{epoch}-{i}.bin[.gz]
   //   {prefix}/{YYYY-MM-DD}/{HHMM}/{service}/{instance}/{epoch}-{i}.bin[.gz]   (legacy)
-  // Hive fields are matched by name, unknown fields are ignored, and boot is
-  // optional. Prefixes remain opaque; historical layouts stay positional.
+  // Hive fields are matched from right to left by name, unknown fields are
+  // ignored, and boot is optional. Historical layouts stay positional.
   function parseKey(key) {
     const parts = key.split("/");
     const dateRe = /^\d{4}-\d{2}-\d{2}$/;
@@ -61,6 +61,17 @@
     if (match) {
       epoch = parseInt(match[1], 10);
       segIndex = match[2];
+    }
+    const historical = historicalLayout(parts, dateRe, timeRe);
+    if (historical) {
+      const { start, hasBoot } = historical;
+      return {
+        service: parts[start + 2],
+        host: parts[start + 3],
+        bootId: hasBoot ? parts[start + 4] : "",
+        epoch,
+        segIndex,
+      };
     }
     const hive = parseHivePartitions(parts);
     if (hive) {
@@ -81,30 +92,6 @@
         };
       }
       return { service: "", host: key, bootId: "", epoch, segIndex };
-    }
-    if (parts.length >= 6) {
-      const start = parts.length - 6;
-      if (dateRe.test(parts[start]) && timeRe.test(parts[start + 1])) {
-        return {
-          service: parts[start + 2],
-          host: parts[start + 3],
-          bootId: parts[start + 4],
-          epoch,
-          segIndex,
-        };
-      }
-    }
-    if (parts.length >= 5) {
-      const start = parts.length - 5;
-      if (dateRe.test(parts[start]) && timeRe.test(parts[start + 1])) {
-        return {
-          service: parts[start + 2],
-          host: parts[start + 3],
-          bootId: "",
-          epoch,
-          segIndex,
-        };
-      }
     }
     if (parts.some((part) => dateRe.test(part) || part.startsWith("date="))) {
       return { service: "", host: key, bootId: "", epoch, segIndex };
@@ -127,51 +114,49 @@
     const parts = key.split("/");
     const dateRe = /^\d{4}-\d{2}-\d{2}$/;
     const timeRe = /^\d{4}$/;
+    const historical = historicalLayout(parts, dateRe, timeRe);
+    if (historical) return parts.slice(0, historical.start).join("/");
     const hive = parseHivePartitions(parts);
     if (hive) return parts.slice(0, hive.start).join("/");
-    if (parts.length >= 6) {
-      const start = parts.length - 6;
-      if (dateRe.test(parts[start]) && timeRe.test(parts[start + 1])) {
-        return parts.slice(0, start).join("/");
-      }
-    }
-    if (parts.length >= 5) {
-      const start = parts.length - 5;
-      if (dateRe.test(parts[start]) && timeRe.test(parts[start + 1])) {
-        return parts.slice(0, start).join("/");
-      }
-    }
     return "";
   }
 
-  function parseHivePartitions(parts) {
-    for (let start = parts.length - 2; start >= 0; start--) {
-      if (!parts[start].startsWith("date=")) continue;
-
-      const values = new Map();
-      let valid = true;
-      for (const segment of parts.slice(start, -1)) {
-        const separator = segment.indexOf("=");
-        if (separator < 0) {
-          valid = false;
-          break;
-        }
-        const name = segment.slice(0, separator);
-        if (!["date", "time", "service", "instance", "boot"].includes(name)) continue;
-        values.set(name, decodePartitionValue(segment.slice(separator + 1)));
-      }
-      if (valid) {
-        return {
-          start,
-          date: values.get("date"),
-          time: values.get("time"),
-          service: values.get("service"),
-          instance: values.get("instance"),
-          boot: values.get("boot"),
-        };
+  function historicalLayout(parts, dateRe, timeRe) {
+    for (const hasBoot of [true, false]) {
+      const width = hasBoot ? 6 : 5;
+      if (parts.length < width) continue;
+      const start = parts.length - width;
+      if (dateRe.test(parts[start]) && timeRe.test(parts[start + 1])) {
+        return { start, hasBoot };
       }
     }
     return null;
+  }
+
+  function parseHivePartitions(parts) {
+    const values = new Map();
+    let start = parts.length - 1;
+
+    for (let i = parts.length - 2; i >= 0; i--) {
+      const segment = parts[i];
+      const separator = segment.indexOf("=");
+      if (separator < 0) continue;
+      const name = segment.slice(0, separator);
+      if (!["date", "time", "service", "instance", "boot"].includes(name)) continue;
+      if (values.has(name)) continue;
+      start = i;
+      values.set(name, decodePartitionValue(segment.slice(separator + 1)));
+    }
+
+    if (values.size === 0) return null;
+    return {
+      start,
+      date: values.get("date"),
+      time: values.get("time"),
+      service: values.get("service"),
+      instance: values.get("instance"),
+      boot: values.get("boot"),
+    };
   }
 
   function decodePartitionValue(value) {
