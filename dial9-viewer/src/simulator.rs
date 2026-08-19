@@ -1230,19 +1230,18 @@ fn simulator_key(
     let minute = format!("{:02}{:02}", timestamp.hour(), timestamp.minute());
     let sequence = virtual_segment_sequence(epoch_secs, segment_duration_secs)
         .context("simulator segment sequence out of range")?;
-    let tail = format!(
-        "date={}/time={}/service={}/instance={}/boot={}/{epoch_secs}-{sequence}.bin.gz",
-        dial9_core::segment_object_key::hive_escape(&date),
-        dial9_core::segment_object_key::hive_escape(&minute),
-        dial9_core::segment_object_key::hive_escape(service),
-        dial9_core::segment_object_key::hive_escape(host),
-        dial9_core::segment_object_key::hive_escape(boot_id),
-    );
-    if prefix.is_empty() {
-        Ok(tail)
-    } else {
-        Ok(format!("{prefix}/{tail}"))
-    }
+    let filename = format!("{epoch_secs}-{sequence}.bin.gz");
+    Ok(
+        dial9_core::segment_object_key::format_hive_segment_object_key(
+            (!prefix.is_empty()).then_some(prefix),
+            &date,
+            &minute,
+            service,
+            host,
+            boot_id,
+            &filename,
+        ),
+    )
 }
 
 fn simulator_host(host_index: usize) -> String {

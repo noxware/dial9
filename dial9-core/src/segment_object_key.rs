@@ -89,6 +89,34 @@ pub fn hive_unescape(value: &str) -> Option<String> {
     String::from_utf8(decoded).ok()
 }
 
+/// Format the canonical Hive-style segment object key.
+///
+/// `prefix` and `filename` are inserted verbatim. Partition values are escaped
+/// and emitted in the stable order used by time-scoped S3 listing.
+pub fn format_hive_segment_object_key(
+    prefix: Option<&str>,
+    date: &str,
+    time: &str,
+    service: &str,
+    instance: &str,
+    boot_id: &str,
+    filename: &str,
+) -> String {
+    let suffix = format!(
+        "date={}/time={}/service={}/instance={}/boot={}/{}",
+        hive_escape(date),
+        hive_escape(time),
+        hive_escape(service),
+        hive_escape(instance),
+        hive_escape(boot_id),
+        filename,
+    );
+    match prefix {
+        Some(prefix) => format!("{prefix}/{suffix}"),
+        None => suffix,
+    }
+}
+
 /// Parse a dial9 segment object key, including historical layouts.
 pub fn parse_segment_object_key(key: &str) -> ParsedSegmentObjectKey {
     let path = strip_s3(key);
@@ -296,6 +324,22 @@ mod tests {
         for value in ["%", "%2", "%GG", "%FF"] {
             assert_eq!(hive_unescape(value), None, "{value:?}");
         }
+    }
+
+    #[test]
+    fn formats_canonical_hive_layout() {
+        assert_eq!(
+            format_hive_segment_object_key(
+                Some("company/date=archive/%25"),
+                "2026-08-14",
+                "1937",
+                "payments/api",
+                "us-east-1/i-0abc123",
+                "boot%=1",
+                "1786736220-3.bin.gz",
+            ),
+            "company/date=archive/%25/date=2026-08-14/time=1937/service=payments%2Fapi/instance=us-east-1%2Fi-0abc123/boot=boot%25%3D1/1786736220-3.bin.gz"
+        );
     }
 
     #[test]

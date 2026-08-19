@@ -13,7 +13,7 @@ use dial9_core::pipeline::{
     ProcessError, ProcessErrorKind, SegmentData, SegmentProcessor, SegmentRef,
 };
 use dial9_core::rate_limited;
-use dial9_core::segment_object_key::hive_escape;
+use dial9_core::segment_object_key::format_hive_segment_object_key;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -223,21 +223,16 @@ impl S3Config {
             ".bin"
         };
 
-        let suffix = format!(
-            "date={}/time={}/service={}/instance={}/boot={}/{}-{}{}",
-            hive_escape(&date),
-            hive_escape(&time),
-            hive_escape(&self.service_name),
-            hive_escape(self.instance_path.as_str()),
-            hive_escape(&self.boot_id),
-            ts,
-            segment.index(),
-            extension,
-        );
-        match &self.prefix {
-            Some(p) => format!("{p}/{suffix}"),
-            None => suffix,
-        }
+        let filename = format!("{}-{}{}", ts, segment.index(), extension);
+        format_hive_segment_object_key(
+            self.prefix.as_deref(),
+            &date,
+            &time,
+            &self.service_name,
+            self.instance_path.as_str(),
+            &self.boot_id,
+            &filename,
+        )
     }
 
     /// Key of the per-dump manifest object: `{prefix}/dumps/{dump_id}.json`.

@@ -212,19 +212,15 @@ fn layout_key(
         dt.day()
     );
     let hhmm = format!("{:02}{:02}", dt.hour(), dt.minute());
-    let tail = format!(
-        "date={}/time={}/service={}/instance={}/boot={}/{epoch_s}-{index}.bin.gz",
-        dial9_core::segment_object_key::hive_escape(&date),
-        dial9_core::segment_object_key::hive_escape(&hhmm),
-        dial9_core::segment_object_key::hive_escape(service),
-        dial9_core::segment_object_key::hive_escape(host),
-        dial9_core::segment_object_key::hive_escape(boot),
-    );
-    if prefix.is_empty() {
-        tail
+    let prefix = if prefix.is_empty() {
+        None
     } else {
-        format!("{}/{tail}", prefix.trim_end_matches('/'))
-    }
+        Some(prefix.trim_end_matches('/'))
+    };
+    let filename = format!("{epoch_s}-{index}.bin.gz");
+    dial9_core::segment_object_key::format_hive_segment_object_key(
+        prefix, &date, &hhmm, service, host, boot, &filename,
+    )
 }
 
 // ── Deterministic jitter ─────────────────────────────────────────────────
