@@ -442,10 +442,10 @@ export const registry = {
   G2: async ({ page, pageUrl }) => {
     await gotoBrowserPage(page, pageUrl);
     await page.click("#tab-raw");
-    await page.fill("#raw-search-input", "date=2026-04-09");
+    await page.fill("#raw-search-input", "team/prod");
     const [req] = await Promise.all([
       page.waitForRequest(
-        (r) => r.url().includes("/api/browse") && r.url().includes("prefix=date%3D2026-04-09"),
+        (r) => r.url().includes("/api/browse") && r.url().includes("prefix=team%2Fprod"),
         { timeout: 10_000 },
       ),
       page.press("#raw-search-input", "Enter"),
