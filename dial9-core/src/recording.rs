@@ -128,9 +128,11 @@ impl Recorder {
         self.worker = Some(worker);
     }
 
-    /// The shared recording state.
-    pub fn shared(&self) -> Option<&Arc<SharedState>> {
-        self.handle.shared()
+    crate::test_util_pub! {
+        /// The shared recording state.
+        fn shared(&self) -> Option<&Arc<SharedState>> {
+            self.handle.shared()
+        }
     }
 
     /// Monotonic start time of the recorder in nanoseconds.
@@ -198,8 +200,7 @@ impl Recorder {
     /// their thread-local buffers have already been flushed. Consumes the
     /// recorder so `Drop` becomes a no-op.
     ///
-    /// Failures during the drain are logged rather than returned; there is
-    /// nothing a caller can usefully do about them at this point.
+    /// Failures during draining are logged.
     pub fn graceful_shutdown(mut self, timeout: Duration) {
         // `timeout` only bounds the worker drain, which exists under `pipeline`.
         #[cfg(not(feature = "pipeline"))]
