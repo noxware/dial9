@@ -189,7 +189,7 @@ fn required_scope_fields(key: &str) -> (String, String, String) {
 
 /// The parsed host component used for the coverage's fleet-spread badge.
 ///
-/// Panics when the key has no reliable scope fields.
+/// Panics when the key has no parseable scope fields.
 pub(crate) fn host_of(key: &str) -> String {
     required_scope_fields(key).2
 }
@@ -232,7 +232,7 @@ fn scope_matches(key: &str, scope: &Scope, segment_duration_secs: i64) -> bool {
         dial9_core::rate_limited!(std::time::Duration::from_secs(60), {
             tracing::warn!(
                 source_key = key,
-                "skipping source key without reliable scope fields"
+                "skipping source key without parseable scope fields"
             );
         });
         return false;
@@ -1914,7 +1914,7 @@ mod tests {
     #[test]
     fn parse_scope_fields_handles_prefix() {
         let (d, s, h) = parse_scope_fields(
-            "traces/2026-04-09/1910/checkout-api/us-east-1/abcd/1744224000-3.bin.gz",
+            "traces/2026-04-09/1910/checkout-api/us-east-1/i-0abc123/abcd/1744224000-3.bin.gz",
         )
         .unwrap();
         assert_eq!(d, "2026-04-09");

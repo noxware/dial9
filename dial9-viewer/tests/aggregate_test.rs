@@ -1307,8 +1307,14 @@ async fn time_scoped_aggregation_reads_hive_and_historical_keys() {
     let epoch = 1_775_761_800i64; // 2026-04-09T19:10:00Z
 
     let hive = segment_key("2026-04-09", "1910", "shale", "host-new", epoch, 0);
-    let historical =
-        historical_segment_key("2026-04-09", "1911", "shale", "host-old", epoch + 60, 0);
+    let historical = historical_segment_key(
+        "2026-04-09",
+        "1911",
+        "shale",
+        "host-old/zone",
+        epoch + 60,
+        0,
+    );
     put(&uploader, "src-bucket", &hive, body.clone()).await;
     put(&uploader, "src-bucket", &historical, body).await;
 

@@ -593,16 +593,17 @@ async fn browse_filters_exact_service_for_wide_window() {
     let (s3, base, _dir) = setup_s3_test("traces-bucket", Some("traces-bucket".into()), None).await;
     let client = reqwest::Client::new();
 
-    for (service, payload) in [("api", b"a".as_slice()), ("api-worker", b"b".as_slice())] {
-        put_object(
-            &s3,
-            "traces-bucket",
-            &format!(
-                "date=2026-04-09/time=1910/service={service}/instance=host/boot=boot/1000-0.bin.gz"
-            ),
-            &gzip_bytes(payload),
-        )
-        .await;
+    for (key, payload) in [
+        (
+            "2026-04-09/1910/api/us-east-1/i-0abc123/boot/1000-0.bin.gz",
+            b"a".as_slice(),
+        ),
+        (
+            "date=2026-04-09/time=1910/service=api-worker/instance=host/boot=boot/1000-0.bin.gz",
+            b"b".as_slice(),
+        ),
+    ] {
+        put_object(&s3, "traces-bucket", key, &gzip_bytes(payload)).await;
     }
 
     let from = 1_775_761_680; // 19:08:00Z
@@ -618,12 +619,7 @@ async fn browse_filters_exact_service_for_wide_window() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let objects = body["objects"].as_array().unwrap();
     check!(objects.len() == 1);
-    check!(
-        objects[0]["key"]
-            .as_str()
-            .unwrap()
-            .contains("/service=api/")
-    );
+    check!(objects[0]["key"].as_str().unwrap().contains("/1910/api/"));
 }
 
 #[tokio::test]

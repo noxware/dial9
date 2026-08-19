@@ -262,11 +262,13 @@ async fn browse_s3(
 }
 
 pub(super) fn key_service(key: &str) -> Option<String> {
-    dial9_core::segment_object_key::parse_segment_object_key(key).service
+    let (_, service, _) = crate::source_key::dated_scope_fields(key)?;
+    (!service.is_empty()).then_some(service)
 }
 
 pub(super) fn key_host(key: &str) -> Option<String> {
-    dial9_core::segment_object_key::parse_segment_object_key(key).instance
+    let (_, _, host) = crate::source_key::dated_scope_fields(key)?;
+    (!host.is_empty()).then_some(host)
 }
 
 /// Build exact minute prefixes ending at a selected service segment.
@@ -513,6 +515,10 @@ mod tests {
             key_service("root/2026-06-09/1910/api-worker/host/boot/1-0.bin.gz"),
             Some("api-worker".to_string())
         );
+        assert_eq!(
+            key_service("root/2026-06-09/1910/api/us-east-1/i-0abc123/boot/1-0.bin.gz"),
+            Some("api".to_string())
+        );
         assert_eq!(key_service("boot/trace.0.bin"), None);
     }
 
@@ -527,6 +533,10 @@ mod tests {
                 "root/date=2026-06-09/time=1910/service=api%2Fworker/instance=host%2Fa/boot=boot/1-0.bin.gz"
             ),
             Some("host/a".to_string())
+        );
+        assert_eq!(
+            key_host("root/2026-06-09/1910/api/us-east-1/i-0abc123/boot/1-0.bin.gz"),
+            Some("us-east-1".to_string())
         );
         assert_eq!(key_host("boot/trace.0.bin"), None);
     }
