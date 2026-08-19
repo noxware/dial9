@@ -564,7 +564,10 @@ mod tests {
             parse_source_key("a/b/c/d"),
             Some(("a".to_string(), "c".to_string(), "d".to_string()))
         );
-        assert_eq!(parse_source_key("demo-trace.bin"), None);
+        assert_eq!(
+            parse_source_key("demo-trace.bin"),
+            Some(("demo-trace.bin".to_string(), String::new(), String::new()))
+        );
     }
 
     fn load_demo_trace() -> Vec<u8> {

@@ -64,9 +64,14 @@
     }
     const hive = parseHivePartitions(parts);
     if (hive) {
-      if (hive.date !== null && dateRe.test(hive.date) &&
-          hive.time !== null && timeRe.test(hive.time) &&
-          hive.service !== null && hive.instance !== null && hive.boot !== null) {
+      if (
+        hive.date !== null &&
+        dateRe.test(hive.date) &&
+        hive.time !== null &&
+        timeRe.test(hive.time) &&
+        hive.service !== null &&
+        hive.instance !== null
+      ) {
         return {
           service: hive.service,
           host: hive.instance,

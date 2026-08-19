@@ -1,5 +1,5 @@
-// keys.ts tests: the current and historical key layouts,
-// positional fallback), the unknown-layout discriminant, the unknown
+// keys.ts tests: the current and historical key layouts, positional fallback,
+// the unknown-layout discriminant, the unknown
 // variant's layout-independent filename epoch/segIndex, and extractPrefix.
 
 import { describe, expect, it } from "vitest";
@@ -55,6 +55,21 @@ describe("parseKey: Hive-style layout", () => {
     expect(parseKey(rawKey)).toEqual({
       layout: "unknown",
       rawKey,
+      epoch: 1786736220,
+      segIndex: "3",
+    });
+  });
+
+  it("does not hide valid fields when optional boot escaping is malformed", () => {
+    const parsed = parseKey(
+      "date=2026-08-14/time=1937/service=svc/instance=host%2Fone/" +
+        "boot=bad%2/1786736220-3.bin.gz"
+    );
+    expect(parsed).toEqual({
+      layout: "known",
+      service: "svc",
+      host: "host/one",
+      bootId: "",
       epoch: 1786736220,
       segIndex: "3",
     });

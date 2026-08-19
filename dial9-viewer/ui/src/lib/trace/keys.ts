@@ -90,9 +90,14 @@ export function parseKey(key: string): ParsedTraceKey {
   }
   const hive = parseHivePartitions(parts);
   if (hive) {
-    if (hive.date !== null && DATE_RE.test(hive.date) &&
-        hive.time !== null && TIME_RE.test(hive.time) &&
-        hive.service !== null && hive.instance !== null && hive.boot !== null) {
+    if (
+      hive.date !== null &&
+      DATE_RE.test(hive.date) &&
+      hive.time !== null &&
+      TIME_RE.test(hive.time) &&
+      hive.service !== null &&
+      hive.instance !== null
+    ) {
       return known(hive.service, hive.instance, hive.boot ?? "", epoch, segIndex);
     }
     return { layout: "unknown", rawKey: key, epoch, segIndex };

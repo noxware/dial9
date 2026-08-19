@@ -39,7 +39,7 @@ pub struct BrowseParams {
     /// Optional key prefix (the portion before the date), e.g. `traces`. When
     /// omitted the server's default prefix (if any) is used.
     pub prefix: Option<String>,
-    /// Optional exact service path segment. Empty values are treated as absent.
+    /// Optional exact service value. Empty values are treated as absent.
     pub service: Option<String>,
     /// Inclusive start of the window, unix seconds.
     pub from: i64,

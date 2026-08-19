@@ -173,9 +173,9 @@ pub(crate) struct Scope {
     pub end_ns: Option<i64>,
     /// Exact service match (the `service=` path component).
     pub service: Option<String>,
-    /// Host filter. Empty = all hosts. Non-empty = the host path component must
-    /// equal one of these (a *set*, because a heatmap box selection spans many
-    /// hosts). A single entry behaves like an exact single-host filter.
+    /// Host filter. Empty = all hosts. Non-empty = the decoded instance value
+    /// must equal one of these (a *set*, because a heatmap box selection spans
+    /// many hosts). A single entry behaves like an exact single-host filter.
     pub hosts: Vec<String>,
 }
 

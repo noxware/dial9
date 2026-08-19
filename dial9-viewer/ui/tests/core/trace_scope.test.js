@@ -90,6 +90,16 @@ test("parseKey does not build a scope from malformed Hive values", () => {
   assert.strictEqual(p.host, rawKey);
 });
 
+test("parseKey keeps valid scope fields when optional boot escaping is malformed", () => {
+  const p = scope.parseKey(
+    "date=2026-08-14/time=1937/service=svc/instance=host%2Fone/" +
+      "boot=bad%2/1786736220-3.bin.gz",
+  );
+  assert.strictEqual(p.service, "svc");
+  assert.strictEqual(p.host, "host/one");
+  assert.strictEqual(p.bootId, "");
+});
+
 test("parseKey: historical boot-id layout with prefix", () => {
   const p = scope.parseKey("traces/2026-04-09/1910/checkout-api/us-east-1/abcd-123213/1744224000-3.bin.gz");
   assert.strictEqual(p.service, "checkout-api");

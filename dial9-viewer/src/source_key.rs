@@ -1,7 +1,8 @@
 use dial9_core::segment_object_key::{SegmentObjectKeyLayout, parse_segment_object_key};
 
 /// Semantic fields used by both scope filtering and persisted Parquet rows.
-/// Returns `None` when a required field is missing or malformed.
+/// Structured keys fail closed when a required field is missing or malformed;
+/// dateless custom keys retain the historical best-effort fallback.
 pub(crate) fn scope_fields(key: &str) -> Option<(String, String, String)> {
     let parsed = parse_segment_object_key(key);
     if parsed.layout != SegmentObjectKeyLayout::Unknown {
@@ -21,9 +22,9 @@ pub(crate) fn scope_fields(key: &str) -> Option<(String, String, String)> {
         return None;
     }
     Some((
-        parts.first()?.to_string(),
-        parts.get(2)?.to_string(),
-        parts.get(3)?.to_string(),
+        parts.first().copied().unwrap_or_default().to_string(),
+        parts.get(2).copied().unwrap_or_default().to_string(),
+        parts.get(3).copied().unwrap_or_default().to_string(),
     ))
 }
 
@@ -53,6 +54,10 @@ mod tests {
         assert_eq!(
             scope_fields("custom/prefix/service/host/1-0.bin.gz"),
             Some(("custom".into(), "service".into(), "host".into()))
+        );
+        assert_eq!(
+            scope_fields("boot/trace.0.bin"),
+            Some(("boot".into(), String::new(), String::new()))
         );
     }
 
