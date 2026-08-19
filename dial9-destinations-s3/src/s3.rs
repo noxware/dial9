@@ -92,6 +92,10 @@ where
 /// {prefix}/date={YYYY-MM-DD}/time={HHMM}/service={service_name}/instance={instance_path}/boot={boot_id}/{epoch_secs}-{index}.bin.gz
 /// ```
 ///
+/// The consecutive `date/time/service/instance` prefix is part of the default
+/// layout: the viewer uses it for efficient time, service, and instance
+/// discovery with S3 prefix listing.
+///
 /// Partition values use Hive path escaping, so `/` inside a service, instance,
 /// or boot id is stored as `%2F` instead of creating another path component.
 ///

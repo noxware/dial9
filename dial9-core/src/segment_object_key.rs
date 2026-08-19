@@ -1,4 +1,9 @@
 //! Dial9 segment object key layout and Hive path escaping.
+//!
+//! Canonical keys use consecutive `date/time/service/instance/boot`
+//! partitions. Parsing is deliberately more tolerant once a key is known;
+//! accepting a noncanonical order does not make it discoverable by an S3
+//! prefix listing.
 
 /// The recognized segment object key layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -359,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_hive_fields_by_name_with_optional_boot() {
+    fn parses_noncanonical_hive_fields_by_name_with_optional_boot() {
         let parsed = parse_segment_object_key(
             "traces/date=2026-08-14/region=uy/instance=host%2Fone/service=svc/time=1937/1786736220-3.bin.gz",
         );
