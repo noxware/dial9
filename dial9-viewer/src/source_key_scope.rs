@@ -17,6 +17,7 @@ pub(crate) fn dated_scope_fields(key: &str) -> Option<(String, String, String)> 
 fn scope_fields_inner(key: &str, allow_custom_fallback: bool) -> Option<(String, String, String)> {
     let parsed = parse_segment_object_key(key);
     if parsed.layout != SegmentObjectKeyLayout::Unknown {
+        parsed.time?;
         return Some((parsed.date?, parsed.service?, parsed.instance?));
     }
 
@@ -67,6 +68,10 @@ mod tests {
     fn malformed_structured_keys_do_not_use_the_custom_fallback() {
         assert_eq!(
             scope_fields("traces/date=2026-08-14/time=1937/service=bad%2/instance=host/1-0.bin.gz"),
+            None
+        );
+        assert_eq!(
+            scope_fields("traces/date=2026-08-14/time=19370/service=svc/instance=host/1-0.bin.gz"),
             None
         );
 
