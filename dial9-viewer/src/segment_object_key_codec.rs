@@ -1,3 +1,8 @@
+//! Viewer-side codec for Hive-style segment object keys.
+//!
+//! Encoding must mirror `dial9-destinations-s3/src/segment_object_key.rs`;
+//! both crates pin the persisted layout with matching golden tests.
+
 /// Escape a Hive partition-path value using Hive's canonical ASCII table.
 pub(crate) fn hive_escape(value: &str) -> String {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
