@@ -34,7 +34,7 @@ struct HiveFields {
 
 /// Parse a dial9 segment object key, including historical layouts.
 ///
-/// Named fields are scanned from right to left, so their last occurrence wins.
+/// Named fields are scanned in path order, so their last occurrence wins.
 pub(crate) fn parse_segment_object_key(key: &str) -> ParsedSegmentObjectKey {
     let path = strip_s3(key);
     let parts: Vec<&str> = path.split('/').collect();
@@ -114,38 +114,38 @@ fn strip_s3(key: &str) -> &str {
 
 fn parse_hive_partitions(parts: &[&str]) -> Option<HiveFields> {
     let mut fields = HiveFields::default();
-    let mut seen = [false; 5];
+    let mut found_hive_partition = false;
 
-    for segment in parts.iter().rev() {
+    for segment in parts {
         let Some((name, encoded_value)) = segment.split_once('=') else {
             continue;
         };
         match name {
-            "date" if !seen[0] => {
-                seen[0] = true;
+            "date" => {
+                found_hive_partition = true;
                 fields.date = hive_unescape(encoded_value).filter(|value| is_date(value));
             }
-            "time" if !seen[1] => {
-                seen[1] = true;
+            "time" => {
+                found_hive_partition = true;
                 fields.time = hive_unescape(encoded_value).filter(|value| is_time(value));
             }
-            "service" if !seen[2] => {
-                seen[2] = true;
+            "service" => {
+                found_hive_partition = true;
                 fields.service = hive_unescape(encoded_value);
             }
-            "instance" if !seen[3] => {
-                seen[3] = true;
+            "instance" => {
+                found_hive_partition = true;
                 fields.instance = hive_unescape(encoded_value);
             }
-            "boot" if !seen[4] => {
-                seen[4] = true;
+            "boot" => {
+                found_hive_partition = true;
                 fields.boot_id = hive_unescape(encoded_value);
             }
             _ => {}
         }
     }
 
-    seen.into_iter().any(|seen| seen).then_some(fields)
+    found_hive_partition.then_some(fields)
 }
 
 fn parse_filename(filename: &str) -> Option<(i64, u32)> {
