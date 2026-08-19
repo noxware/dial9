@@ -262,12 +262,12 @@ async fn browse_s3(
 }
 
 pub(super) fn key_service(key: &str) -> Option<String> {
-    let (_, service, _) = crate::source_key::dated_scope_fields(key)?;
+    let (_, service, _) = crate::source_key_scope::dated_scope_fields(key)?;
     (!service.is_empty()).then_some(service)
 }
 
 pub(super) fn key_host(key: &str) -> Option<String> {
-    let (_, _, host) = crate::source_key::dated_scope_fields(key)?;
+    let (_, _, host) = crate::source_key_scope::dated_scope_fields(key)?;
     (!host.is_empty()).then_some(host)
 }
 
@@ -281,7 +281,7 @@ fn service_time_prefixes(base: &str, from: i64, to: i64, service: &str) -> (Vec<
             .is_some_and(|part| part.starts_with("time="))
         {
             prefix.push_str("/service=");
-            prefix.push_str(&crate::segment_object_key::hive_escape(service));
+            prefix.push_str(&crate::segment_object_key_codec::hive_escape(service));
             prefix.push('/');
         } else {
             prefix.push('/');

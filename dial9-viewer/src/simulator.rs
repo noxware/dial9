@@ -375,8 +375,8 @@ impl SimulatorBackend {
     }
 
     fn parse_key(&self, key: &str) -> Result<PayloadCoordinates, StorageError> {
-        let parsed = crate::segment_object_key::parse_segment_object_key(key);
-        if parsed.layout != crate::segment_object_key::SegmentObjectKeyLayout::Hive
+        let parsed = crate::segment_object_key_parser::parse_segment_object_key(key);
+        if parsed.layout != crate::segment_object_key_parser::SegmentObjectKeyLayout::Hive
             || parsed.service.as_deref() != Some(self.service.as_str())
         {
             return Err(StorageError::NotFound(key.to_string()));
@@ -1230,15 +1230,17 @@ fn simulator_key(
     let sequence = virtual_segment_sequence(epoch_secs, segment_duration_secs)
         .context("simulator segment sequence out of range")?;
     let filename = format!("{epoch_secs}-{sequence}.bin.gz");
-    Ok(crate::segment_object_key::format_hive_segment_object_key(
-        (!prefix.is_empty()).then_some(prefix),
-        &date,
-        &minute,
-        service,
-        host,
-        boot_id,
-        &filename,
-    ))
+    Ok(
+        crate::segment_object_key_codec::format_hive_segment_object_key(
+            (!prefix.is_empty()).then_some(prefix),
+            &date,
+            &minute,
+            service,
+            host,
+            boot_id,
+            &filename,
+        ),
+    )
 }
 
 fn simulator_host(host_index: usize) -> String {

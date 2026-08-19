@@ -1,8 +1,6 @@
 //! Parsing for dial9 trace-segment object keys.
 
-pub(crate) use crate::segment_object_key_codec::{
-    format_hive_segment_object_key, hive_escape, hive_unescape,
-};
+use crate::segment_object_key_codec::hive_unescape;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SegmentObjectKeyLayout {
@@ -178,6 +176,7 @@ fn is_time(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::segment_object_key_codec::{format_hive_segment_object_key, hive_escape};
 
     #[test]
     fn hive_escape_uses_the_complete_ascii_table() {

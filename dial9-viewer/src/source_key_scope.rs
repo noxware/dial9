@@ -1,4 +1,6 @@
-use crate::segment_object_key::{SegmentObjectKeyLayout, parse_segment_object_key};
+//! Viewer policy for deriving scope fields from source keys.
+
+use crate::segment_object_key_parser::{SegmentObjectKeyLayout, parse_segment_object_key};
 
 /// Semantic fields used by both scope filtering and persisted Parquet rows.
 /// Hive keys fail closed when a required field is missing or malformed;

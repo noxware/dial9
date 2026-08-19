@@ -114,9 +114,9 @@ fn bucket_segment(source_bucket: &str) -> String {
 /// The hash is only the leaf; the source bucket is derived from `source_key`.
 fn samples_part_key(output_prefix: &str, source_key: &str) -> String {
     let (date, service, host) = required_scope_fields(source_key);
-    let date = crate::segment_object_key::hive_escape(&date);
-    let service = crate::segment_object_key::hive_escape(&service);
-    let host = crate::segment_object_key::hive_escape(&host);
+    let date = crate::segment_object_key_codec::hive_escape(&date);
+    let service = crate::segment_object_key_codec::hive_escape(&service);
+    let host = crate::segment_object_key_codec::hive_escape(&host);
     format!(
         "{root}/samples/service={service}/date={date}/host={host}/{leaf}.parquet",
         root = versioned_root(output_prefix, &parse_source_bucket(source_key)),
@@ -144,9 +144,9 @@ fn polls_part_key(output_prefix: &str, source_key: &str) -> String {
 
 fn spans_part_key(output_prefix: &str, source_key: &str) -> String {
     let (date, service, host) = required_scope_fields(source_key);
-    let date = crate::segment_object_key::hive_escape(&date);
-    let service = crate::segment_object_key::hive_escape(&service);
-    let host = crate::segment_object_key::hive_escape(&host);
+    let date = crate::segment_object_key_codec::hive_escape(&date);
+    let service = crate::segment_object_key_codec::hive_escape(&service);
+    let host = crate::segment_object_key_codec::hive_escape(&host);
     format!(
         "{root}/spans/service={service}/date={date}/host={host}/{leaf}.parquet",
         root = versioned_root(output_prefix, &parse_source_bucket(source_key)),
@@ -180,7 +180,7 @@ pub(crate) struct Scope {
 }
 
 fn parse_scope_fields(key: &str) -> Option<(String, String, String)> {
-    crate::source_key::scope_fields(key)
+    crate::source_key_scope::scope_fields(key)
 }
 
 fn required_scope_fields(key: &str) -> (String, String, String) {
@@ -632,7 +632,7 @@ fn folded_set_prefix(output_prefix: &str, source_bucket: &str, service: Option<&
     match service {
         Some(service) => format!(
             "{prefix}service={}/",
-            crate::segment_object_key::hive_escape(service)
+            crate::segment_object_key_codec::hive_escape(service)
         ),
         None => prefix,
     }

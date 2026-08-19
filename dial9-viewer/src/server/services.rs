@@ -136,7 +136,7 @@ pub async fn list_services(
             let service = if hive {
                 segment
                     .strip_prefix("service=")
-                    .and_then(crate::segment_object_key::hive_unescape)
+                    .and_then(crate::segment_object_key_codec::hive_unescape)
             } else {
                 Some(segment.to_string())
             };
@@ -181,7 +181,7 @@ pub async fn list_services(
             let host = if hive {
                 segment
                     .strip_prefix("instance=")
-                    .and_then(crate::segment_object_key::hive_unescape)
+                    .and_then(crate::segment_object_key_codec::hive_unescape)
             } else {
                 Some(segment.to_string())
             };

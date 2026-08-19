@@ -43,7 +43,7 @@ pub(crate) use types::{
 /// Wire value of the `CpuProfile` CPU-sample source (periodic on-CPU sample).
 const SOURCE_CPU_PROFILE: u8 = 0;
 fn parse_source_key(key: &str) -> Option<(String, String, String)> {
-    crate::source_key::scope_fields(key)
+    crate::source_key_scope::scope_fields(key)
 }
 
 /// Parquet uses empty strings to represent source metadata that is unavailable
@@ -368,8 +368,8 @@ fn extract_boot_id_from_path(source_key: &str) -> String {
 /// - `is_namespaced = false`: the path is flat/legacy. The returned value is
 ///   a best-effort fallback (directory portion) that cannot guarantee stability.
 fn extract_boot_id_from_path_qualified(source_key: &str) -> (String, bool) {
-    let parsed = crate::segment_object_key::parse_segment_object_key(source_key);
-    if parsed.layout == crate::segment_object_key::SegmentObjectKeyLayout::Hive
+    let parsed = crate::segment_object_key_parser::parse_segment_object_key(source_key);
+    if parsed.layout == crate::segment_object_key_parser::SegmentObjectKeyLayout::Hive
         && let Some(boot_id) = parsed.boot_id
     {
         return (boot_id, true);
