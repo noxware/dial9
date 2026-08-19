@@ -16,8 +16,8 @@ pub enum SegmentObjectKeyLayout {
 
 /// Semantic fields recovered from a segment object key.
 ///
-/// A malformed Hive value is `None` without hiding other valid fields. The
-/// `boot` partition is optional when reading.
+/// A missing or malformed Hive value is `None` without hiding other valid
+/// fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ParsedSegmentObjectKey {
@@ -178,8 +178,6 @@ fn parse_hive_partitions(parts: &[&str]) -> Option<(usize, HiveFields)> {
         }
 
         let mut fields = HiveFields::default();
-        let (mut saw_date, mut saw_time, mut saw_service, mut saw_instance) =
-            (false, false, false, false);
         let mut valid = true;
 
         for segment in &parts[start..] {
@@ -189,19 +187,15 @@ fn parse_hive_partitions(parts: &[&str]) -> Option<(usize, HiveFields)> {
             };
             match name {
                 "date" => {
-                    saw_date = true;
                     fields.date = hive_unescape(encoded_value).filter(|value| is_date(value));
                 }
                 "time" => {
-                    saw_time = true;
                     fields.time = hive_unescape(encoded_value).filter(|value| is_time(value));
                 }
                 "service" => {
-                    saw_service = true;
                     fields.service = hive_unescape(encoded_value);
                 }
                 "instance" => {
-                    saw_instance = true;
                     fields.instance = hive_unescape(encoded_value);
                 }
                 "boot" => fields.boot_id = hive_unescape(encoded_value),
@@ -209,7 +203,7 @@ fn parse_hive_partitions(parts: &[&str]) -> Option<(usize, HiveFields)> {
             }
         }
 
-        if valid && saw_date && saw_time && saw_service && saw_instance {
+        if valid {
             return Some((start, fields));
         }
     }
@@ -331,6 +325,20 @@ mod tests {
         assert_eq!(parsed.time.as_deref(), Some("1937"));
         assert_eq!(parsed.service.as_deref(), Some("svc"));
         assert_eq!(parsed.instance.as_deref(), Some("host/one"));
+        assert_eq!(parsed.boot_id, None);
+    }
+
+    #[test]
+    fn missing_hive_fields_do_not_hide_present_fields() {
+        let parsed = parse_segment_object_key(
+            "traces/date=2026-08-14/region=uy/service=svc/1786736220-3.bin.gz",
+        );
+        assert_eq!(parsed.layout, SegmentObjectKeyLayout::Hive);
+        assert_eq!(parsed.prefix.as_deref(), Some("traces"));
+        assert_eq!(parsed.date.as_deref(), Some("2026-08-14"));
+        assert_eq!(parsed.time, None);
+        assert_eq!(parsed.service.as_deref(), Some("svc"));
+        assert_eq!(parsed.instance, None);
         assert_eq!(parsed.boot_id, None);
     }
 

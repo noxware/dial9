@@ -100,6 +100,15 @@ test("parseKey keeps valid scope fields when optional boot escaping is malformed
   assert.strictEqual(p.bootId, "");
 });
 
+test("extractPrefix recognizes a partial named suffix without guessing scope fields", () => {
+  const rawKey =
+    "traces/date=2026-08-14/region=uy/service=svc/1786736220-3.bin.gz";
+  const p = scope.parseKey(rawKey);
+  assert.strictEqual(p.service, "");
+  assert.strictEqual(p.host, rawKey);
+  assert.strictEqual(scope.extractPrefix(rawKey), "traces");
+});
+
 test("parseKey: historical boot-id layout with prefix", () => {
   const p = scope.parseKey("traces/2026-04-09/1910/checkout-api/us-east-1/abcd-123213/1744224000-3.bin.gz");
   assert.strictEqual(p.service, "checkout-api");

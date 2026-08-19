@@ -91,12 +91,12 @@ export function parseKey(key: string): ParsedTraceKey {
   const hive = parseHivePartitions(parts);
   if (hive) {
     if (
-      hive.date !== null &&
+      typeof hive.date === "string" &&
       DATE_RE.test(hive.date) &&
-      hive.time !== null &&
+      typeof hive.time === "string" &&
       TIME_RE.test(hive.time) &&
-      hive.service !== null &&
-      hive.instance !== null
+      typeof hive.service === "string" &&
+      typeof hive.instance === "string"
     ) {
       return known(hive.service, hive.instance, hive.boot ?? "", epoch, segIndex);
     }
@@ -164,10 +164,10 @@ const TIME_RE = /^\d{4}$/;
 
 interface HivePartitions {
   start: number;
-  date: string | null;
-  time: string | null;
-  service: string | null;
-  instance: string | null;
+  date: string | null | undefined;
+  time: string | null | undefined;
+  service: string | null | undefined;
+  instance: string | null | undefined;
   boot: string | null | undefined;
 }
 
@@ -187,13 +187,13 @@ function parseHivePartitions(parts: string[]): HivePartitions | null {
       if (!["date", "time", "service", "instance", "boot"].includes(name)) continue;
       values.set(name, decodePartitionValue(segment.slice(separator + 1)));
     }
-    if (valid && ["date", "time", "service", "instance"].every((name) => values.has(name))) {
+    if (valid) {
       return {
         start,
-        date: values.get("date")!,
-        time: values.get("time")!,
-        service: values.get("service")!,
-        instance: values.get("instance")!,
+        date: values.get("date"),
+        time: values.get("time"),
+        service: values.get("service"),
+        instance: values.get("instance"),
         boot: values.get("boot"),
       };
     }

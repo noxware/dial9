@@ -74,6 +74,18 @@ describe("parseKey: Hive-style layout", () => {
       segIndex: "3",
     });
   });
+
+  it("recognizes a partial named suffix without guessing missing fields", () => {
+    const rawKey =
+      "traces/date=2026-08-14/region=uy/service=svc/1786736220-3.bin.gz";
+    expect(parseKey(rawKey)).toEqual({
+      layout: "unknown",
+      rawKey,
+      epoch: 1786736220,
+      segIndex: "3",
+    });
+    expect(extractPrefix(rawKey)).toBe("traces");
+  });
 });
 
 describe("parseKey: historical boot-id layout", () => {

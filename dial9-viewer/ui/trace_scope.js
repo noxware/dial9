@@ -65,12 +65,12 @@
     const hive = parseHivePartitions(parts);
     if (hive) {
       if (
-        hive.date !== null &&
+        typeof hive.date === "string" &&
         dateRe.test(hive.date) &&
-        hive.time !== null &&
+        typeof hive.time === "string" &&
         timeRe.test(hive.time) &&
-        hive.service !== null &&
-        hive.instance !== null
+        typeof hive.service === "string" &&
+        typeof hive.instance === "string"
       ) {
         return {
           service: hive.service,
@@ -160,7 +160,7 @@
         if (!["date", "time", "service", "instance", "boot"].includes(name)) continue;
         values.set(name, decodePartitionValue(segment.slice(separator + 1)));
       }
-      if (valid && ["date", "time", "service", "instance"].every((name) => values.has(name))) {
+      if (valid) {
         return {
           start,
           date: values.get("date"),
