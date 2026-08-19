@@ -69,9 +69,6 @@ pub mod sampling;
 pub mod schema_extensions;
 /// Sealed-segment detection. The segment types are public via [`pipeline`].
 pub(crate) mod sealed;
-/// Shared parsing and escaping for dial9 segment object keys.
-#[doc(hidden)]
-pub mod segment_object_key;
 /// Runtime-agnostic recording state shared across threads.
 #[doc(hidden)]
 pub mod shared_state;

@@ -18,6 +18,10 @@ use dial9_viewer::server::{AppState, router};
 use dial9_viewer::storage::S3Backend;
 use std::sync::Arc;
 
+#[allow(dead_code)]
+#[path = "../src/segment_object_key_codec.rs"]
+mod segment_object_key_codec;
+
 /// Build an s3s-backed client over a filesystem root (the simulated S3).
 fn fake_s3_client(fs_root: &std::path::Path) -> aws_sdk_s3::Client {
     let fs = s3s_fs::FileSystem::new(fs_root).unwrap();
@@ -295,7 +299,7 @@ async fn put(client: &aws_sdk_s3::Client, bucket: &str, key: &str, data: Vec<u8>
 /// A realistic Hive-style segment object key.
 /// `epoch` is the file start time in seconds (drives the scope time filter).
 fn segment_key(date: &str, hhmm: &str, svc: &str, host: &str, epoch: i64, idx: u32) -> String {
-    dial9_core::segment_object_key::format_hive_segment_object_key(
+    segment_object_key_codec::format_hive_segment_object_key(
         None,
         date,
         hhmm,

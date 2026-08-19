@@ -5,6 +5,7 @@
 
 use crate::connection;
 pub use crate::instance_metadata::InstanceIdentity;
+use crate::segment_object_key::format_hive_segment_object_key;
 use aws_sdk_s3::Client;
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::put_object::PutObjectError;
@@ -13,7 +14,6 @@ use dial9_core::pipeline::{
     ProcessError, ProcessErrorKind, SegmentData, SegmentProcessor, SegmentRef,
 };
 use dial9_core::rate_limited;
-use dial9_core::segment_object_key::format_hive_segment_object_key;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;

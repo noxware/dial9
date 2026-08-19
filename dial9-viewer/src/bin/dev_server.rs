@@ -16,7 +16,10 @@
 ///                              features/01 D4/#471).
 use std::io::Write;
 
-use dial9_core::segment_object_key::format_hive_segment_object_key;
+#[allow(dead_code)]
+#[path = "../segment_object_key_codec.rs"]
+mod segment_object_key_codec;
+use segment_object_key_codec::format_hive_segment_object_key;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

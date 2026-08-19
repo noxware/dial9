@@ -281,7 +281,7 @@ fn service_time_prefixes(base: &str, from: i64, to: i64, service: &str) -> (Vec<
             .is_some_and(|part| part.starts_with("time="))
         {
             prefix.push_str("/service=");
-            prefix.push_str(&dial9_core::segment_object_key::hive_escape(service));
+            prefix.push_str(&crate::segment_object_key::hive_escape(service));
             prefix.push('/');
         } else {
             prefix.push('/');

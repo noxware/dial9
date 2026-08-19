@@ -58,6 +58,10 @@ use dial9_trace_format::encoder::{Encoder, Schema};
 use dial9_trace_format::schema::FieldDef;
 use dial9_trace_format::types::{FieldType, FieldValue};
 
+#[allow(dead_code)]
+#[path = "../segment_object_key_codec.rs"]
+mod segment_object_key_codec;
+
 const NS: u64 = 1_000_000_000;
 const MS: u64 = 1_000_000;
 
@@ -218,7 +222,7 @@ fn layout_key(
         Some(prefix.trim_end_matches('/'))
     };
     let filename = format!("{epoch_s}-{index}.bin.gz");
-    dial9_core::segment_object_key::format_hive_segment_object_key(
+    segment_object_key_codec::format_hive_segment_object_key(
         prefix, &date, &hhmm, service, host, boot, &filename,
     )
 }

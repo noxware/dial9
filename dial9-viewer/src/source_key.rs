@@ -1,4 +1,4 @@
-use dial9_core::segment_object_key::{SegmentObjectKeyLayout, parse_segment_object_key};
+use crate::segment_object_key::{SegmentObjectKeyLayout, parse_segment_object_key};
 
 /// Semantic fields used by both scope filtering and persisted Parquet rows.
 /// Hive keys fail closed when a required field is missing or malformed;

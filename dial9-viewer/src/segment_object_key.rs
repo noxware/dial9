@@ -1,39 +1,28 @@
-//! Dial9 segment object key layout and Hive path escaping.
-//!
-//! Writers use consecutive `date/time/service/instance/boot` partitions for
-//! efficient S3 listing. Readers match named partitions independently of
-//! order and also recognize historical positional layouts.
+//! Parsing for dial9 trace-segment object keys.
 
-/// The recognized segment object key layout.
+pub(crate) use crate::segment_object_key_codec::{
+    format_hive_segment_object_key, hive_escape, hive_unescape,
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum SegmentObjectKeyLayout {
-    /// Hive-style named partitions.
+pub(crate) enum SegmentObjectKeyLayout {
     Hive,
-    /// Historical layout with a boot-id directory.
     PositionalWithBoot,
-    /// Historical layout without a boot-id directory.
     PositionalWithoutBoot,
-    /// No supported directory layout was recognized.
     Unknown,
 }
 
-/// Semantic fields recovered from a segment object key.
-///
-/// A missing or malformed Hive value is `None` without hiding other valid
-/// fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct ParsedSegmentObjectKey {
-    pub layout: SegmentObjectKeyLayout,
-    pub date: Option<String>,
-    pub time: Option<String>,
-    pub service: Option<String>,
-    pub instance: Option<String>,
-    pub boot_id: Option<String>,
-    pub filename: String,
-    pub epoch_secs: Option<i64>,
-    pub segment_index: Option<u32>,
+pub(crate) struct ParsedSegmentObjectKey {
+    pub(crate) layout: SegmentObjectKeyLayout,
+    pub(crate) date: Option<String>,
+    pub(crate) time: Option<String>,
+    pub(crate) service: Option<String>,
+    pub(crate) instance: Option<String>,
+    pub(crate) boot_id: Option<String>,
+    pub(crate) filename: String,
+    pub(crate) epoch_secs: Option<i64>,
+    pub(crate) segment_index: Option<u32>,
 }
 
 #[derive(Default)]
@@ -45,85 +34,10 @@ struct HiveFields {
     boot_id: Option<String>,
 }
 
-/// Escape a Hive partition-path value using Hive's canonical ASCII table.
-///
-/// This intentionally preserves empty strings instead of substituting Hive's
-/// SQL null-partition sentinel: dial9 values are ordinary strings, not nullable
-/// table cells.
-pub fn hive_escape(value: &str) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-
-    let mut escaped = String::with_capacity(value.len());
-    for c in value.chars() {
-        if c.is_ascii() && needs_hive_escape(c as u8) {
-            let byte = c as u8;
-            escaped.push('%');
-            escaped.push(HEX[(byte >> 4) as usize] as char);
-            escaped.push(HEX[(byte & 0x0f) as usize] as char);
-        } else {
-            escaped.push(c);
-        }
-    }
-    escaped
-}
-
-/// Decode one layer of `%HH` escaping from a Hive partition-path value.
-///
-/// Malformed escapes and escaped bytes that are not valid UTF-8 return `None`.
-pub fn hive_unescape(value: &str) -> Option<String> {
-    if !value.as_bytes().contains(&b'%') {
-        return Some(value.to_string());
-    }
-
-    let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] != b'%' {
-            decoded.push(bytes[i]);
-            i += 1;
-            continue;
-        }
-        let high = hex_value(*bytes.get(i + 1)?)?;
-        let low = hex_value(*bytes.get(i + 2)?)?;
-        decoded.push((high << 4) | low);
-        i += 3;
-    }
-    String::from_utf8(decoded).ok()
-}
-
-/// Format the canonical Hive-style segment object key.
-///
-/// `prefix` and `filename` are inserted verbatim. Partition values are escaped
-/// and emitted in the stable order used by time-scoped S3 listing.
-pub fn format_hive_segment_object_key(
-    prefix: Option<&str>,
-    date: &str,
-    time: &str,
-    service: &str,
-    instance: &str,
-    boot_id: &str,
-    filename: &str,
-) -> String {
-    let suffix = format!(
-        "date={}/time={}/service={}/instance={}/boot={}/{}",
-        hive_escape(date),
-        hive_escape(time),
-        hive_escape(service),
-        hive_escape(instance),
-        hive_escape(boot_id),
-        filename,
-    );
-    match prefix {
-        Some(prefix) => format!("{prefix}/{suffix}"),
-        None => suffix,
-    }
-}
-
 /// Parse a dial9 segment object key, including historical layouts.
 ///
 /// Named fields are scanned from right to left, so their last occurrence wins.
-pub fn parse_segment_object_key(key: &str) -> ParsedSegmentObjectKey {
+pub(crate) fn parse_segment_object_key(key: &str) -> ParsedSegmentObjectKey {
     let path = strip_s3(key);
     let parts: Vec<&str> = path.split('/').collect();
     let filename = parts.last().copied().unwrap_or_default().to_string();
@@ -259,36 +173,6 @@ fn is_date(value: &str) -> bool {
 
 fn is_time(value: &str) -> bool {
     value.len() == 4 && value.bytes().all(|byte| byte.is_ascii_digit())
-}
-
-fn needs_hive_escape(byte: u8) -> bool {
-    byte < b' '
-        || byte == 0x7f
-        || matches!(
-            byte,
-            b'"' | b'#'
-                | b'%'
-                | b'\''
-                | b'*'
-                | b'/'
-                | b':'
-                | b'='
-                | b'?'
-                | b'\\'
-                | b'{'
-                | b'['
-                | b']'
-                | b'^'
-        )
-}
-
-fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
 }
 
 #[cfg(test)]

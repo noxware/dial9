@@ -521,7 +521,7 @@ fn time_scoped_prefixes(source_prefixes: &[String], scope: &Scope) -> Vec<String
                 if let Some(service) = scope.service.as_deref() {
                     prefixes.push(format!(
                         "{hive_prefix}/service={}/",
-                        dial9_core::segment_object_key::hive_escape(service)
+                        crate::segment_object_key::hive_escape(service)
                     ));
                     prefixes.push(format!("{historical_prefix}/{service}/"));
                 } else {
