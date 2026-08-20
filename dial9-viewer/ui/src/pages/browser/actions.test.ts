@@ -31,6 +31,52 @@ afterEach(() => {
 });
 
 describe("URL service loading", () => {
+  it("echoes the discovered layout hint and fills host count after browsing", async () => {
+    vi.stubGlobal("history", { replaceState: vi.fn(), pushState: vi.fn() });
+    vi.stubGlobal("window", {
+      location: { pathname: "/browser.html" },
+      Dial9Creds: undefined,
+      Dial9UrlState: { serialize: () => "" },
+    });
+    vi.stubGlobal("alert", vi.fn());
+
+    const key =
+      "traces/version=1/date=2026-04-09/service=checkout-api/time=1930/" +
+      "instance=host%2Fone/boot=boot/1775763000-0.bin.gz";
+    const fetchMock = vi.fn(async (url: string) =>
+      url.includes("/api/services")
+        ? new Response(
+            JSON.stringify({
+              services: ["checkout-api"],
+              service_metadata: [
+                { service: "checkout-api", layout_hint: "opaque/hint" },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          )
+        : new Response(JSON.stringify({ objects: [{ key, size: 1 }] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const store = createBrowserStore();
+    const actions = createActions(store, browserEls(""));
+    await actions.discoverServices();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1]![0]).toContain("service=checkout-api");
+    expect(fetchMock.mock.calls[1]![0]).toContain("layout_hint=opaque%2Fhint");
+    expect(store.getState().browse.serviceMetadata).toEqual([
+      {
+        service: "checkout-api",
+        layout_hint: "opaque/hint",
+        host_count: 1,
+      },
+    ]);
+  });
+
   it("skips discovery, preserves the service, and reloads an unlisted history service", async () => {
     const replaceState = vi.fn();
     vi.stubGlobal("history", { replaceState, pushState: vi.fn() });

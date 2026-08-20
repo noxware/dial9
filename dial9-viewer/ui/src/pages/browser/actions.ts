@@ -292,12 +292,17 @@ export function createActions(store: BrowserStore, els: BrowserEls): BrowserActi
     });
 
     try {
+      const layoutHint = store
+        .getState()
+        .browse.serviceMetadata.find((metadata) => metadata.service === service)
+        ?.layout_hint;
       const url = buildBrowseUrl({
         bucket,
         from: fromEpoch,
         to: toEpoch,
         prefix: keyPrefix,
         service,
+        layoutHint,
       });
       const resp = await apiFetch(url);
       if (!resp.ok) {
@@ -372,7 +377,21 @@ export function createActions(store: BrowserStore, els: BrowserEls): BrowserActi
       }
 
       const segments = toSegments(allObjects);
-      store.update("browse", { segments, rows: toRows(segments) });
+      const hostCount = new Set(
+        segments.map((segment) => segment.host).filter((host) => host !== ""),
+      ).size;
+      const currentMetadata = store.getState().browse.serviceMetadata;
+      const existing = currentMetadata.find((metadata) => metadata.service === service);
+      const serviceMetadata = existing
+        ? currentMetadata.map((metadata) =>
+            metadata.service === service ? { ...metadata, host_count: hostCount } : metadata,
+          )
+        : [...currentMetadata, { service, host_count: hostCount }];
+      store.update("browse", {
+        serviceMetadata,
+        segments,
+        rows: toRows(segments),
+      });
       renderHeatmapState();
     } catch (err) {
       store.update("browse", {
