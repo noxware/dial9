@@ -70,7 +70,7 @@ const MS: u64 = 1_000_000;
 const MONO_BASE_NS: u64 = NS;
 
 /// The fixture day. Every scenario lives on 2026-04-09 so the pinned page
-/// clock used by the live checks (`DEV_SEED_CLOCK`, 2026-04-09T21:00Z)
+/// clock used by the fixture live checks (`FIXTURE_CLOCK`, 2026-04-09T21:00Z)
 /// reaches it with the stock "Last 24hr" window.
 const FIXTURE_YEAR: i32 = 2026;
 const FIXTURE_MONTH: time::Month = time::Month::April;

@@ -95,11 +95,11 @@ mod tests {
                 "2026-08-14",
                 "payments/api",
                 "1937",
-                "us-east-1/i-0abc123",
+                "cluster/worker=blue",
                 "boot%=1",
                 "1786736220-3.bin.gz",
             ),
-            "company/date=archive/%25/version=1/date=2026-08-14/service=payments%2Fapi/time=1937/instance=us-east-1%2Fi-0abc123/boot=boot%25%3D1/1786736220-3.bin.gz"
+            "company/date=archive/%25/version=1/date=2026-08-14/service=payments%2Fapi/time=1937/instance=cluster%2Fworker%3Dblue/boot=boot%25%3D1/1786736220-3.bin.gz"
         );
     }
 }

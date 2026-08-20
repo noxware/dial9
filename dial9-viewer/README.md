@@ -42,7 +42,7 @@ dial9 serve --simulator synthetic \
   --local
 ```
 
-Simulator objects use the production Hive-style layout for segment object keys
+Simulator objects use the production versioned Hive-style layout for segment object keys
 and the normal viewer storage API. The catalog is virtual: every requested time
 range has deterministic segments, and trace bytes are rendered only when
 fetched.
@@ -53,7 +53,7 @@ names remain anonymous placeholders by default; `--simulator-symbols
 realistic` emits deterministic Rust-like names for more representative
 flamegraphs.
 
-The S3 Browser reads both the default Hive-style layout for segment object keys
+The S3 Browser reads both the default versioned Hive-style layout for segment object keys
 and historical positional keys, so mixed buckets remain browseable.
 
 ## Cargo features

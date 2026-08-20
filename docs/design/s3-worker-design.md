@@ -21,8 +21,8 @@ Application Process              Worker Thread (dedicated tokio current_thread r
 └─────────────────┘             └──────────────────────────────────┘
                                            │
                                            ▼
-                        S3: {bucket}/{prefix}/date={date}/time={HHMM}/
-                            service={service}/instance={instance}/boot={boot_id}/
+                        S3: {bucket}/{prefix}/version=1/date={date}/
+                            service={service}/time={HHMM}/instance={instance}/boot={boot_id}/
                             {epoch_secs}-{index}.bin.gz
 
 * SymbolizeProcessor is included when cpu-profiling is enabled.
@@ -47,39 +47,39 @@ Sealed:   trace.3.bin          (atomic rename)
 
 **Why not inotify/fswatch?** Adds complexity and platform-specific code. Polling every 1s is simple and sufficient.
 
-### 2. Time-first S3 key layout
+### 2. Versioned S3 key layout
 
-**Problem:** The primary access pattern is incident correlation — "what was happening across all services at time T?" This means time should be the first index in the key hierarchy.
+**Problem:** The browser must discover services in a time range and then list a
+selected service efficiently, without relying on positional values that may
+contain `/`.
 
-**Decision:** Time (1-minute bucket) is the first component after the optional
-prefix. Named partitions remove positional ambiguity and leave room for future
-fields:
+**Decision:** Use a version anchor followed by ordered named partitions:
 
 ```
-{prefix}/date={YYYY-MM-DD}/time={HHMM}/service={service}/instance={instance}/boot={boot_id}/{epoch_secs}-{index}.bin.gz
+{prefix}/version=1/date={YYYY-MM-DD}/service={service}/time={HHMM}/instance={instance}/boot={boot_id}/{epoch_secs}-{index}.bin.gz
 ```
 
-Example: `traces/date=2026-03-07/time=2030/service=checkout-api/instance=us-east-1%2Fi-0abc123/boot=abcd-42/1741384542-3.bin.gz`
+Example: `traces/version=1/date=2026-03-07/service=payments%2Fapi/time=2030/instance=cluster%2Fworker-7/boot=abcd-42/1741384542-3.bin.gz`
 
 Values in named partitions use Hive path escaping, so `/`, `%`, and `=` become
-`%2F`, `%25`, and `%3D`. This keeps values such as an `instance_path` containing
-slashes inside one partition. The optional prefix is opaque and keeps its
-literal path structure.
+`%2F`, `%25`, and `%3D`. The optional prefix is opaque and keeps its literal
+path structure.
 
-**Why time-first instead of service-first?**
+The order supports the browser's two listing steps:
 
-| Layout | Incident query ("what happened at 8:30pm?") | Single-service query |
-|--------|------------------------------------------|---------------------|
-| `{time}/{service}/...` | `ListObjects(prefix=traces/date=2026-03-07/time=2030/)` — one call, all services | `ListObjects(prefix=traces/date=2026-03-07/time=2030/service=checkout-api/)` — still one call |
-| `{service}/{time}/...` | N calls, one per service — must know all service names upfront | `ListObjects(prefix=traces/service=checkout-api/date=2026-03-07/time=2030/)` — one call |
-
-Time-first is strictly better for incident correlation and no worse for single-service queries. The only case where service-first wins is "list all time ranges for one service" — but that's a rare access pattern compared to "what happened during this incident."
+- `ListObjectsV2` with delimiter `/` at
+  `.../version=1/date=2026-03-07/` discovers services for that day.
+- `ListObjectsV2` at
+  `.../version=1/date=2026-03-07/service=payments%2Fapi/time=20`
+  lists that service's selected time range.
 
 **Benefits:**
-- Time-range queries across all services with a single `ListObjectsV2` prefix
+- `version=1` identifies the schema without inspecting the opaque prefix
+- Service discovery takes one delimiter listing per day
+- Service-scoped time ranges can use minute or hour prefixes
 - Natural Athena partitioning if we add Parquet output later
 - Efficient S3 lifecycle policies (delete everything older than N days)
-- 1-minute bucketing gives 1440 prefixes per day — manageable for listing and lifecycle policies
+- Hive escaping keeps partition values unambiguous
 
 **Tradeoff:** Requires reasonable clock sync, but we already need that for trace timestamps.
 
@@ -203,7 +203,7 @@ pub trait S3KeyFn: Send + Sync {
 }
 ```
 
-When set, it completely overrides the default time-first key layout. Closures implement `S3KeyFn` automatically.
+When set, it completely overrides the default versioned key layout. Closures implement `S3KeyFn` automatically.
 
 ## API
 
@@ -304,10 +304,11 @@ Pipeline stage metrics are prefixed with the processor name automatically.
 ## S3 Object Layout
 
 ```
-s3://{bucket}/{prefix}/date={YYYY-MM-DD}/time={HHMM}/service={service}/instance={instance}/boot={boot_id}/{epoch_secs}-{index}.bin.gz
+s3://{bucket}/{prefix}/version=1/date={YYYY-MM-DD}/service={service}/time={HHMM}/instance={instance}/boot={boot_id}/{epoch_secs}-{index}.bin.gz
 ```
 
-- `date` and `time`: UTC `2026-03-07` and `2030` — 1-minute bucket (enables time-range queries across all services)
+- `version`: object-key layout version
+- `date` and `time`: UTC `2026-03-07` and `2030` — 1-minute listing bucket
 - `service`: user-provided service name
 - `instance`: opaque instance path, Hive-escaped in the key
 - `boot`: boot id generated per process start (disambiguates segment indices across restarts — see issue #225)
@@ -319,6 +320,7 @@ Extension is `.bin.gz` when compressed, `.bin` when not.
 The uploader applies Hive path escaping to every named partition value. The
 viewer decodes one `%HH` layer and also reads the historical positional layout.
 A custom `S3KeyFn` remains opaque and bypasses this default convention.
+Automatic discovery in the S3 Browser applies only to supported layouts.
 
 **Metadata headers** (set via S3 SDK `.metadata()` — the SDK auto-adds the `x-amz-meta-` prefix):
 ```

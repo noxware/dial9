@@ -961,7 +961,7 @@ mod tests {
         let metadata = make_metadata(1741209000);
         let key = config.object_key(&segment, &metadata);
         check!(
-            key == "traces/date=2025-03-05/time=2110/service=checkout-api/instance=us-east-1%2Fi-0abc123/boot=test-boot-id/1741209000-3.bin.gz"
+            key == "traces/version=1/date=2025-03-05/service=checkout-api/time=2110/instance=us-east-1%2Fi-0abc123/boot=test-boot-id/1741209000-3.bin.gz"
         );
     }
 
@@ -979,7 +979,7 @@ mod tests {
         let metadata = make_metadata(1741209000);
         let key = config.object_key(&segment, &metadata);
         check!(
-            key == "date=2025-03-05/time=2110/service=checkout-api/instance=us-east-1%2Fi-0abc123/boot=test-boot-id/1741209000-0.bin.gz"
+            key == "version=1/date=2025-03-05/service=checkout-api/time=2110/instance=us-east-1%2Fi-0abc123/boot=test-boot-id/1741209000-0.bin.gz"
         );
     }
 
@@ -990,7 +990,7 @@ mod tests {
         let metadata = HashMap::from([("epoch_secs".into(), "1741209000".into())]);
         let key = config.object_key(&segment, &metadata);
         check!(
-            key == "traces/date=2025-03-05/time=2110/service=checkout-api/instance=us-east-1%2Fi-0abc123/boot=test-boot-id/1741209000-0.bin"
+            key == "traces/version=1/date=2025-03-05/service=checkout-api/time=2110/instance=us-east-1%2Fi-0abc123/boot=test-boot-id/1741209000-0.bin"
         );
     }
 
@@ -1001,7 +1001,7 @@ mod tests {
                 .bucket("my-traces")
                 .prefix("company/date=archive/%25")
                 .service_name("payments/api")
-                .instance_path("us-east-1/i=0%abc")
+                .instance_path("cluster/worker=blue%1")
                 .build(),
             "boot/id",
         );
@@ -1010,7 +1010,7 @@ mod tests {
             &make_metadata(1741209000),
         );
         check!(
-            key == "company/date=archive/%25/date=2025-03-05/time=2110/service=payments%2Fapi/instance=us-east-1%2Fi%3D0%25abc/boot=boot%2Fid/1741209000-0.bin.gz"
+            key == "company/date=archive/%25/version=1/date=2025-03-05/service=payments%2Fapi/time=2110/instance=cluster%2Fworker%3Dblue%251/boot=boot%2Fid/1741209000-0.bin.gz"
         );
     }
 
@@ -1093,8 +1093,8 @@ mod tests {
         let segment = make_segment("/tmp/trace.0.bin", 0);
         let metadata = make_metadata(1741209000);
         let key = config.object_key(&segment, &metadata);
-        // No prefix → date partition is the first component.
-        check!(key.starts_with("date=2025-03-05/"));
+        // No prefix → the version anchor is the first component.
+        check!(key.starts_with("version=1/date=2025-03-05/"));
     }
 
     // --- S3 integration tests via s3s-fs ---
@@ -1127,7 +1127,7 @@ mod tests {
             .unwrap();
 
         check!(
-            key == "traces/date=2025-03-05/time=2110/service=checkout-api/instance=us-east-1%2Fi-0abc123/boot=test-boot-id/1741209000-0.bin.gz"
+            key == "traces/version=1/date=2025-03-05/service=checkout-api/time=2110/instance=us-east-1%2Fi-0abc123/boot=test-boot-id/1741209000-0.bin.gz"
         );
 
         // Local file should be deleted
@@ -1367,8 +1367,8 @@ mod tests {
         // No epoch_secs in metadata — falls back to 0
         let metadata = HashMap::new();
         let key = config.object_key(&segment, &metadata);
-        // epoch 0 → date=1970-01-01/time=0000 — this is a silent misconfiguration
-        check!(key.contains("date=1970-01-01/time=0000"));
+        // Epoch 0 is a silent misconfiguration, but still uses the v1 layout.
+        check!(key.contains("date=1970-01-01/service=checkout-api/time=0000"));
     }
 
     #[test]
@@ -1377,7 +1377,7 @@ mod tests {
         let segment = make_segment("/tmp/trace.0.bin", 0);
         let metadata = HashMap::from([("epoch_secs".into(), "not-a-number".into())]);
         let key = config.object_key(&segment, &metadata);
-        check!(key.contains("date=1970-01-01/time=0000"));
+        check!(key.contains("date=1970-01-01/service=checkout-api/time=0000"));
     }
 }
 

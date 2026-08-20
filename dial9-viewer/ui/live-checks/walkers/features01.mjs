@@ -10,7 +10,7 @@
 // walk-rows entry lists them as NOT-TRIGGERABLE without driving them.
 //
 // Environment assumptions:
-//   - dev-server seed: single segment at traces/date=2026-08-06/time=0025/... — hence
+//   - dev-server seed: single segment under traces/version=1/date=2026-08-06/... — hence
 //     the pinned page clock (lib/browser.mjs DEV_SEED_CLOCK) and the
 //     demo-window helpers (lib/actions.mjs);
 //   - the seeded key uses the default Hive-style layout; the page decodes its

@@ -28,8 +28,11 @@ Present the user with what's in the bucket before doing any analysis.
 # List date range
 aws s3 ls s3://BUCKET/ --region REGION
 
-# List services for a given date/minute
-aws s3 ls s3://BUCKET/PREFIX/date=YYYY-MM-DD/time=HHMM/ --region REGION
+# List services for a given date
+aws s3 ls s3://BUCKET/PREFIX/version=1/date=YYYY-MM-DD/ --region REGION
+
+# List one service's minute
+aws s3 ls s3://BUCKET/PREFIX/version=1/date=YYYY-MM-DD/service=SERVICE/time=HHMM/ --region REGION
 
 # Inspect keys recursively; use the Browser for decoded service/instance groups
 aws s3 ls s3://BUCKET/ --recursive --region REGION \
@@ -41,12 +44,13 @@ aws s3 ls s3://BUCKET/ --recursive --region REGION \
 dial9 S3 uploads follow this layout:
 
 ```
-{prefix/}date={YYYY-MM-DD}/time={HHMM}/service={service_name}/instance={instance_path}/boot={boot_id}/{epoch_secs}-{segment_index}.bin.gz
+{prefix/}version=1/date={YYYY-MM-DD}/service={service_name}/time={HHMM}/instance={instance_path}/boot={boot_id}/{epoch_secs}-{segment_index}.bin.gz
 ```
 
 | Component | Meaning |
 |-----------|---------|
-| `prefix` | Optional. Value of `DIAL9_S3_PREFIX` (default: none, keys start at date). |
+| `prefix` | Optional. Value of `DIAL9_S3_PREFIX` (default: none, keys start at `version=1`). |
+| `version` | Object-key layout version. |
 | `date` | UTC date. |
 | `time` | UTC hour+minute bucket. |
 | `service` | Value of `DIAL9_SERVICE_NAME` or the binary name. |
@@ -78,7 +82,7 @@ Ask the user which host/time period they want to investigate, or if they want a 
 aws s3 cp s3://BUCKET/path/to/file.bin.gz /tmp/d9-traces/ --region REGION
 
 # All files for a host in a time window
-aws s3 cp s3://BUCKET/PREFIX/date=YYYY-MM-DD/time=HHMM/service=SERVICE/instance=HOST/ /tmp/d9-traces/ \
+aws s3 cp s3://BUCKET/PREFIX/version=1/date=YYYY-MM-DD/service=SERVICE/time=HHMM/instance=HOST/ /tmp/d9-traces/ \
   --recursive --region REGION
 ```
 
@@ -162,7 +166,7 @@ dial9 agents skill dial9-red-flags
 ## Troubleshooting
 
 - **"Access Denied" or "NoSuchBucket"**: Verify credentials with `aws sts get-caller-identity` and check bucket region
-- **Empty bucket listings**: Verify the `date=YYYY-MM-DD/time=HHMM` partitions, region, and prefix
+- **Empty bucket listings**: Verify the `version=1/date=YYYY-MM-DD/service=SERVICE/time=HHMM` partitions, region, and prefix
 - **`dial9` not found**: `cargo install dial9 --features cli` or `cargo binstall dial9`
 - **Analysis errors on .gz files**: Decompress first — `analyze.js` requires raw `.bin` input
 - **"Unknown frame tag" errors**: Toolkit version is older than the trace format — update dial9 with `cargo install dial9 --features cli`

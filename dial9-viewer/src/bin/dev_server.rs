@@ -98,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
                 "2026-08-06",
                 "test-svc",
                 &format!("003{i}"),
-                "us-east-1/host-1",
+                "local/host-1",
                 "xyzw",
                 &format!("{epoch_secs}-0.bin.gz"),
             );
@@ -180,7 +180,7 @@ async fn main() -> anyhow::Result<()> {
         default_prefix.as_deref().unwrap_or("(none)")
     );
     tracing::info!("try: http://localhost:{port}/");
-    tracing::info!("search for: date=2026-08-06/");
+    tracing::info!("search for: version=1/date=2026-08-06/");
 
     axum::serve(listener, app)
         .with_graceful_shutdown(async {

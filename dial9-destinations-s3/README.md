@@ -12,10 +12,10 @@ dial9 = { version = "0.5", features = ["worker-s3"] }
 
 ## Default object keys
 
-The default uploader writes trace segments using a time-first Hive-style layout:
+The default uploader writes trace segments using a versioned Hive-style layout:
 
 ```text
-{prefix}/date={YYYY-MM-DD}/time={HHMM}/service={service}/instance={instance}/boot={boot_id}/{epoch_secs}-{index}.bin[.gz]
+{prefix}/version=1/date={YYYY-MM-DD}/service={service}/time={HHMM}/instance={instance}/boot={boot_id}/{epoch_secs}-{index}.bin[.gz]
 ```
 
 Partition values use Hive path escaping. For example, `payments/api` becomes
@@ -23,4 +23,5 @@ Partition values use Hive path escaping. For example, `payments/api` becomes
 prefix remains an opaque namespace and is not escaped by the uploader.
 
 `S3Config::key_fn` can still replace the default layout completely. Custom
-keys are stored verbatim and are not required to follow the Hive-style format.
+keys are stored verbatim and are not required to follow the Hive-style format;
+automatic discovery in the S3 Browser applies only to supported layouts.

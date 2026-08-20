@@ -179,8 +179,8 @@ can be narrower than the requested window:
   "segments_processed": 12,
   "metadata": { "reason": "idle-ratio-drop" },
   "segments": [
-    "traces/date=2026-06-09/time=1425/service=checkout-api/instance=i-0abc/boot=abcd-42/1741384200-1.bin.gz",
-    "traces/date=2026-06-09/time=1430/service=checkout-api/instance=i-0abc/boot=abcd-42/1741384542-3.bin.gz"
+    "traces/version=1/date=2026-06-09/service=checkout-api/time=1425/instance=i-0abc/boot=abcd-42/1741384200-1.bin.gz",
+    "traces/version=1/date=2026-06-09/service=checkout-api/time=1430/instance=i-0abc/boot=abcd-42/1741384542-3.bin.gz"
   ]
 }
 ```

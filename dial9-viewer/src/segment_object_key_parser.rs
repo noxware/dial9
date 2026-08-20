@@ -193,24 +193,24 @@ mod tests {
                 "2026-08-14",
                 "payments/api",
                 "1937",
-                "us-east-1/i-0abc123",
+                "cluster/worker=blue",
                 "boot%=1",
                 "1786736220-3.bin.gz",
             ),
-            "company/date=archive/%25/version=1/date=2026-08-14/service=payments%2Fapi/time=1937/instance=us-east-1%2Fi-0abc123/boot=boot%25%3D1/1786736220-3.bin.gz"
+            "company/date=archive/%25/version=1/date=2026-08-14/service=payments%2Fapi/time=1937/instance=cluster%2Fworker%3Dblue/boot=boot%25%3D1/1786736220-3.bin.gz"
         );
     }
 
     #[test]
     fn parses_canonical_version1_layout() {
         let parsed = parse_segment_object_key(
-            "company/date=archive/%25/version=1/date=2026-08-14/service=payments%2Fapi/time=1937/instance=us-east-1%2Fi-0abc123/boot=abcd-4242/1786736220-3.bin.gz",
+            "company/date=archive/%25/version=1/date=2026-08-14/service=payments%2Fapi/time=1937/instance=cluster%2Fworker%3Dblue/boot=abcd-4242/1786736220-3.bin.gz",
         );
         assert_eq!(parsed.layout, SegmentObjectKeyLayout::Version1);
         assert_eq!(parsed.date.as_deref(), Some("2026-08-14"));
         assert_eq!(parsed.time.as_deref(), Some("1937"));
         assert_eq!(parsed.service.as_deref(), Some("payments/api"));
-        assert_eq!(parsed.instance.as_deref(), Some("us-east-1/i-0abc123"));
+        assert_eq!(parsed.instance.as_deref(), Some("cluster/worker=blue"));
         assert_eq!(parsed.boot_id.as_deref(), Some("abcd-4242"));
         assert_eq!(parsed.epoch_secs, Some(1_786_736_220));
         assert_eq!(parsed.segment_index, Some(3));
