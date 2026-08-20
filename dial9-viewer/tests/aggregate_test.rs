@@ -1344,7 +1344,7 @@ async fn escaped_service_and_instance_survive_aggregation_and_cache_paths() {
     let uploader = fake_s3_client(fs.path());
     let epoch = 1_775_761_800i64;
     let service = "payments/api";
-    let host = "us-east-1/i=0%abc";
+    let host = "cluster/worker=blue%1";
     let key = segment_key("2026-04-09", "1910", service, host, epoch, 0);
     put(&uploader, "src-bucket", &key, mini_trace_gz()).await;
 
@@ -1376,7 +1376,7 @@ async fn escaped_service_and_instance_survive_aggregation_and_cache_paths() {
     assert!(listed.contents().iter().any(|object| {
         object.key().is_some_and(|key| {
             key.contains("/service=payments%2Fapi/")
-                && key.contains("/host=us-east-1%2Fi%3D0%25abc/")
+                && key.contains("/host=cluster%2Fworker%3Dblue%251/")
         })
     }));
 }

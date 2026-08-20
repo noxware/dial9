@@ -23,10 +23,11 @@ const DISCOVERY_WINDOW_SECS: i64 = 10 * 60;
 #[derive(Deserialize)]
 pub struct ServicesParams {
     pub bucket: Option<String>,
-    /// Optional key prefix before the date partition.
+    /// Optional key prefix before the layout root.
     pub prefix: Option<String>,
-    /// Inclusive start of the requested browse range, unix seconds. S3
-    /// discovery scans at most its trailing ten minutes.
+    /// Inclusive start of the requested browse range, unix seconds. Versioned
+    /// discovery scans each day; historical discovery scans the trailing ten
+    /// minutes.
     pub from: i64,
     /// Inclusive end of the discovery window, unix seconds.
     pub to: i64,
@@ -155,6 +156,7 @@ pub async fn list_services(
         .cloned()
         .map(|service| ServiceMetadata {
             layout_hint: Some(source_layout::hint_for_service(
+                &bucket,
                 &base,
                 &service,
                 &days,

@@ -1914,7 +1914,7 @@ mod tests {
     #[test]
     fn parse_scope_fields_handles_prefix() {
         let (d, s, h) = parse_scope_fields(
-            "traces/2026-04-09/1910/checkout-api/us-east-1/i-0abc123/abcd/1744224000-3.bin.gz",
+            "traces/2026-04-09/1910/checkout-api/us-east-1/abcd/1744224000-3.bin.gz",
         )
         .unwrap();
         assert_eq!(d, "2026-04-09");

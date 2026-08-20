@@ -35,10 +35,6 @@ describe("isDateLayer", () => {
     expect(isDateLayer(["2026-06-12"])).toBe(true);
   });
 
-  it("Hive date partitions -> date layer", () => {
-    expect(isDateLayer(["date=2026-06-11/", "date=2026-06-12/"])).toBe(true);
-  });
-
   // Genuine key prefixes (service names) are NOT a date layer.
   it("service-name prefixes -> not a date layer", () => {
     expect(isDateLayer(["traces/", "checkout-api/"])).toBe(false);

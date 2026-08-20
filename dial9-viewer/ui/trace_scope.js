@@ -108,8 +108,8 @@
     return { service: "", host: key, bootId: "", epoch: 0, segIndex: "" };
   }
 
-  // The key prefix: everything before the date-shaped segment (e.g. `traces`).
-  // Empty string when the date is at the root.
+  // The key prefix: everything before the recognized layout root (e.g. `traces`).
+  // Empty string when the layout starts at the object-key root.
   function extractPrefix(key) {
     const parts = key.split("/");
     const dateRe = /^\d{4}-\d{2}-\d{2}$/;

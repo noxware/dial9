@@ -31,7 +31,7 @@ afterEach(() => {
 });
 
 describe("URL service loading", () => {
-  it("echoes the discovered layout hint and fills host count after browsing", async () => {
+  it("echoes the discovered layout hint and updates host count after browsing", async () => {
     vi.stubGlobal("history", { replaceState: vi.fn(), pushState: vi.fn() });
     vi.stubGlobal("window", {
       location: { pathname: "/browser.html" },
@@ -43,6 +43,7 @@ describe("URL service loading", () => {
     const key =
       "traces/version=1/date=2026-04-09/service=checkout-api/time=1930/" +
       "instance=host%2Fone/boot=boot/1775763000-0.bin.gz";
+    let objects = [{ key, size: 1 }];
     const fetchMock = vi.fn(async (url: string) =>
       url.includes("/api/services")
         ? new Response(
@@ -54,7 +55,7 @@ describe("URL service loading", () => {
             }),
             { status: 200, headers: { "content-type": "application/json" } },
           )
-        : new Response(JSON.stringify({ objects: [{ key, size: 1 }] }), {
+        : new Response(JSON.stringify({ objects }), {
             status: 200,
             headers: { "content-type": "application/json" },
           }),
@@ -73,6 +74,16 @@ describe("URL service loading", () => {
         service: "checkout-api",
         layout_hint: "opaque/hint",
         host_count: 1,
+      },
+    ]);
+
+    objects = [];
+    await actions.doTimeRangeSearch();
+    expect(store.getState().browse.serviceMetadata).toEqual([
+      {
+        service: "checkout-api",
+        layout_hint: "opaque/hint",
+        host_count: 0,
       },
     ]);
   });

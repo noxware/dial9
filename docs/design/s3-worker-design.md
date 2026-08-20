@@ -198,8 +198,10 @@ Falls back to `us-east-1` if detection fails entirely.
 **Solution:** `S3Config` accepts an optional `key_fn` implementing the `S3KeyFn` trait:
 
 ```rust
+use dial9::s3::KeyContext;
+
 pub trait S3KeyFn: Send + Sync {
-    fn object_key(&self, segment: &SealedSegment, metadata: &HashMap<String, String>) -> String;
+    fn object_key(&self, segment: &KeyContext) -> String;
 }
 ```
 
@@ -208,30 +210,22 @@ When set, it completely overrides the default versioned key layout. Closures imp
 ## API
 
 ```rust
-use dial9_tokio_telemetry::telemetry::{RotatingWriter, TracedRuntime};
-use dial9_tokio_telemetry::background_task::s3::S3Config;
-
-let trace_path = "/tmp/traces/trace.bin";
-let writer = RotatingWriter::new(trace_path, 1_MB, 5_MB)?;
+use dial9::s3::S3Config;
 
 let s3_config = S3Config::builder()
     .bucket("my-traces")
     .prefix("prod")
     .service_name("checkout-api")
-    .instance_path("us-east-1/i-0abc123")
-    .boot_id("unique-boot-id")
+    .instance_path("cluster/worker-7")
     .build();
-
-let (runtime, guard) = TracedRuntime::builder()
-    .with_task_tracking(true)
-    .with_s3_uploader(s3_config)
-    .build_and_start(builder, writer)?;
-
-// Graceful shutdown: flush, seal, wait for worker to drain
-guard.graceful_shutdown(Duration::from_secs(30)).await?;
 ```
 
-The builder auto-constructs the worker pipeline from the configured options. When `cpu-profiling` is enabled, the `SymbolizeProcessor` is added automatically. When `worker-s3` is configured, the `GzipCompressor` and `S3PipelineUploader` are added. Without S3, symbolized segments are gzip-compressed and written back to disk.
+Pass this configuration to `RecorderBuilder::with_s3_uploader`. The builder
+auto-constructs the worker pipeline from the configured options. When
+`cpu-profiling` is enabled, the `SymbolizeProcessor` is added automatically.
+When `worker-s3` is configured, the `GzipCompressor` and `S3PipelineUploader`
+are added. Without S3, symbolized segments are gzip-compressed and written
+back to disk.
 
 Additional builder options:
 - `with_worker_poll_interval(Duration)` — how often to scan for sealed segments (default: 1s)

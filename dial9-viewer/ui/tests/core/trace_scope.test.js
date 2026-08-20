@@ -44,7 +44,7 @@ test("parseKey reads the legacy (no boot_id) layout", () => {
   assert.strictEqual(p.epoch, 1782760500);
 });
 
-test("extractPrefix returns everything before the date", () => {
+test("extractPrefix returns everything before the layout root", () => {
   assert.strictEqual(scope.extractPrefix(key("h", 1782760500, 1)), "traces");
   assert.strictEqual(scope.extractPrefix("2026-06-29/1915/svc/h/b/1-1.bin.gz"), "");
 });

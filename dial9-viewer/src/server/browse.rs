@@ -37,8 +37,8 @@ const MINUTE_GRANULARITY_THRESHOLD_SECS: i64 = 600;
 #[derive(Deserialize)]
 pub struct BrowseParams {
     pub bucket: Option<String>,
-    /// Optional key prefix (the portion before the date), e.g. `traces`. When
-    /// omitted the server's default prefix (if any) is used.
+    /// Optional key prefix before the layout root, e.g. `traces`. When omitted
+    /// the server's default prefix (if any) is used.
     pub prefix: Option<String>,
     /// Optional exact service value. Empty values are treated as absent.
     pub service: Option<String>,
@@ -104,8 +104,6 @@ pub async fn browse(
         .filter(|s| !s.is_empty());
     let base = resolve_base(state.default_prefix.as_deref(), key_prefix);
 
-    let window = params.to - params.from;
-
     // Flat-layout mode: one listing, with no date-prefix fan-out.
     if !state.time_partitioned_source {
         return browse_local(backend, &bucket, &base, service).await;
@@ -117,7 +115,6 @@ pub async fn browse(
         &base,
         params.from,
         params.to,
-        window,
         service,
         params.layout_hint.as_deref(),
     )
@@ -165,10 +162,10 @@ async fn browse_s3(
     base: &str,
     from: i64,
     to: i64,
-    window: i64,
     service: Option<&str>,
     layout_hint: Option<&str>,
 ) -> Result<BrowseOk, (StatusCode, String)> {
+    let window = to - from;
     let gran = if window < MINUTE_GRANULARITY_THRESHOLD_SECS {
         Granularity::Minute
     } else {
@@ -455,8 +452,8 @@ fn append_time_prefixes(
         Granularity::Minute => 60,
     };
     // Align the start down to the bucket boundary. Epoch 0 is midnight UTC and
-    // both 600 and 60 divide the day evenly, so floored alignment (rem_euclid,
-    // correct even for pre-1970 inputs) lands exactly on a wall-clock boundary.
+    // both hour and minute steps divide the day evenly, so floored alignment
+    // (rem_euclid, correct even for pre-1970 inputs) lands on a wall-clock boundary.
     let start = from - from.rem_euclid(step);
 
     let mut t = start;
@@ -607,7 +604,7 @@ mod tests {
             Some("api-worker".to_string())
         );
         assert_eq!(
-            key_service("root/2026-06-09/1910/api/us-east-1/i-0abc123/boot/1-0.bin.gz"),
+            key_service("root/2026-06-09/1910/api/host/group/boot/1-0.bin.gz"),
             Some("api".to_string())
         );
         assert_eq!(key_service("boot/trace.0.bin"), None);
@@ -626,8 +623,8 @@ mod tests {
             Some("host/a".to_string())
         );
         assert_eq!(
-            key_host("root/2026-06-09/1910/api/us-east-1/i-0abc123/boot/1-0.bin.gz"),
-            Some("us-east-1".to_string())
+            key_host("root/2026-06-09/1910/api/host/group/boot/1-0.bin.gz"),
+            Some("host".to_string())
         );
         assert_eq!(key_host("boot/trace.0.bin"), None);
     }

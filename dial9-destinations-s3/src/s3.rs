@@ -82,9 +82,9 @@ where
 /// have sensible defaults:
 ///
 /// - `instance_path`: system hostname
-/// - `prefix`: none (keys start at the time bucket)
+/// - `prefix`: none (keys start at `version=1`)
 /// - `region`: auto-detected via `HeadBucket`
-/// - `key_fn`: built-in time-first layout
+/// - `key_fn`: built-in versioned layout
 ///
 /// # Default key layout
 ///
@@ -124,7 +124,7 @@ pub struct S3Config {
     /// namespace is in play.
     #[builder(skip = default_boot_id())]
     boot_id: String,
-    /// Optional key prefix. When `None`, keys start at the time bucket.
+    /// Optional key prefix. When `None`, keys start at `version=1`.
     prefix: Option<String>,
     /// Optional AWS region override. When `None`, uses the SDK default.
     region: Option<String>,

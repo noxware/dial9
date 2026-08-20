@@ -15,9 +15,9 @@ function lastSegment(prefix) {
 }
 
 // Issue #471: detect when a bucket's root children are date partitions
-// (`date=YYYY-MM-DD/`, or the historical `YYYY-MM-DD/`) rather than genuine
-// key prefixes. When there is no prefix, the date layer sits directly at the
-// listing root. Those dates
+// (YYYY-MM-DD/) rather than genuine key prefixes. The default S3 key
+// layout is `{prefix}/{YYYY-MM-DD}/{HHMM}/{service}/…`; when there is no
+// prefix, the date layer sits directly at the listing root. Those dates
 // are NOT selectable prefixes — the prefix is empty.
 //
 // We treat the listing as a date layer when date partitions are a strict
@@ -32,7 +32,7 @@ function lastSegment(prefix) {
 function isDateLayer(prefixes) {
   if (!prefixes || prefixes.length === 0) return false;
   const dateCount = prefixes.filter((p) =>
-    /^(?:date=)?\d{4}-\d{2}-\d{2}$/.test(lastSegment(p)),
+    /^\d{4}-\d{2}-\d{2}$/.test(lastSegment(p)),
   ).length;
   return dateCount * 2 > prefixes.length;
 }

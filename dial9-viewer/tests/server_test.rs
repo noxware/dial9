@@ -595,7 +595,7 @@ async fn browse_filters_exact_service_for_wide_window() {
 
     for (key, payload) in [
         (
-            "2026-04-09/1910/api/us-east-1/i-0abc123/boot/1000-0.bin.gz",
+            "2026-04-09/1910/api/host/group/boot/1000-0.bin.gz",
             b"a".as_slice(),
         ),
         (
@@ -796,6 +796,7 @@ async fn browse_rediscovers_when_layout_hint_is_invalid_or_stale() {
     let to = from + 22 * 60;
     let stale = serde_json::json!({
         "v": 1,
+        "bucket": "traces-bucket",
         "base": "",
         "service": "api",
         "first_day": "2026-04-09",

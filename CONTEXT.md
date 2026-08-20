@@ -129,7 +129,7 @@ S3 browser's 🔥 button builds a scope from the heatmap selection's hosts +
 `aggregation_enabled` via `/api/config`.
 
 The viewer also lists the historical positional layout; the uploader writes
-only the Hive-style form.
+only the versioned Hive-style form.
 _Avoid_: query (use "scope" for the selection, "query" for the request).
 
 ## Worker attribution

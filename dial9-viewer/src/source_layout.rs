@@ -78,6 +78,7 @@ pub(crate) struct ResolvedServiceLayouts {
 #[derive(Debug, Serialize, Deserialize)]
 struct LayoutHint {
     v: u8,
+    bucket: String,
     base: String,
     service: String,
     first_day: String,
@@ -136,7 +137,7 @@ pub(crate) async fn resolve_service_layouts(
     let days = day_layouts(from, to, LayoutSet::Historical)?;
     let now = OffsetDateTime::now_utc().unix_timestamp();
     if let Some(hint) = hint
-        && let Some(first_v1_day) = decode_hint(hint, base, service, &days, now)
+        && let Some(first_v1_day) = decode_hint(hint, bucket, base, service, &days, now)
     {
         return Ok(ResolvedServiceLayouts {
             days: classify_days(days, first_v1_day.as_deref()),
@@ -153,6 +154,7 @@ pub(crate) async fn resolve_service_layouts(
 }
 
 pub(crate) fn hint_for_service(
+    bucket: &str,
     base: &str,
     service: &str,
     days: &[DayLayout],
@@ -160,6 +162,7 @@ pub(crate) fn hint_for_service(
 ) -> String {
     let first_v1_day = version1_dates.and_then(BTreeSet::first).map(String::as_str);
     encode_hint(
+        bucket,
         base,
         service,
         days,
@@ -215,6 +218,7 @@ fn classify_days(mut days: Vec<DayLayout>, first_v1_day: Option<&str>) -> Vec<Da
 }
 
 fn encode_hint(
+    bucket: &str,
     base: &str,
     service: &str,
     days: &[DayLayout],
@@ -225,6 +229,7 @@ fn encode_hint(
     let last_day = days.last().map(|day| day.date.clone()).unwrap_or_default();
     serde_json::to_string(&LayoutHint {
         v: HINT_VERSION,
+        bucket: bucket.to_string(),
         base: base.to_string(),
         service: service.to_string(),
         first_day,
@@ -237,6 +242,7 @@ fn encode_hint(
 
 fn decode_hint(
     encoded: &str,
+    bucket: &str,
     base: &str,
     service: &str,
     days: &[DayLayout],
@@ -246,6 +252,7 @@ fn decode_hint(
     let first = days.first()?.date.as_str();
     let last = days.last()?.date.as_str();
     if hint.v != HINT_VERSION
+        || hint.bucket != bucket
         || hint.base != base
         || hint.service != service
         || hint.expires_at < now
@@ -293,16 +300,36 @@ mod tests {
     #[test]
     fn hints_are_scoped_expiring_and_range_checked() {
         let days = day_layouts(1_787_270_400, 1_787_443_199, LayoutSet::Historical).unwrap();
-        let hint = encode_hint("traces", "api", &days, Some("2026-08-22"), 100);
+        let hint = encode_hint(
+            "trace-bucket",
+            "traces",
+            "api",
+            &days,
+            Some("2026-08-22"),
+            100,
+        );
         assert_eq!(
-            decode_hint(&hint, "traces", "api", &days, 100),
+            decode_hint(&hint, "trace-bucket", "traces", "api", &days, 100),
             Some(Some("2026-08-22".to_string()))
         );
-        assert_eq!(decode_hint(&hint, "other", "api", &days, 100), None);
-        assert_eq!(decode_hint(&hint, "traces", "api", &days, 401), None);
+        assert_eq!(
+            decode_hint(&hint, "other-bucket", "traces", "api", &days, 100),
+            None
+        );
+        assert_eq!(
+            decode_hint(&hint, "trace-bucket", "other", "api", &days, 100),
+            None
+        );
+        assert_eq!(
+            decode_hint(&hint, "trace-bucket", "traces", "api", &days, 401),
+            None
+        );
 
         let wider = day_layouts(1_787_184_000, 1_787_443_199, LayoutSet::Historical).unwrap();
-        assert_eq!(decode_hint(&hint, "traces", "api", &wider, 100), None);
+        assert_eq!(
+            decode_hint(&hint, "trace-bucket", "traces", "api", &wider, 100),
+            None
+        );
     }
 
     #[test]

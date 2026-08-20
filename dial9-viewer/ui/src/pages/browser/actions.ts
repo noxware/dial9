@@ -333,10 +333,26 @@ export function createActions(store: BrowserStore, els: BrowserEls): BrowserActi
           : null,
       });
 
+      const segments = toSegments(allObjects);
+      const hostCount = new Set(
+        segments.map((segment) => segment.host).filter((host) => host !== ""),
+      ).size;
+      const currentMetadata = store.getState().browse.serviceMetadata;
+      const existing = currentMetadata.find((metadata) => metadata.service === service);
+      const serviceMetadata = existing
+        ? currentMetadata.map((metadata) =>
+            metadata.service === service ? { ...metadata, host_count: hostCount } : metadata,
+          )
+        : [...currentMetadata, { service, host_count: hostCount }];
+      store.update("browse", {
+        serviceMetadata,
+        segments,
+        rows: toRows(segments),
+      });
+
       if (allObjects.length === 0) {
         store.update("browse", {
           status: { ...store.getState().browse.status, kind: "normal" },
-          rows: [],
           heatmapVisible: false,
         });
         // Show sample keys to help the user understand the bucket layout
@@ -375,23 +391,6 @@ export function createActions(store: BrowserStore, els: BrowserEls): BrowserActi
         store.update("browse", { status });
         return;
       }
-
-      const segments = toSegments(allObjects);
-      const hostCount = new Set(
-        segments.map((segment) => segment.host).filter((host) => host !== ""),
-      ).size;
-      const currentMetadata = store.getState().browse.serviceMetadata;
-      const existing = currentMetadata.find((metadata) => metadata.service === service);
-      const serviceMetadata = existing
-        ? currentMetadata.map((metadata) =>
-            metadata.service === service ? { ...metadata, host_count: hostCount } : metadata,
-          )
-        : [...currentMetadata, { service, host_count: hostCount }];
-      store.update("browse", {
-        serviceMetadata,
-        segments,
-        rows: toRows(segments),
-      });
       renderHeatmapState();
     } catch (err) {
       store.update("browse", {

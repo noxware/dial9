@@ -97,8 +97,8 @@ mod tests {
     #[test]
     fn ambiguous_historical_keys_keep_the_positional_fallback() {
         assert_eq!(
-            scope_fields("traces/2026-08-14/1937/service/us-east-1/i-0abc123/boot/1-0.bin.gz"),
-            Some(("2026-08-14".into(), "service".into(), "us-east-1".into()))
+            scope_fields("traces/2026-08-14/1937/service/host/group/boot/1-0.bin.gz"),
+            Some(("2026-08-14".into(), "service".into(), "host".into()))
         );
     }
 
