@@ -49,63 +49,48 @@ test("extractPrefix returns everything before the date", () => {
   assert.strictEqual(scope.extractPrefix("2026-06-29/1915/svc/h/b/1-1.bin.gz"), "");
 });
 
-test("parseKey reads escaped Hive partitions from an opaque prefix", () => {
-  const hiveKey =
-    "company/date=archive/%25/date=2026-08-14/time=1937/" +
-    "service=payments%2Fapi/instance=us-east-1%2Fi%3D0%25abc/" +
+test("parseKey reads escaped versioned partitions from an opaque prefix", () => {
+  const versionedKey =
+    "company/date=archive/%25/version=1/date=2026-08-14/" +
+    "service=payments%2Fapi/time=1937/instance=host%2Fone%3D0%25abc/" +
     "boot=boot%2Fid/1786736220-3.bin.gz";
-  const p = scope.parseKey(hiveKey);
+  const p = scope.parseKey(versionedKey);
   assert.strictEqual(p.service, "payments/api");
-  assert.strictEqual(p.host, "us-east-1/i=0%abc");
+  assert.strictEqual(p.host, "host/one=0%abc");
   assert.strictEqual(p.bootId, "boot/id");
   assert.strictEqual(p.epoch, 1786736220);
-  assert.strictEqual(scope.extractPrefix(hiveKey), "company/date=archive/%25");
+  assert.strictEqual(scope.extractPrefix(versionedKey), "company/date=archive/%25");
 });
 
-test("parseKey decodes one Hive escaping layer", () => {
+test("parseKey decodes one partition escaping layer", () => {
   const p = scope.parseKey(
-    "service=prefix/date=2026-08-14/time=1937/service=payments%252Fapi/" +
-      "instance=host/boot=boot/1786736220-3.bin.gz",
+    "service=prefix/version=1/date=2026-08-14/service=payments%252Fapi/" +
+      "time=1937/instance=host/boot=boot/1786736220-3.bin.gz",
   );
   assert.strictEqual(p.service, "payments%2Fapi");
 });
 
-test("parseKey reads Hive fields by name and allows missing boot", () => {
-  const hiveKey =
-    "traces/region=uy/instance=host%2Fone/service=svc/time=1937/" +
-    "date=2026-08-14/1786736220-3.bin.gz";
-  const p = scope.parseKey(hiveKey);
-  assert.strictEqual(p.service, "svc");
-  assert.strictEqual(p.host, "host/one");
-  assert.strictEqual(p.bootId, "");
+test("parseKey rejects reordered or incomplete versioned layouts", () => {
+  const reordered =
+    "traces/version=1/date=2026-08-14/time=1937/service=svc/" +
+    "instance=host%2Fone/boot=boot/1786736220-3.bin.gz";
+  const p = scope.parseKey(reordered);
+  assert.strictEqual(p.service, "");
+  assert.strictEqual(p.host, reordered);
+
+  const missingBoot =
+    "traces/version=1/date=2026-08-14/service=svc/time=1937/" +
+    "instance=host%2Fone/1786736220-3.bin.gz";
+  assert.strictEqual(scope.parseKey(missingBoot).host, missingBoot);
 });
 
-test("parseKey does not build a scope from malformed Hive values", () => {
+test("parseKey does not build a scope from malformed versioned values", () => {
   const rawKey =
-    "service=prefix/date=2026-08-14/time=1937/service=bad%2/instance=host/" +
+    "service=prefix/version=1/date=2026-08-14/service=bad%2/time=1937/instance=host/" +
     "boot=boot/1786736220-3.bin.gz";
   const p = scope.parseKey(rawKey);
   assert.strictEqual(p.service, "");
   assert.strictEqual(p.host, rawKey);
-});
-
-test("parseKey keeps valid scope fields when optional boot escaping is malformed", () => {
-  const p = scope.parseKey(
-    "boot=prefix/date=2026-08-14/time=1937/service=svc/instance=host%2Fone/" +
-      "boot=bad%2/1786736220-3.bin.gz",
-  );
-  assert.strictEqual(p.service, "svc");
-  assert.strictEqual(p.host, "host/one");
-  assert.strictEqual(p.bootId, "");
-});
-
-test("extractPrefix recognizes a partial named suffix without guessing scope fields", () => {
-  const rawKey =
-    "traces/date=2026-08-14/region=uy/service=svc/1786736220-3.bin.gz";
-  const p = scope.parseKey(rawKey);
-  assert.strictEqual(p.service, "");
-  assert.strictEqual(p.host, rawKey);
-  assert.strictEqual(scope.extractPrefix(rawKey), "traces");
 });
 
 test("parseKey: historical boot-id layout with prefix", () => {

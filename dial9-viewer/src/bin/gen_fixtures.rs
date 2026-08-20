@@ -198,7 +198,7 @@ fn fixture_epoch(h: u8, m: u8, s: u8) -> i64 {
 }
 
 /// Default segment object key layout:
-/// `{prefix}/date={YYYY-MM-DD}/time={HHMM}/service={service}/instance={instance}/boot={boot_id}/{epoch}-{index}.bin.gz`
+/// `{prefix}/version=1/date={YYYY-MM-DD}/service={service}/time={HHMM}/instance={instance}/boot={boot_id}/{epoch}-{index}.bin.gz`
 /// with the date/HHMM path derived FROM the epoch so they always agree.
 fn layout_key(
     prefix: &str,
@@ -222,8 +222,8 @@ fn layout_key(
         Some(prefix.trim_end_matches('/'))
     };
     let filename = format!("{epoch_s}-{index}.bin.gz");
-    segment_object_key_codec::format_hive_segment_object_key(
-        prefix, &date, &hhmm, service, host, boot, &filename,
+    segment_object_key_codec::format_v1_segment_object_key(
+        prefix, &date, service, &hhmm, host, boot, &filename,
     )
 }
 

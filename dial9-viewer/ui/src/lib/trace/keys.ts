@@ -13,7 +13,7 @@ export interface KnownTraceKey {
   service: string;
   host: string;
   /**
-   * Boot id from the Hive or historical layout; "" when absent.
+   * Boot id from the versioned or historical layout; "" when absent.
    */
   bootId: string;
   /**
@@ -64,14 +64,12 @@ function known(
  * Parse an S3 trace key into service / host / boot / segment metadata.
  *
  * Default layout:
- *   {prefix}/date={YYYY-MM-DD}/time={HHMM}/service={service}/instance={instance}/boot={boot_id}/{epoch}-{index}.bin[.gz]
- * Hive fields are matched by name; unknown fields are ignored and boot is optional.
+ *   {prefix}/version=1/date={YYYY-MM-DD}/service={service}/time={HHMM}/instance={instance}/boot={boot_id}/{epoch}-{index}.bin[.gz]
  * Historical layout (with boot id):
  *   {prefix}/{YYYY-MM-DD}/{HHMM}/{service}/{instance}/{boot_id}/{epoch}-{index}.bin[.gz]
  * Older historical layout (no boot id):
  *   {prefix}/{YYYY-MM-DD}/{HHMM}/{service}/{instance}/{epoch}-{index}.bin[.gz]
  *
- * Named fields are read from right to left, so the last occurrence wins.
  * Date-like but unsupported positional layouts are `unknown`; dateless keys
  * retain the best-effort positional fallback.
  *
@@ -88,6 +86,21 @@ export function parseKey(key: string): ParsedTraceKey {
     epoch = parseInt(match[1]!, 10);
     segIndex = match[2]!;
   }
+  const version1 = version1Layout(parts);
+  if (version1) {
+    if (
+      typeof version1.date === "string" &&
+      DATE_RE.test(version1.date) &&
+      typeof version1.service === "string" &&
+      typeof version1.time === "string" &&
+      TIME_RE.test(version1.time) &&
+      typeof version1.instance === "string" &&
+      typeof version1.boot === "string"
+    ) {
+      return known(version1.service, version1.instance, version1.boot, epoch, segIndex);
+    }
+    return { layout: "unknown", rawKey: key, epoch, segIndex };
+  }
   const historical = historicalLayout(parts);
   if (historical) {
     const { start, hasBoot } = historical;
@@ -99,21 +112,7 @@ export function parseKey(key: string): ParsedTraceKey {
       segIndex
     );
   }
-  const hive = parseHivePartitions(parts);
-  if (hive) {
-    if (
-      typeof hive.date === "string" &&
-      DATE_RE.test(hive.date) &&
-      typeof hive.time === "string" &&
-      TIME_RE.test(hive.time) &&
-      typeof hive.service === "string" &&
-      typeof hive.instance === "string"
-    ) {
-      return known(hive.service, hive.instance, hive.boot ?? "", epoch, segIndex);
-    }
-    return { layout: "unknown", rawKey: key, epoch, segIndex };
-  }
-  if (parts.some((part) => DATE_RE.test(part) || part.startsWith("date="))) {
+  if (parts.some((part) => DATE_RE.test(part) || part === "version=1")) {
     return { layout: "unknown", rawKey: key, epoch, segIndex };
   }
   // No date-shaped segment anywhere: positional, best-effort (custom prefix
@@ -131,15 +130,15 @@ export function parseKey(key: string): ParsedTraceKey {
 }
 
 /**
- * Best-effort prefix inferred from recognized Hive fields or a historical
+ * Best-effort prefix inferred from the versioned layout or a historical
  * suffix. Returns "" when neither is found.
  */
 export function extractPrefix(key: string): string {
   const parts = key.split("/");
+  const version1 = version1Layout(parts);
+  if (version1) return parts.slice(0, version1.start).join("/");
   const historical = historicalLayout(parts);
   if (historical) return parts.slice(0, historical.start).join("/");
-  const hive = parseHivePartitions(parts);
-  if (hive) return parts.slice(0, hive.start).join("/");
   return "";
 }
 
@@ -162,7 +161,7 @@ function historicalLayout(parts: string[]): HistoricalLayout | null {
   return null;
 }
 
-interface HivePartitions {
+interface Version1Layout {
   start: number;
   date: string | null | undefined;
   time: string | null | undefined;
@@ -171,30 +170,25 @@ interface HivePartitions {
   boot: string | null | undefined;
 }
 
-function parseHivePartitions(parts: string[]): HivePartitions | null {
-  const values = new Map<string, string | null>();
-  let start = parts.length - 1;
-
-  for (let i = parts.length - 2; i >= 0; i--) {
-    const segment = parts[i]!;
-    const separator = segment.indexOf("=");
-    if (separator < 0) continue;
-    const name = segment.slice(0, separator);
-    if (!["date", "time", "service", "instance", "boot"].includes(name)) continue;
-    if (values.has(name)) continue;
-    start = i;
-    values.set(name, decodePartitionValue(segment.slice(separator + 1)));
-  }
-
-  if (values.size === 0) return null;
+function version1Layout(parts: string[]): Version1Layout | null {
+  if (parts.length < 7) return null;
+  const start = parts.length - 7;
+  if (parts[start] !== "version=1") return null;
   return {
     start,
-    date: values.get("date"),
-    time: values.get("time"),
-    service: values.get("service"),
-    instance: values.get("instance"),
-    boot: values.get("boot"),
+    date: decodePartition(parts[start + 1]!, "date"),
+    service: decodePartition(parts[start + 2]!, "service"),
+    time: decodePartition(parts[start + 3]!, "time"),
+    instance: decodePartition(parts[start + 4]!, "instance"),
+    boot: decodePartition(parts[start + 5]!, "boot"),
   };
+}
+
+function decodePartition(segment: string, name: string): string | null {
+  const prefix = `${name}=`;
+  return segment.startsWith(prefix)
+    ? decodePartitionValue(segment.slice(prefix.length))
+    : null;
 }
 
 function decodePartitionValue(value: string): string | null {

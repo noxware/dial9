@@ -26,20 +26,20 @@ pub(crate) fn hive_escape(value: &str) -> String {
 ///
 /// `prefix` and `filename` are inserted verbatim. Partition values are escaped
 /// and emitted in the stable order used by time-scoped S3 listing.
-pub(crate) fn format_hive_segment_object_key(
+pub(crate) fn format_v1_segment_object_key(
     prefix: Option<&str>,
     date: &str,
-    time: &str,
     service: &str,
+    time: &str,
     instance: &str,
     boot_id: &str,
     filename: &str,
 ) -> String {
     let suffix = format!(
-        "date={}/time={}/service={}/instance={}/boot={}/{}",
+        "version=1/date={}/service={}/time={}/instance={}/boot={}/{}",
         hive_escape(date),
-        hive_escape(time),
         hive_escape(service),
+        hive_escape(time),
         hive_escape(instance),
         hive_escape(boot_id),
         filename,
@@ -88,18 +88,18 @@ mod tests {
     }
 
     #[test]
-    fn formats_canonical_hive_layout() {
+    fn formats_canonical_version1_layout() {
         assert_eq!(
-            format_hive_segment_object_key(
+            format_v1_segment_object_key(
                 Some("company/date=archive/%25"),
                 "2026-08-14",
-                "1937",
                 "payments/api",
+                "1937",
                 "us-east-1/i-0abc123",
                 "boot%=1",
                 "1786736220-3.bin.gz",
             ),
-            "company/date=archive/%25/date=2026-08-14/time=1937/service=payments%2Fapi/instance=us-east-1%2Fi-0abc123/boot=boot%25%3D1/1786736220-3.bin.gz"
+            "company/date=archive/%25/version=1/date=2026-08-14/service=payments%2Fapi/time=1937/instance=us-east-1%2Fi-0abc123/boot=boot%25%3D1/1786736220-3.bin.gz"
         );
     }
 }

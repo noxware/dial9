@@ -1,9 +1,11 @@
 //! Viewer policy for deriving scope fields from source keys.
 
-use crate::segment_object_key_parser::{SegmentObjectKeyLayout, parse_segment_object_key};
+use crate::segment_object_key_parser::{
+    SegmentObjectKeyLayout, has_version1_anchor, parse_segment_object_key,
+};
 
 /// Semantic fields used by both scope filtering and persisted Parquet rows.
-/// Hive keys fail closed when a required field is missing or malformed;
+/// Versioned keys fail closed when a required field is missing or malformed;
 /// historical and custom positional keys retain the viewer's best-effort fallback.
 pub(crate) fn scope_fields(key: &str) -> Option<(String, String, String)> {
     scope_fields_inner(key, true)
@@ -19,6 +21,9 @@ fn scope_fields_inner(key: &str, allow_custom_fallback: bool) -> Option<(String,
     if parsed.layout != SegmentObjectKeyLayout::Unknown {
         parsed.time?;
         return Some((parsed.date?, parsed.service?, parsed.instance?));
+    }
+    if has_version1_anchor(key) {
+        return None;
     }
 
     let path = key
@@ -67,11 +72,15 @@ mod tests {
     #[test]
     fn malformed_structured_keys_do_not_use_the_custom_fallback() {
         assert_eq!(
-            scope_fields("traces/date=2026-08-14/time=1937/service=bad%2/instance=host/1-0.bin.gz"),
+            scope_fields(
+                "traces/version=1/date=2026-08-14/service=bad%2/time=1937/instance=host/boot=boot/1-0.bin.gz"
+            ),
             None
         );
         assert_eq!(
-            scope_fields("traces/date=2026-08-14/time=19370/service=svc/instance=host/1-0.bin.gz"),
+            scope_fields(
+                "traces/version=1/date=2026-08-14/service=svc/time=19370/instance=host/boot=boot/1-0.bin.gz"
+            ),
             None
         );
 
@@ -94,10 +103,10 @@ mod tests {
     }
 
     #[test]
-    fn hive_scope_fields_are_named_and_boot_is_optional() {
+    fn version1_scope_fields_are_decoded() {
         assert_eq!(
             scope_fields(
-                "traces/date=2026-08-14/region=uy/instance=host%2Fone/service=svc/time=1937/1-0.bin.gz"
+                "traces/version=1/date=2026-08-14/service=svc/time=1937/instance=host%2Fone/boot=boot/1-0.bin.gz"
             ),
             Some(("2026-08-14".into(), "svc".into(), "host/one".into()))
         );

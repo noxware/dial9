@@ -1932,8 +1932,9 @@ mod tests {
     }
 
     #[test]
-    fn malformed_hive_scope_fields_are_not_aggregated() {
-        let key = "date=2026-06-19/time=1300/service=bad%2/instance=host/boot=boot/1-0.bin.gz";
+    fn malformed_version1_scope_fields_are_not_aggregated() {
+        let key =
+            "version=1/date=2026-06-19/service=bad%2/time=1300/instance=host/boot=boot/1-0.bin.gz";
         assert_eq!(parse_scope_fields(key), None);
         assert!(!scope_matches(
             key,

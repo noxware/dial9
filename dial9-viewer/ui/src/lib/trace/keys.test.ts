@@ -5,17 +5,17 @@
 import { describe, expect, it } from "vitest";
 import { extractPrefix, formatEpoch, parseKey } from "./keys.js";
 
-describe("parseKey: Hive-style layout", () => {
+describe("parseKey: versioned layout", () => {
   const key =
-    "company/date=archive/%25/date=2026-08-14/time=1937/" +
-    "service=payments%2Fapi/instance=us-east-1%2Fi%3D0%25abc/" +
+    "company/date=archive/%25/version=1/date=2026-08-14/" +
+    "service=payments%2Fapi/time=1937/instance=host%2Fone%3D0%25abc/" +
     "boot=boot%2Fid/1786736220-3.bin.gz";
 
   it("decodes partition values and preserves the opaque prefix", () => {
     expect(parseKey(key)).toEqual({
       layout: "known",
       service: "payments/api",
-      host: "us-east-1/i=0%abc",
+      host: "host/one=0%abc",
       bootId: "boot/id",
       epoch: 1786736220,
       segIndex: "3",
@@ -25,31 +25,34 @@ describe("parseKey: Hive-style layout", () => {
 
   it("decodes exactly one percent-encoding layer", () => {
     const parsed = parseKey(
-      "service=prefix/date=2026-08-14/time=1937/service=payments%252Fapi/" +
-        "instance=host/boot=boot/1786736220-3.bin.gz"
+      "service=prefix/version=1/date=2026-08-14/service=payments%252Fapi/" +
+        "time=1937/instance=host/boot=boot/1786736220-3.bin.gz"
     );
     expect(parsed.layout).toBe("known");
     if (parsed.layout !== "known") return;
     expect(parsed.service).toBe("payments%2Fapi");
   });
 
-  it("parses fields by name, ignores unknown fields, and allows missing boot", () => {
+  it("rejects reordered or incomplete versioned layouts", () => {
     const reordered =
-      "traces/region=uy/instance=host%2Fone/service=svc/time=1937/" +
-      "date=2026-08-14/1786736220-3.bin.gz";
+      "traces/version=1/date=2026-08-14/time=1937/service=svc/" +
+      "instance=host%2Fone/boot=boot/1786736220-3.bin.gz";
     expect(parseKey(reordered)).toEqual({
-      layout: "known",
-      service: "svc",
-      host: "host/one",
-      bootId: "",
+      layout: "unknown",
+      rawKey: reordered,
       epoch: 1786736220,
       segIndex: "3",
     });
+
+    const missingBoot =
+      "traces/version=1/date=2026-08-14/service=svc/time=1937/" +
+      "instance=host%2Fone/1786736220-3.bin.gz";
+    expect(parseKey(missingBoot).layout).toBe("unknown");
   });
 
   it("keeps a malformed partition key visible as unknown", () => {
     const rawKey =
-      "service=prefix/date=2026-08-14/time=1937/service=bad%2/instance=host/" +
+      "service=prefix/version=1/date=2026-08-14/service=bad%2/time=1937/instance=host/" +
       "boot=boot/1786736220-3.bin.gz";
     expect(parseKey(rawKey)).toEqual({
       layout: "unknown",
@@ -57,33 +60,6 @@ describe("parseKey: Hive-style layout", () => {
       epoch: 1786736220,
       segIndex: "3",
     });
-  });
-
-  it("does not hide valid fields when optional boot escaping is malformed", () => {
-    const parsed = parseKey(
-      "boot=prefix/date=2026-08-14/time=1937/service=svc/instance=host%2Fone/" +
-        "boot=bad%2/1786736220-3.bin.gz"
-    );
-    expect(parsed).toEqual({
-      layout: "known",
-      service: "svc",
-      host: "host/one",
-      bootId: "",
-      epoch: 1786736220,
-      segIndex: "3",
-    });
-  });
-
-  it("recognizes a partial named suffix without guessing missing fields", () => {
-    const rawKey =
-      "traces/date=2026-08-14/region=uy/service=svc/1786736220-3.bin.gz";
-    expect(parseKey(rawKey)).toEqual({
-      layout: "unknown",
-      rawKey,
-      epoch: 1786736220,
-      segIndex: "3",
-    });
-    expect(extractPrefix(rawKey)).toBe("traces");
   });
 });
 

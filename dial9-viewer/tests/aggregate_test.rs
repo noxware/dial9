@@ -296,14 +296,14 @@ async fn put(client: &aws_sdk_s3::Client, bucket: &str, key: &str, data: Vec<u8>
         .unwrap();
 }
 
-/// A realistic Hive-style segment object key.
+/// A realistic versioned segment object key.
 /// `epoch` is the file start time in seconds (drives the scope time filter).
 fn segment_key(date: &str, hhmm: &str, svc: &str, host: &str, epoch: i64, idx: u32) -> String {
-    segment_object_key_codec::format_hive_segment_object_key(
+    segment_object_key_codec::format_v1_segment_object_key(
         None,
         date,
-        hhmm,
         svc,
+        hhmm,
         host,
         "boot-1",
         &format!("{epoch}-{idx}.bin.gz"),

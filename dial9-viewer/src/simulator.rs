@@ -345,6 +345,9 @@ impl SimulatorBackend {
         }
 
         let mut parts = tail.split('/');
+        if parts.next() != Some("version=1") {
+            return Ok(CatalogInterval::Empty);
+        }
         let Some(date) = parts
             .next()
             .and_then(|part| part.strip_prefix("date="))
@@ -353,6 +356,12 @@ impl SimulatorBackend {
             return Ok(CatalogInterval::Empty);
         };
         let day_start = date.midnight().assume_utc().unix_timestamp();
+        let Some(_service) = parts.next().and_then(|part| part.strip_prefix("service=")) else {
+            return Ok(CatalogInterval::Finite {
+                start: day_start,
+                end: day_start + 86_400,
+            });
+        };
         let Some(time_prefix) = parts.next().and_then(|part| part.strip_prefix("time=")) else {
             return Ok(CatalogInterval::Finite {
                 start: day_start,
@@ -376,7 +385,7 @@ impl SimulatorBackend {
 
     fn parse_key(&self, key: &str) -> Result<PayloadCoordinates, StorageError> {
         let parsed = crate::segment_object_key_parser::parse_segment_object_key(key);
-        if parsed.layout != crate::segment_object_key_parser::SegmentObjectKeyLayout::Hive
+        if parsed.layout != crate::segment_object_key_parser::SegmentObjectKeyLayout::Version1
             || parsed.service.as_deref() != Some(self.service.as_str())
         {
             return Err(StorageError::NotFound(key.to_string()));
@@ -467,9 +476,9 @@ impl StorageBackend for SimulatorBackend {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<String>, StorageError>> + Send + '_>> {
         let result = self.ensure_bucket(bucket).and_then(|()| {
             let catalog_root = if self.prefix.is_empty() {
-                String::new()
+                "version=1/".to_string()
             } else {
-                format!("{}/", self.prefix)
+                format!("{}/version=1/", self.prefix)
             };
             if !catalog_root.is_empty()
                 && catalog_root.starts_with(prefix)
@@ -1231,11 +1240,11 @@ fn simulator_key(
         .context("simulator segment sequence out of range")?;
     let filename = format!("{epoch_secs}-{sequence}.bin.gz");
     Ok(
-        crate::segment_object_key_codec::format_hive_segment_object_key(
+        crate::segment_object_key_codec::format_v1_segment_object_key(
             (!prefix.is_empty()).then_some(prefix),
             &date,
-            &minute,
             service,
+            &minute,
             host,
             boot_id,
             &filename,
@@ -1436,16 +1445,20 @@ mod tests {
             vec!["traces/"]
         );
         let page = backend
-            .list_objects(DEFAULT_BUCKET, "traces/date=2026-07-28/time=0000/", 10)
+            .list_objects(
+                DEFAULT_BUCKET,
+                "traces/version=1/date=2026-07-28/service=simulated-service/time=0000/",
+                10,
+            )
             .await
             .unwrap();
         assert!(!page.truncated);
         assert_eq!(page.objects.len(), 2);
-        assert!(
-            page.objects
-                .iter()
-                .all(|object| object.key.starts_with("traces/date=2026-07-28/time=0000/"))
-        );
+        assert!(page.objects.iter().all(|object| {
+            object.key.starts_with(
+                "traces/version=1/date=2026-07-28/service=simulated-service/time=0000/",
+            )
+        }));
         assert!(
             backend.cache.lock().unwrap().entries.is_empty(),
             "listing must not render or cache trace payloads"
@@ -1523,15 +1536,27 @@ mod tests {
             SimulatorBackend::new(SimulatorConfig::builder().hosts(2).build(), &demo).unwrap();
 
         let old = backend
-            .list_objects(DEFAULT_BUCKET, "traces/date=2001-02-03/time=0405/", 10)
+            .list_objects(
+                DEFAULT_BUCKET,
+                "traces/version=1/date=2001-02-03/service=simulated-service/time=0405/",
+                10,
+            )
             .await
             .unwrap();
         let future = backend
-            .list_objects(DEFAULT_BUCKET, "traces/date=2037-08-09/time=1011/", 10)
+            .list_objects(
+                DEFAULT_BUCKET,
+                "traces/version=1/date=2037-08-09/service=simulated-service/time=1011/",
+                10,
+            )
             .await
             .unwrap();
         let repeated = backend
-            .list_objects(DEFAULT_BUCKET, "traces/date=2037-08-09/time=1011/", 10)
+            .list_objects(
+                DEFAULT_BUCKET,
+                "traces/version=1/date=2037-08-09/service=simulated-service/time=1011/",
+                10,
+            )
             .await
             .unwrap();
         assert_eq!(old.objects.len(), 2);
@@ -1551,7 +1576,11 @@ mod tests {
         assert!(backend.cache.lock().unwrap().entries.is_empty());
 
         let capped = backend
-            .list_objects(DEFAULT_BUCKET, "traces/date=2037-08-09/time=10", 1)
+            .list_objects(
+                DEFAULT_BUCKET,
+                "traces/version=1/date=2037-08-09/service=simulated-service/time=10",
+                1,
+            )
             .await
             .unwrap();
         assert_eq!(capped.objects.len(), 1);
@@ -1581,7 +1610,11 @@ mod tests {
             .build();
         let backend = SimulatorBackend::new(config, &demo).unwrap();
         let page = backend
-            .list_objects(DEFAULT_BUCKET, "traces/date=2026-07-28/time=0000/", 1)
+            .list_objects(
+                DEFAULT_BUCKET,
+                "traces/version=1/date=2026-07-28/service=simulated-service/time=0000/",
+                1,
+            )
             .await
             .unwrap();
         let gz = backend
@@ -1651,7 +1684,11 @@ mod tests {
             .build();
         let backend = SimulatorBackend::new(config, &demo).unwrap();
         let page = backend
-            .list_objects(DEFAULT_BUCKET, "traces/date=2026-07-28/time=0000/", 1)
+            .list_objects(
+                DEFAULT_BUCKET,
+                "traces/version=1/date=2026-07-28/service=simulated-service/time=0000/",
+                1,
+            )
             .await
             .unwrap();
         let gz = backend
@@ -1685,7 +1722,11 @@ mod tests {
             .build();
         let backend = SimulatorBackend::new(config, &demo).unwrap();
         let page = backend
-            .list_objects(DEFAULT_BUCKET, "traces/date=2026-07-28/time=0000/", 1)
+            .list_objects(
+                DEFAULT_BUCKET,
+                "traces/version=1/date=2026-07-28/service=simulated-service/time=0000/",
+                1,
+            )
             .await
             .unwrap();
         let gz = backend

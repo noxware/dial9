@@ -45,20 +45,20 @@ pub(crate) fn hive_unescape(value: &str) -> Option<String> {
 }
 
 /// Format the canonical Hive-style segment object key.
-pub(crate) fn format_hive_segment_object_key(
+pub(crate) fn format_v1_segment_object_key(
     prefix: Option<&str>,
     date: &str,
-    time: &str,
     service: &str,
+    time: &str,
     instance: &str,
     boot_id: &str,
     filename: &str,
 ) -> String {
     let suffix = format!(
-        "date={}/time={}/service={}/instance={}/boot={}/{}",
+        "version=1/date={}/service={}/time={}/instance={}/boot={}/{}",
         hive_escape(date),
-        hive_escape(time),
         hive_escape(service),
+        hive_escape(time),
         hive_escape(instance),
         hive_escape(boot_id),
         filename,

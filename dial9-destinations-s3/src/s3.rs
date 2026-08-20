@@ -5,7 +5,7 @@
 
 use crate::connection;
 pub use crate::instance_metadata::InstanceIdentity;
-use crate::segment_object_key::format_hive_segment_object_key;
+use crate::segment_object_key::format_v1_segment_object_key;
 use aws_sdk_s3::Client;
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::put_object::PutObjectError;
@@ -61,7 +61,7 @@ pub struct KeyContext {
 /// Trait for custom S3 object key generation.
 ///
 /// Implement this to control the S3 key layout. The default key layout is
-/// `{prefix}/date={date}/time={HHMM}/service={service}/instance={instance}/boot={boot_id}/{epoch}-{index}.bin.gz`.
+/// `{prefix}/version=1/date={date}/service={service}/time={HHMM}/instance={instance}/boot={boot_id}/{epoch}-{index}.bin.gz`.
 pub trait S3KeyFn: Send + Sync {
     /// Generate the S3 object key for the given segment.
     fn object_key(&self, segment: &KeyContext) -> String;
@@ -89,11 +89,11 @@ where
 /// # Default key layout
 ///
 /// ```text
-/// {prefix}/date={YYYY-MM-DD}/time={HHMM}/service={service_name}/instance={instance_path}/boot={boot_id}/{epoch_secs}-{index}.bin.gz
+/// {prefix}/version=1/date={YYYY-MM-DD}/service={service_name}/time={HHMM}/instance={instance_path}/boot={boot_id}/{epoch_secs}-{index}.bin.gz
 /// ```
 ///
-/// The consecutive `date/time/service/instance` prefix is part of the default
-/// layout: the viewer uses it for efficient time, service, and instance
+/// The consecutive `version/date/service/time` prefix is part of the default
+/// layout: the viewer uses it for efficient service and time
 /// discovery with S3 prefix listing.
 ///
 /// Partition values use Hive path escaping, so `/` inside a service, instance,
@@ -195,8 +195,8 @@ impl S3Config {
     /// Build the S3 object key for a sealed segment.
     ///
     /// If a custom `key_fn` is set, delegates to it. Otherwise uses the
-    /// default time-first layout:
-    /// `{prefix}/date={date}/time={HHMM}/service={service}/instance={instance}/boot={boot_id}/{epoch_secs}-{index}.bin.gz`
+    /// default versioned layout:
+    /// `{prefix}/version=1/date={date}/service={service}/time={HHMM}/instance={instance}/boot={boot_id}/{epoch_secs}-{index}.bin.gz`
     pub(crate) fn object_key(
         &self,
         segment: &SegmentRef,
@@ -228,11 +228,11 @@ impl S3Config {
         };
 
         let filename = format!("{}-{}{}", ts, segment.index(), extension);
-        format_hive_segment_object_key(
+        format_v1_segment_object_key(
             self.prefix.as_deref(),
             &date,
-            &time,
             &self.service_name,
+            &time,
             self.instance_path.as_str(),
             &self.boot_id,
             &filename,
