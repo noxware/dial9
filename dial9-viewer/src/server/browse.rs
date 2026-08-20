@@ -13,6 +13,7 @@ use crate::server::AppState;
 use crate::server::credentials::MaybeCreds;
 use crate::server::error::storage_error_response;
 use crate::server::metrics::OperationMetrics;
+use crate::source_layout::{DayLayout, LayoutSet, Version1Services};
 use crate::storage::{ObjectInfo, StorageBackend, StorageError};
 
 /// Per-prefix object cap. A 10-minute (or minute) prefix can legitimately fan
@@ -41,6 +42,8 @@ pub struct BrowseParams {
     pub prefix: Option<String>,
     /// Optional exact service value. Empty values are treated as absent.
     pub service: Option<String>,
+    /// Opaque layout-discovery result returned by `/api/services`.
+    pub layout_hint: Option<String>,
     /// Inclusive start of the window, unix seconds.
     pub from: i64,
     /// Inclusive end of the window, unix seconds.
@@ -59,13 +62,16 @@ pub struct BrowseResponse {
 /// Granularity of the time prefixes scanned in S3.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Granularity {
-    /// Two-character hour prefix in either supported layout.
+    /// Two-character hour prefix.
     Hour,
-    /// Three-character 10-minute prefix in either supported layout.
-    #[cfg_attr(not(test), allow(dead_code))]
-    TenMinute,
-    /// Four-character minute prefix in either supported layout.
+    /// Four-character minute prefix.
     Minute,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ListingPrefix {
+    key: String,
+    granularity: Granularity,
 }
 
 type BrowseOk = (Extension<OperationMetrics>, Json<BrowseResponse>);
@@ -113,6 +119,7 @@ pub async fn browse(
         params.to,
         window,
         service,
+        params.layout_hint.as_deref(),
     )
     .await
 }
@@ -160,16 +167,36 @@ async fn browse_s3(
     to: i64,
     window: i64,
     service: Option<&str>,
+    layout_hint: Option<&str>,
 ) -> Result<BrowseOk, (StatusCode, String)> {
-    let gran = if service.is_some() || window < MINUTE_GRANULARITY_THRESHOLD_SECS {
+    let gran = if window < MINUTE_GRANULARITY_THRESHOLD_SECS {
         Granularity::Minute
     } else {
         Granularity::Hour
     };
 
     let (prefixes, range_truncated) = match service {
-        Some(service) => service_time_prefixes(base, from, to, service),
-        None => time_prefixes(base, from, to, gran),
+        Some(service) => {
+            let resolved = crate::source_layout::resolve_service_layouts(
+                &*backend,
+                bucket,
+                base,
+                from,
+                to,
+                service,
+                layout_hint,
+            )
+            .await
+            .map_err(storage_error_response)?;
+            service_time_prefixes(base, &resolved.days, service, gran)
+        }
+        None => {
+            let version1 =
+                crate::source_layout::discover_version1_services(&*backend, bucket, base, from, to)
+                    .await
+                    .map_err(storage_error_response)?;
+            unscoped_time_prefixes(base, from, to, gran, &version1)
+        }
     };
 
     // Per-request operational detail — the request-rate/latency signal lives in
@@ -177,7 +204,7 @@ async fn browse_s3(
     tracing::debug!(
         bucket = %bucket,
         prefixes = prefixes.len(),
-        granularity = ?gran,
+        service,
         "browse fan-out"
     );
 
@@ -193,10 +220,14 @@ async fn browse_s3(
     // throughput here.
     let results: Vec<Result<crate::storage::ListPage, StorageError>> =
         futures::stream::iter(prefixes.clone())
-            .map(|p| {
+            .map(|prefix| {
                 let backend = backend.clone();
                 let bucket = bucket.to_string();
-                async move { backend.list_objects(&bucket, &p, PER_PREFIX_CAP).await }
+                async move {
+                    backend
+                        .list_objects(&bucket, &prefix.key, PER_PREFIX_CAP)
+                        .await
+                }
             })
             .buffered(LIST_CONCURRENCY)
             .collect()
@@ -209,7 +240,7 @@ async fn browse_s3(
     let mut overflow_prefixes = Vec::new();
     for (i, result) in results.into_iter().enumerate() {
         let page = result.map_err(storage_error_response)?;
-        if page.truncated && gran == Granularity::Hour {
+        if page.truncated && prefixes[i].granularity == Granularity::Hour {
             overflow_prefixes.push(prefixes[i].clone());
         } else {
             truncated |= page.truncated;
@@ -223,7 +254,7 @@ async fn browse_s3(
         // Expand each overflowed hour prefix into its 6 ten-minute sub-prefixes.
         let refined: Vec<String> = overflow_prefixes
             .iter()
-            .flat_map(|p| (0..6).map(move |d| format!("{p}{d}")))
+            .flat_map(|prefix| (0..6).map(move |digit| format!("{}{digit}", prefix.key)))
             .collect();
 
         tracing::debug!(
@@ -271,22 +302,101 @@ pub(super) fn key_host(key: &str) -> Option<String> {
     (!host.is_empty()).then_some(host)
 }
 
-/// Build exact minute prefixes ending at a selected service segment.
-fn service_time_prefixes(base: &str, from: i64, to: i64, service: &str) -> (Vec<String>, bool) {
-    let (mut prefixes, truncated) = minute_time_prefixes(base, from, to);
-    for prefix in &mut prefixes {
-        if prefix
-            .rsplit('/')
-            .next()
-            .is_some_and(|part| part.starts_with("time="))
-        {
-            prefix.push_str("/service=");
-            prefix.push_str(&crate::segment_object_key_codec::hive_escape(service));
-            prefix.push('/');
-        } else {
-            prefix.push('/');
-            prefix.push_str(service);
-            prefix.push('/');
+/// Build listing prefixes for one selected service from a resolved per-day
+/// migration layout. Historical keys need minute buckets because their service
+/// follows the time component; v1 keys can use broad time prefixes because the
+/// service precedes time.
+fn service_time_prefixes(
+    base: &str,
+    days: &[DayLayout],
+    service: &str,
+    version1_granularity: Granularity,
+) -> (Vec<ListingPrefix>, bool) {
+    let mut prefixes = Vec::new();
+    let mut truncated = false;
+    let encoded_service = crate::segment_object_key_codec::hive_escape(service);
+
+    for day in days {
+        if day.layout.historical() {
+            append_time_prefixes(
+                day.from,
+                day.to,
+                Granularity::Minute,
+                &mut prefixes,
+                &mut truncated,
+                |date, time| join_prefix(base, &format!("{date}/{time}/{service}/")),
+            );
+        }
+        if !truncated && day.layout.version1() {
+            append_time_prefixes(
+                day.from,
+                day.to,
+                version1_granularity,
+                &mut prefixes,
+                &mut truncated,
+                |date, time| {
+                    let suffix =
+                        format!("version=1/date={date}/service={encoded_service}/time={time}");
+                    join_prefix(base, &suffix)
+                },
+            );
+        }
+        if truncated {
+            break;
+        }
+    }
+    (prefixes, truncated)
+}
+
+/// Explicit unscoped fallback: list historical time buckets plus v1 time
+/// buckets for the services discovered beneath each v1 date partition.
+fn unscoped_time_prefixes(
+    base: &str,
+    from: i64,
+    to: i64,
+    granularity: Granularity,
+    version1: &Version1Services,
+) -> (Vec<ListingPrefix>, bool) {
+    let Ok(days) = crate::source_layout::day_layouts(from, to, LayoutSet::Both) else {
+        return (Vec::new(), true);
+    };
+    let mut prefixes = Vec::new();
+    let mut truncated = false;
+
+    for day in days {
+        append_time_prefixes(
+            day.from,
+            day.to,
+            granularity,
+            &mut prefixes,
+            &mut truncated,
+            |date, time| join_prefix(base, &format!("{date}/{time}")),
+        );
+        if truncated {
+            break;
+        }
+
+        for service in version1.services_on(&day.date) {
+            let encoded_service = crate::segment_object_key_codec::hive_escape(service);
+            append_time_prefixes(
+                day.from,
+                day.to,
+                granularity,
+                &mut prefixes,
+                &mut truncated,
+                |date, time| {
+                    join_prefix(
+                        base,
+                        &format!("version=1/date={date}/service={encoded_service}/time={time}"),
+                    )
+                },
+            );
+            if truncated {
+                break;
+            }
+        }
+        if truncated {
+            break;
         }
     }
     (prefixes, truncated)
@@ -312,20 +422,36 @@ pub(super) fn resolve_base(default_prefix: Option<&str>, key_prefix: Option<&str
     }
 }
 
-pub(super) fn minute_time_prefixes(base: &str, from: i64, to: i64) -> (Vec<String>, bool) {
-    time_prefixes(base, from, to, Granularity::Minute)
+pub(super) fn historical_minute_prefixes(base: &str, from: i64, to: i64) -> (Vec<String>, bool) {
+    let mut listing = Vec::new();
+    let mut truncated = false;
+    append_time_prefixes(
+        from,
+        to,
+        Granularity::Minute,
+        &mut listing,
+        &mut truncated,
+        |date, time| join_prefix(base, &format!("{date}/{time}")),
+    );
+    (
+        listing.into_iter().map(|prefix| prefix.key).collect(),
+        truncated,
+    )
 }
 
-/// Build the date+time S3 key prefixes covering `[from, to]` (unix seconds),
-/// one per time bucket, each joined onto `base`.
-///
-/// Emits both `{base}/date={YYYY-MM-DD}/time={HHMM}` and the historical
-/// `{base}/{YYYY-MM-DD}/{HHMM}` form in UTC. Returns the prefixes and whether
-/// the range was clamped at [`MAX_PREFIXES`].
-fn time_prefixes(base: &str, from: i64, to: i64, gran: Granularity) -> (Vec<String>, bool) {
-    let step = match gran {
+fn append_time_prefixes(
+    from: i64,
+    to: i64,
+    granularity: Granularity,
+    prefixes: &mut Vec<ListingPrefix>,
+    truncated: &mut bool,
+    mut build: impl FnMut(&str, &str) -> String,
+) {
+    if *truncated {
+        return;
+    }
+    let step = match granularity {
         Granularity::Hour => 3600,
-        Granularity::TenMinute => 600,
         Granularity::Minute => 60,
     };
     // Align the start down to the bucket boundary. Epoch 0 is midnight UTC and
@@ -333,21 +459,23 @@ fn time_prefixes(base: &str, from: i64, to: i64, gran: Granularity) -> (Vec<Stri
     // correct even for pre-1970 inputs) lands exactly on a wall-clock boundary.
     let start = from - from.rem_euclid(step);
 
-    let mut prefixes = Vec::new();
-    let mut truncated = false;
     let mut t = start;
     while t <= to {
-        if prefixes.len() + 2 > MAX_PREFIXES {
-            truncated = true;
+        if prefixes.len() == MAX_PREFIXES {
+            *truncated = true;
             break;
         }
-        if let Some((date, time)) = bucket_parts(t, gran) {
-            prefixes.push(join_prefix(base, &format!("date={date}/time={time}")));
-            prefixes.push(join_prefix(base, &format!("{date}/{time}")));
+        if let Some((date, time)) = bucket_parts(t, granularity) {
+            prefixes.push(ListingPrefix {
+                key: build(&date, &time),
+                granularity,
+            });
         }
-        t += step;
+        let Some(next) = t.checked_add(step) else {
+            break;
+        };
+        t = next;
     }
-    (prefixes, truncated)
 }
 
 fn bucket_parts(epoch: i64, gran: Granularity) -> Option<(String, String)> {
@@ -360,9 +488,6 @@ fn bucket_parts(epoch: i64, gran: Granularity) -> Option<(String, String)> {
     );
     let time = match gran {
         Granularity::Hour => format!("{:02}", dt.hour()),
-        // Minute is always a multiple of 10 after alignment, so `minute / 10`
-        // is the single tens digit (0..=5): e.g. 19:10 → `191`, 19:50 → `195`.
-        Granularity::TenMinute => format!("{:02}{}", dt.hour(), dt.minute() / 10),
         Granularity::Minute => format!("{:02}{:02}", dt.hour(), dt.minute()),
     };
     Some((date, time))
@@ -381,100 +506,66 @@ fn join_prefix(base: &str, tail: &str) -> String {
 mod tests {
     use super::*;
 
-    /// 19:10–19:35 on 2026-06-09 UTC, 10-minute granularity, should produce the
-    /// three 3-char buckets that cover it: `191`, `192`, `193`.
     #[test]
-    fn ten_minute_prefixes_cover_range() {
-        // 2026-06-09T19:10:00Z and 2026-06-09T19:35:00Z.
-        let from = OffsetDateTime::from_unix_timestamp(1_781_032_200).unwrap();
-        assert_eq!(from.hour(), 19);
-        assert_eq!(from.minute(), 10);
-        let to = from.unix_timestamp() + 25 * 60;
-        let (prefixes, truncated) =
-            time_prefixes("traces", from.unix_timestamp(), to, Granularity::TenMinute);
-        assert!(!truncated);
-        assert_eq!(
-            prefixes,
-            vec![
-                "traces/date=2026-06-09/time=191",
-                "traces/2026-06-09/191",
-                "traces/date=2026-06-09/time=192",
-                "traces/2026-06-09/192",
-                "traces/date=2026-06-09/time=193",
-                "traces/2026-06-09/193",
-            ]
-        );
-    }
-
-    /// Hour granularity emits the 2-char `HH` prefix per hour.
-    #[test]
-    fn hour_prefixes_cover_range() {
-        let from = OffsetDateTime::from_unix_timestamp(1_781_032_200).unwrap(); // 19:10
-        let to = from.unix_timestamp() + 3 * 3600; // 22:10
-        let (prefixes, truncated) =
-            time_prefixes("traces", from.unix_timestamp(), to, Granularity::Hour);
-        assert!(!truncated);
-        assert_eq!(
-            prefixes,
-            vec![
-                "traces/date=2026-06-09/time=19",
-                "traces/2026-06-09/19",
-                "traces/date=2026-06-09/time=20",
-                "traces/2026-06-09/20",
-                "traces/date=2026-06-09/time=21",
-                "traces/2026-06-09/21",
-                "traces/date=2026-06-09/time=22",
-                "traces/2026-06-09/22",
-            ]
-        );
-    }
-
-    /// A start that is not on a 10-minute boundary must align *down* so the
-    /// bucket containing it is included.
-    #[test]
-    fn unaligned_start_aligns_down() {
-        // 19:17:00Z — should still emit the `191` bucket (covers 19:10–19:19).
-        let base = OffsetDateTime::from_unix_timestamp(1_781_032_200).unwrap(); // 19:10
-        let from = base.unix_timestamp() + 7 * 60; // 19:17
-        let (prefixes, _) = time_prefixes("", from, from + 60, Granularity::TenMinute);
-        assert_eq!(prefixes, vec!["date=2026-06-09/time=191", "2026-06-09/191"]);
-    }
-
-    /// Minute granularity emits the full 4-char `HHMM` per minute.
-    #[test]
-    fn minute_prefixes_are_four_char() {
+    fn selected_service_uses_only_the_resolved_layouts() {
         let from = OffsetDateTime::from_unix_timestamp(1_781_032_200).unwrap(); // 19:10
         let to = from.unix_timestamp() + 2 * 60; // 19:12
-        let (prefixes, _) = time_prefixes("p", from.unix_timestamp(), to, Granularity::Minute);
+        let days = vec![DayLayout {
+            date: "2026-06-09".to_string(),
+            from: from.unix_timestamp(),
+            to,
+            layout: LayoutSet::Both,
+        }];
+        let (prefixes, truncated) =
+            service_time_prefixes("traces", &days, "payments/api", Granularity::Hour);
+        assert!(!truncated);
         assert_eq!(
-            prefixes,
+            prefixes
+                .iter()
+                .map(|prefix| prefix.key.as_str())
+                .collect::<Vec<_>>(),
             vec![
-                "p/date=2026-06-09/time=1910",
-                "p/2026-06-09/1910",
-                "p/date=2026-06-09/time=1911",
-                "p/2026-06-09/1911",
-                "p/date=2026-06-09/time=1912",
-                "p/2026-06-09/1912"
+                "traces/2026-06-09/1910/payments/api/",
+                "traces/2026-06-09/1911/payments/api/",
+                "traces/2026-06-09/1912/payments/api/",
+                "traces/version=1/date=2026-06-09/service=payments%2Fapi/time=19",
             ]
         );
     }
 
     #[test]
-    fn selected_service_prefixes_are_exact_full_minutes() {
-        let from = OffsetDateTime::from_unix_timestamp(1_781_032_200).unwrap(); // 19:10
-        let to = from.unix_timestamp() + 2 * 60; // 19:12
+    fn crossover_24_hour_service_range_stays_below_the_prefix_cap() {
+        let from = 1_781_049_600; // 2026-06-10T00:00:00Z
+        let to = from + 24 * 3600 - 1;
+        let days = vec![DayLayout {
+            date: "2026-06-10".to_string(),
+            from,
+            to,
+            layout: LayoutSet::Both,
+        }];
+        let (prefixes, truncated) = service_time_prefixes("", &days, "api", Granularity::Hour);
+        assert!(!truncated);
+        assert_eq!(prefixes.len(), 1440 + 24);
+        assert!(prefixes.len() < MAX_PREFIXES);
+    }
+
+    #[test]
+    fn unscoped_listing_discovers_v1_services_explicitly() {
+        let from = 1_781_032_200;
+        let version1 = Version1Services::default().with_service_on("payments/api", "2026-06-09");
         let (prefixes, truncated) =
-            service_time_prefixes("traces", from.unix_timestamp(), to, "api");
+            unscoped_time_prefixes("", from, from + 60, Granularity::Minute, &version1);
         assert!(!truncated);
         assert_eq!(
-            prefixes,
+            prefixes
+                .iter()
+                .map(|prefix| prefix.key.as_str())
+                .collect::<Vec<_>>(),
             vec![
-                "traces/date=2026-06-09/time=1910/service=api/",
-                "traces/2026-06-09/1910/api/",
-                "traces/date=2026-06-09/time=1911/service=api/",
-                "traces/2026-06-09/1911/api/",
-                "traces/date=2026-06-09/time=1912/service=api/",
-                "traces/2026-06-09/1912/api/",
+                "2026-06-09/1910",
+                "2026-06-09/1911",
+                "version=1/date=2026-06-09/service=payments%2Fapi/time=1910",
+                "version=1/date=2026-06-09/service=payments%2Fapi/time=1911",
             ]
         );
     }
@@ -530,7 +621,7 @@ mod tests {
         );
         assert_eq!(
             key_host(
-                "root/date=2026-06-09/time=1910/service=api%2Fworker/instance=host%2Fa/boot=boot/1-0.bin.gz"
+                "root/version=1/date=2026-06-09/service=api%2Fworker/time=1910/instance=host%2Fa/boot=boot/1-0.bin.gz"
             ),
             Some("host/a".to_string())
         );
@@ -541,18 +632,17 @@ mod tests {
         assert_eq!(key_host("boot/trace.0.bin"), None);
     }
 
-    /// An empty base adds no leading slash to either layout.
+    /// An empty base adds no leading slash.
     #[test]
     fn empty_base_has_no_leading_slash() {
-        let (prefixes, _) = time_prefixes("", 1_781_032_200, 1_781_032_200, Granularity::TenMinute);
-        assert_eq!(prefixes, vec!["date=2026-06-09/time=191", "2026-06-09/191"]);
+        let (prefixes, _) = historical_minute_prefixes("", 1_781_032_200, 1_781_032_200);
+        assert_eq!(prefixes, vec!["2026-06-09/1910"]);
     }
 
     /// A range too wide for the prefix cap is reported truncated.
     #[test]
     fn oversized_range_truncates() {
-        let (prefixes, truncated) =
-            time_prefixes("", 0, MAX_PREFIXES as i64 * 600 * 2, Granularity::TenMinute);
+        let (prefixes, truncated) = historical_minute_prefixes("", 0, MAX_PREFIXES as i64 * 60 * 2);
         assert!(truncated);
         assert_eq!(prefixes.len(), MAX_PREFIXES);
     }

@@ -9,14 +9,15 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
 use crate::server::AppState;
-use crate::server::browse::{key_host, key_service, minute_time_prefixes, resolve_base};
+use crate::server::browse::{historical_minute_prefixes, key_host, key_service, resolve_base};
 use crate::server::credentials::MaybeCreds;
 use crate::server::error::storage_error_response;
+use crate::source_layout::{self, LayoutSet};
 
 const LOCAL_OBJECT_CAP: usize = 10_000;
 const LIST_CONCURRENCY: usize = 32;
-/// Service discovery is only a recent-activity feeler. Keeping this window
-/// fixed prevents a large browse range from creating one LIST per minute.
+/// Historical service discovery is only a recent-activity feeler. Keeping this
+/// window fixed prevents a large browse range from creating one LIST per minute.
 const DISCOVERY_WINDOW_SECS: i64 = 10 * 60;
 
 #[derive(Deserialize)]
@@ -37,15 +38,20 @@ pub struct ServicesResponse {
     /// Additive metadata keyed by service name. `services` remains for clients
     /// that predate metadata support.
     pub service_metadata: Vec<ServiceMetadata>,
-    /// True when the local object listing exceeded its bound. S3 discovery
-    /// uses a fixed trailing window and therefore has bounded prefix fan-out.
+    /// True when the local object listing or historical S3 discovery exceeded
+    /// its bound.
     pub truncated: bool,
 }
 
 #[derive(Serialize)]
 pub struct ServiceMetadata {
     pub service: String,
-    pub host_count: usize,
+    /// S3 discovery omits this until the selected service has been browsed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_count: Option<usize>,
+    /// Opaque layout discovery state that clients may echo to `/api/browse`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layout_hint: Option<String>,
 }
 
 pub async fn list_services(
@@ -96,11 +102,23 @@ pub async fn list_services(
         }));
     }
 
+    let days = source_layout::day_layouts(params.from, params.to, LayoutSet::Historical)
+        .map_err(storage_error_response)?;
+    let version1 = source_layout::discover_version1_services(
+        &*backend,
+        &bucket,
+        &base,
+        params.from,
+        params.to,
+    )
+    .await
+    .map_err(storage_error_response)?;
+
     let discovery_from = params
         .to
         .saturating_sub(DISCOVERY_WINDOW_SECS)
         .max(params.from);
-    let (prefixes, truncated) = minute_time_prefixes(&base, discovery_from, params.to);
+    let (prefixes, truncated) = historical_minute_prefixes(&base, discovery_from, params.to);
     let results = futures::stream::iter(prefixes)
         .map(|prefix| {
             let backend = backend.clone();
@@ -116,15 +134,10 @@ pub async fn list_services(
         .collect::<Vec<_>>()
         .await;
 
-    let mut service_roots = Vec::new();
-    let mut services = BTreeSet::new();
+    let mut services = version1.services().cloned().collect::<BTreeSet<_>>();
     for result in results {
         let (minute_prefix, children) = result.map_err(storage_error_response)?;
         let service_root = format!("{minute_prefix}/");
-        let hive = minute_prefix
-            .rsplit('/')
-            .next()
-            .is_some_and(|part| part.starts_with("time="));
         for child in children {
             let Some(segment) = child
                 .strip_prefix(&service_root)
@@ -133,67 +146,28 @@ pub async fn list_services(
             else {
                 continue;
             };
-            let service = if hive {
-                segment
-                    .strip_prefix("service=")
-                    .and_then(crate::segment_object_key_codec::hive_unescape)
-            } else {
-                Some(segment.to_string())
-            };
-            if let Some(service) = service {
-                services.insert(service.clone());
-                service_roots.push((service, child, hive));
-            }
+            services.insert(segment.to_string());
         }
     }
 
-    let host_results = futures::stream::iter(service_roots)
-        .map(|(service, service_root, hive)| {
-            let backend = backend.clone();
-            let bucket = bucket.clone();
-            async move {
-                let children = backend.list_prefixes(&bucket, &service_root).await?;
-                Ok::<_, crate::storage::StorageError>((service, service_root, hive, children))
-            }
-        })
-        .buffer_unordered(LIST_CONCURRENCY)
-        .collect::<Vec<_>>()
-        .await;
-
-    let mut hosts_by_service = services
+    let service_metadata = services
         .iter()
         .cloned()
-        .map(|service| (service, BTreeSet::new()))
-        .collect::<BTreeMap<_, _>>();
-    for result in host_results {
-        let (service, service_root, hive, children) = result.map_err(storage_error_response)?;
-        let hosts = hosts_by_service
-            .get_mut(&service)
-            .expect("discovered service must have a metadata entry");
-        for child in children {
-            let Some(segment) = child
-                .strip_prefix(&service_root)
-                .and_then(|rest| rest.strip_suffix('/'))
-                .filter(|rest| !rest.is_empty() && !rest.contains('/'))
-            else {
-                continue;
-            };
-            let host = if hive {
-                segment
-                    .strip_prefix("instance=")
-                    .and_then(crate::segment_object_key_codec::hive_unescape)
-            } else {
-                Some(segment.to_string())
-            };
-            if let Some(host) = host {
-                hosts.insert(host);
-            }
-        }
-    }
+        .map(|service| ServiceMetadata {
+            layout_hint: Some(source_layout::hint_for_service(
+                &base,
+                &service,
+                &days,
+                version1.dates_for(&service),
+            )),
+            service,
+            host_count: None,
+        })
+        .collect();
 
     Ok(Json(ServicesResponse {
         services: services.into_iter().collect(),
-        service_metadata: metadata_from_hosts(hosts_by_service),
+        service_metadata,
         truncated,
     }))
 }
@@ -205,7 +179,8 @@ fn metadata_from_hosts(
         .into_iter()
         .map(|(service, hosts)| ServiceMetadata {
             service,
-            host_count: hosts.len(),
+            host_count: Some(hosts.len()),
+            layout_hint: None,
         })
         .collect()
 }

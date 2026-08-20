@@ -446,12 +446,12 @@ async fn browse_fans_out_across_time_buckets() {
     let (s3, base, _dir) = setup_s3_test("traces-bucket", Some("traces-bucket".into()), None).await;
     let client = reqwest::Client::new();
 
-    // 2026-04-09 19:10:00Z .. 19:25:00Z, split across the new and historical
-    // layouts to exercise mixed-layout listings.
+    // 2026-04-09 19:10:00Z .. 19:25:00Z, split across the v1 and historical
+    // layouts to exercise migration listings.
     put_object(
         &s3,
         "traces-bucket",
-        "date=2026-04-09/time=1910/service=svc/instance=hostA/boot=boot/1000-0.bin.gz",
+        "version=1/date=2026-04-09/service=svc/time=1910/instance=hostA/boot=boot/1000-0.bin.gz",
         &gzip_bytes(b"a"),
     )
     .await;
@@ -465,7 +465,7 @@ async fn browse_fans_out_across_time_buckets() {
     put_object(
         &s3,
         "traces-bucket",
-        "date=2026-04-09/time=1925/service=svc/instance=hostC/boot=boot/1002-0.bin.gz",
+        "version=1/date=2026-04-09/service=svc/time=1925/instance=hostC/boot=boot/1002-0.bin.gz",
         &gzip_bytes(b"c"),
     )
     .await;
@@ -556,7 +556,7 @@ async fn browse_uses_minute_granularity_for_short_window() {
     put_object(
         &s3,
         "traces-bucket",
-        "date=2026-04-09/time=1910/service=svc/instance=host/boot=boot/1000-0.bin.gz",
+        "version=1/date=2026-04-09/service=svc/time=1910/instance=host/boot=boot/1000-0.bin.gz",
         &gzip_bytes(b"a"),
     )
     .await;
@@ -599,7 +599,7 @@ async fn browse_filters_exact_service_for_wide_window() {
             b"a".as_slice(),
         ),
         (
-            "date=2026-04-09/time=1910/service=api-worker/instance=host/boot=boot/1000-0.bin.gz",
+            "version=1/date=2026-04-09/service=api-worker/time=1910/instance=host/boot=boot/1000-0.bin.gz",
             b"b".as_slice(),
         ),
     ] {
@@ -629,9 +629,9 @@ async fn services_discovers_sorted_unique_services_without_browse_objects() {
 
     for key in [
         "2026-04-09/1925/worker/host-a/1000-0.bin.gz",
-        "date=2026-04-09/time=1925/service=api/instance=host-a/boot=boot/1000-0.bin.gz",
-        "date=2026-04-09/time=1926/service=api/instance=host-b/boot=boot/1001-0.bin.gz",
-        "date=2026-04-09/time=1926/service=payments%2Fapi/instance=us-east-1%2Fi-0abc123/boot=boot/1001-1.bin.gz",
+        "version=1/date=2026-04-09/service=api/time=1925/instance=host-a/boot=boot/1000-0.bin.gz",
+        "version=1/date=2026-04-09/service=api/time=1926/instance=host-b/boot=boot/1001-0.bin.gz",
+        "version=1/date=2026-04-09/service=payments%2Fapi/time=1926/instance=host%2Fone/boot=boot/1001-1.bin.gz",
         "2026-04-09/2010/outside/host/1002-0.bin.gz",
     ] {
         put_object(&s3, "traces-bucket", key, &gzip_bytes(b"trace")).await;
@@ -649,13 +649,17 @@ async fn services_discovers_sorted_unique_services_without_browse_objects() {
     check!(resp.status().as_u16() == 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     check!(body["services"] == serde_json::json!(["api", "payments/api", "worker"]));
+    let metadata = body["service_metadata"].as_array().unwrap();
+    check!(metadata.len() == 3);
     check!(
-        body["service_metadata"]
-            == serde_json::json!([
-                {"service": "api", "host_count": 2},
-                {"service": "payments/api", "host_count": 1},
-                {"service": "worker", "host_count": 1}
-            ])
+        metadata
+            .iter()
+            .all(|entry| entry.get("host_count").is_none())
+    );
+    check!(
+        metadata
+            .iter()
+            .all(|entry| entry["layout_hint"].is_string())
     );
     check!(body["truncated"] == false);
     check!(body.get("objects").is_none());
@@ -684,10 +688,9 @@ async fn services_discovers_only_the_trailing_ten_minutes_of_a_long_range() {
     check!(resp.status().as_u16() == 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     check!(body["services"] == serde_json::json!(["recent-service"]));
-    check!(
-        body["service_metadata"]
-            == serde_json::json!([{"service": "recent-service", "host_count": 1}])
-    );
+    check!(body["service_metadata"][0]["service"] == "recent-service");
+    check!(body["service_metadata"][0].get("host_count").is_none());
+    check!(body["service_metadata"][0]["layout_hint"].is_string());
     check!(body["truncated"] == false);
 }
 
@@ -701,8 +704,8 @@ async fn services_honors_default_and_request_prefix() {
     .await;
 
     for key in [
-        "root/team-a/2026-04-09/1925/api/host/1000-0.bin.gz",
-        "root/team-b/2026-04-09/1925/worker/host/1000-0.bin.gz",
+        "root/team-a/version=1/date=2026-04-09/service=api/time=1925/instance=host/boot=boot/1000-0.bin.gz",
+        "root/team-b/version=1/date=2026-04-09/service=worker/time=1925/instance=host/boot=boot/1000-0.bin.gz",
     ] {
         put_object(&s3, "traces-bucket", key, &gzip_bytes(b"trace")).await;
     }
@@ -719,7 +722,9 @@ async fn services_honors_default_and_request_prefix() {
     check!(resp.status().as_u16() == 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     check!(body["services"] == serde_json::json!(["api"]));
-    check!(body["service_metadata"] == serde_json::json!([{"service": "api", "host_count": 1}]));
+    check!(body["service_metadata"][0]["service"] == "api");
+    check!(body["service_metadata"][0].get("host_count").is_none());
+    check!(body["service_metadata"][0]["layout_hint"].is_string());
 }
 
 #[tokio::test]
@@ -739,7 +744,7 @@ async fn browse_empty_service_is_unfiltered_and_escaped_service_is_supported() {
     put_object(
         &s3,
         "traces-bucket",
-        "date=2026-04-09/time=1910/service=api%2Fworker/instance=host%2Fa/boot=boot/1000-0.bin.gz",
+        "version=1/date=2026-04-09/service=api%2Fworker/time=1910/instance=host%2Fa/boot=boot/1000-0.bin.gz",
         &gzip_bytes(b"trace"),
     )
     .await;
@@ -774,6 +779,46 @@ async fn browse_empty_service_is_unfiltered_and_escaped_service_is_supported() {
             .unwrap()
             .contains("service=api%2Fworker")
     );
+}
+
+#[tokio::test]
+async fn browse_rediscovers_when_layout_hint_is_invalid_or_stale() {
+    let (s3, base, _dir) = setup_s3_test("traces-bucket", Some("traces-bucket".into()), None).await;
+    put_object(
+        &s3,
+        "traces-bucket",
+        "version=1/date=2026-04-09/service=api/time=1910/instance=host/boot=boot/1000-0.bin.gz",
+        &gzip_bytes(b"trace"),
+    )
+    .await;
+
+    let from = 1_775_761_680;
+    let to = from + 22 * 60;
+    let stale = serde_json::json!({
+        "v": 1,
+        "base": "",
+        "service": "api",
+        "first_day": "2026-04-09",
+        "last_day": "2026-04-09",
+        "first_v1_day": "2026-04-09",
+        "expires_at": 0,
+    })
+    .to_string();
+
+    for hint in ["not-json", stale.as_str()] {
+        let response = reqwest::Client::new()
+            .get(format!(
+                "{base}/api/browse?bucket=traces-bucket&service=api&from={from}&to={to}\
+                 &layout_hint={}",
+                urlencoding::encode(hint)
+            ))
+            .send()
+            .await
+            .unwrap();
+        check!(response.status().as_u16() == 200);
+        let body: serde_json::Value = response.json().await.unwrap();
+        check!(body["objects"].as_array().unwrap().len() == 1);
+    }
 }
 
 /// `/api/browse` rejects a window where `to` precedes `from`.
