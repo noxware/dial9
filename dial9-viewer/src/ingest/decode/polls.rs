@@ -268,7 +268,9 @@ impl PollTimeline {
                 TraceEvent::PollStart(event) => reconstructor.poll_start(event),
                 TraceEvent::PollEnd(event) => reconstructor.poll_end(event),
                 TraceEvent::WorkerPark(event) => reconstructor.worker_park(event),
-                TraceEvent::CpuSample(_) | TraceEvent::WorkerUnpark(_) => {}
+                TraceEvent::CpuSample(_)
+                | TraceEvent::TaskDump(_)
+                | TraceEvent::WorkerUnpark(_) => {}
             }
         }
         // Unclosed polls are segment-boundary artifacts and remain discarded.

@@ -36,8 +36,8 @@ use spans::span_builder;
 use spans::{interval_pairing, legacy, single_event};
 
 pub(crate) use types::{
-    DecodeResult, DecodeStats, EnclosingSpanSummary, ResolvedPoll, ResolvedSample, ResolvedSpan,
-    SchedulingDelayKind,
+    DecodeResult, DecodeStats, DecodeWithTaskDumpsResult, EnclosingSpanSummary, ResolvedPoll,
+    ResolvedSample, ResolvedSpan, ResolvedTaskDump, SchedulingDelayKind,
 };
 
 /// Wire value of the `CpuProfile` CPU-sample source (periodic on-CPU sample).
@@ -60,7 +60,9 @@ fn unknown_source_fields() -> (String, String, String) {
 /// Returns the resolved samples and a map of stack_id → frame names for the
 /// stacks dictionary.
 pub(crate) fn decode_samples(data: &[u8], source_key: &str) -> anyhow::Result<DecodeResult> {
-    decode_samples_with_stats(data, source_key).map(|(result, _stats)| result)
+    decode_samples_with_stats(data, source_key).map(
+        |((samples, stacks, polls, spans, _task_dumps), _stats)| (samples, stacks, polls, spans),
+    )
 }
 
 /// Like [`decode_samples`], but also returns per-phase [`DecodeStats`] so the
@@ -70,7 +72,7 @@ pub(crate) fn decode_samples(data: &[u8], source_key: &str) -> anyhow::Result<De
 pub(crate) fn decode_samples_with_stats(
     data: &[u8],
     source_key: &str,
-) -> anyhow::Result<(DecodeResult, DecodeStats)> {
+) -> anyhow::Result<(DecodeWithTaskDumpsResult, DecodeStats)> {
     use std::time::Instant;
 
     let mut stats = DecodeStats::default();
@@ -145,6 +147,7 @@ pub(crate) fn decode_samples_with_stats(
     let mut stacks_dict: FxHashMap<[u8; 16], Vec<String>> = FxHashMap::default();
     let mut stack_cache: FxHashMap<Vec<u64>, [u8; 16]> = FxHashMap::default();
     let mut samples = Vec::new();
+    let mut task_dumps = Vec::new();
     let (parsed_date, parsed_service, parsed_host) =
         parse_source_key(source_key).unwrap_or_else(unknown_source_fields);
 
@@ -164,46 +167,14 @@ pub(crate) fn decode_samples_with_stats(
                     s.source as u8,
                 );
 
-                let stack_id = if let Some(&cached) = stack_cache.get(&s.callchain) {
-                    cached
-                } else {
-                    let mut hasher = blake3::Hasher::new();
-                    let mut first = true;
-                    let mut frame_strings: Vec<String> = Vec::new();
-
-                    for &addr in &s.callchain {
-                        if let Some(entries) = addr_to_keys.get(&addr) {
-                            for (_, key) in entries {
-                                let name = interner.resolve(key);
-                                if !first {
-                                    hasher.update(b"\x00");
-                                }
-                                hasher.update(name.as_bytes());
-                                frame_strings.push(name.to_string());
-                                first = false;
-                            }
-                        } else {
-                            let hex = format!("0x{addr:x}");
-                            if !first {
-                                hasher.update(b"\x00");
-                            }
-                            hasher.update(hex.as_bytes());
-                            frame_strings.push(hex);
-                            first = false;
-                        }
-                    }
-
-                    if frame_strings.is_empty() {
-                        continue;
-                    }
-
-                    let hash = hasher.finalize();
-                    let mut id = [0u8; 16];
-                    id.copy_from_slice(&hash.as_bytes()[..16]);
-
-                    stacks_dict.entry(id).or_insert(frame_strings);
-                    stack_cache.insert(s.callchain.clone(), id);
-                    id
+                let Some(stack_id) = resolve_stack(
+                    &s.callchain,
+                    &addr_to_keys,
+                    &interner,
+                    &mut stack_cache,
+                    &mut stacks_dict,
+                ) else {
+                    continue;
                 };
 
                 let wall_ns = clock::MonoNs(s.timestamp_ns)
@@ -221,6 +192,28 @@ pub(crate) fn decode_samples_with_stats(
                     poll_duration_ns,
                     spawn_location,
                     enclosing_spans: Vec::new(),
+                });
+            }
+            TraceEvent::TaskDump(task_dump) => {
+                let Some(stack_id) = resolve_stack(
+                    &task_dump.callchain,
+                    &addr_to_keys,
+                    &interner,
+                    &mut stack_cache,
+                    &mut stacks_dict,
+                ) else {
+                    continue;
+                };
+                task_dumps.push(ResolvedTaskDump {
+                    timestamp_ns: clock::MonoNs(task_dump.timestamp_ns)
+                        .to_wall_or_raw(clock_offset)
+                        .raw(),
+                    task_id: task_dump.task_id,
+                    stack_id,
+                    source_key: source_key.to_string(),
+                    host: parsed_host.clone(),
+                    service: parsed_service.clone(),
+                    date: parsed_date.clone(),
                 });
             }
         }
@@ -327,9 +320,53 @@ pub(crate) fn decode_samples_with_stats(
             stacks_dict.into_iter().collect(),
             resolved_polls,
             resolved_spans,
+            task_dumps,
         ),
         stats,
     ))
+}
+
+fn resolve_stack(
+    callchain: &[u64],
+    addr_to_keys: &FxHashMap<u64, Vec<(u64, lasso::Spur)>>,
+    interner: &lasso::Rodeo,
+    stack_cache: &mut FxHashMap<Vec<u64>, [u8; 16]>,
+    stacks_dict: &mut FxHashMap<[u8; 16], Vec<String>>,
+) -> Option<[u8; 16]> {
+    if let Some(cached) = stack_cache.get(callchain) {
+        return Some(*cached);
+    }
+
+    let mut hasher = blake3::Hasher::new();
+    let mut frame_strings = Vec::new();
+    for &addr in callchain {
+        if let Some(entries) = addr_to_keys.get(&addr) {
+            for (_, key) in entries {
+                let name = interner.resolve(key);
+                if !frame_strings.is_empty() {
+                    hasher.update(b"\x00");
+                }
+                hasher.update(name.as_bytes());
+                frame_strings.push(name.to_string());
+            }
+        } else {
+            let hex = format!("0x{addr:x}");
+            if !frame_strings.is_empty() {
+                hasher.update(b"\x00");
+            }
+            hasher.update(hex.as_bytes());
+            frame_strings.push(hex);
+        }
+    }
+    if frame_strings.is_empty() {
+        return None;
+    }
+
+    let mut stack_id = [0; 16];
+    stack_id.copy_from_slice(&hasher.finalize().as_bytes()[..16]);
+    stacks_dict.entry(stack_id).or_insert(frame_strings);
+    stack_cache.insert(callchain.to_vec(), stack_id);
+    Some(stack_id)
 }
 
 /// Compute a span_uid from the boot-id + span_instance_id.

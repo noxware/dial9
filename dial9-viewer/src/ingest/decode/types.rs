@@ -64,6 +64,18 @@ pub(crate) struct ResolvedSample {
     pub(crate) enclosing_spans: Vec<EnclosingSpanSummary>,
 }
 
+/// A resolved async task dump ready for Parquet output.
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedTaskDump {
+    pub(crate) timestamp_ns: u64,
+    pub(crate) task_id: u64,
+    pub(crate) stack_id: [u8; 16],
+    pub(crate) source_key: String,
+    pub(crate) host: String,
+    pub(crate) service: String,
+    pub(crate) date: String,
+}
+
 /// A reconstructed poll span: one invocation of `Future::poll` on a task.
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedPoll {
@@ -202,6 +214,14 @@ pub(crate) type DecodeResult = (
     Vec<ResolvedSpan>,
 );
 
+pub(crate) type DecodeWithTaskDumpsResult = (
+    Vec<ResolvedSample>,
+    HashMap<[u8; 16], Vec<String>>,
+    Vec<ResolvedPoll>,
+    Vec<ResolvedSpan>,
+    Vec<ResolvedTaskDump>,
+);
+
 /// Per-phase timing and counts for one `decode_samples` call, returned by
 /// [`super::decode_samples_with_stats`]. Purely observational — used by the fold
 /// pipeline to emit a per-file metric so we can see where decode time goes
@@ -210,9 +230,9 @@ pub(crate) type DecodeResult = (
 /// sequence, so they sum (modulo rounding) to the total decode time.
 #[derive(Debug, Clone, Default)]
 pub struct DecodeStats {
-    /// Total events decoded off the wire (samples + park/unpark + poll
-    /// start/end + span enter/exit/close). The headline "how big is this file"
-    /// number.
+    /// Total events decoded off the wire (samples + task dumps + park/unpark +
+    /// poll start/end + span enter/exit/close). The headline "how big is this
+    /// file" number.
     pub events_decoded: u64,
     /// Span-producing wire events (subset of `events_decoded`).
     pub span_events_decoded: u64,
@@ -222,7 +242,7 @@ pub struct DecodeStats {
     pub sort_events: std::time::Duration,
     /// Phase: reconstruct the poll timeline from park/unpark/poll events.
     pub poll_reconstruct: std::time::Duration,
-    /// Phase: the sample loop (symbolication + per-sample poll attribution).
+    /// Phase: the sample/task-dump loop (symbolication + sample attribution).
     pub sample_resolve: std::time::Duration,
     /// Phase: tracing/single-event span resolution.
     pub span_resolve: std::time::Duration,

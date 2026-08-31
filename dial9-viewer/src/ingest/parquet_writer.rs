@@ -15,6 +15,7 @@ use std::sync::Arc;
 use super::decode::ResolvedPoll;
 use super::decode::ResolvedSample;
 use super::decode::ResolvedSpan;
+use super::decode::ResolvedTaskDump;
 
 /// Write samples to a Parquet file.
 ///
@@ -157,6 +158,61 @@ pub fn write_stacks_dict<W: Write + Send>(
         ],
     )?;
 
+    arrow_writer.write(&batch)?;
+    arrow_writer.close()?;
+    Ok(())
+}
+
+/// Write async task dumps to a Parquet file.
+pub fn write_task_dumps<W: Write + Send>(
+    writer: W,
+    task_dumps: &[ResolvedTaskDump],
+) -> anyhow::Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("timestamp_ns", DataType::Int64, false),
+        Field::new("task_id", DataType::UInt64, false),
+        Field::new("stack_id", DataType::FixedSizeBinary(16), false),
+        Field::new("source_key", DataType::Utf8, false),
+        Field::new("host", DataType::Utf8, false),
+        Field::new("service", DataType::Utf8, false),
+        Field::new("date", DataType::Utf8, false),
+    ]));
+    let props = WriterProperties::builder()
+        .set_dictionary_enabled(true)
+        .build();
+    let mut arrow_writer = ArrowWriter::try_new(writer, schema.clone(), Some(props))?;
+
+    let n = task_dumps.len();
+    let mut timestamp_builder = Int64Builder::with_capacity(n);
+    let mut task_id_builder = UInt64Builder::with_capacity(n);
+    let mut stack_id_builder = FixedSizeBinaryBuilder::with_capacity(n, 16);
+    let mut source_key_builder = StringBuilder::with_capacity(n, 128 * n);
+    let mut host_builder = StringBuilder::with_capacity(n, 64 * n);
+    let mut service_builder = StringBuilder::with_capacity(n, 32 * n);
+    let mut date_builder = StringBuilder::with_capacity(n, 10 * n);
+
+    for task_dump in task_dumps {
+        timestamp_builder.append_value(task_dump.timestamp_ns as i64);
+        task_id_builder.append_value(task_dump.task_id);
+        stack_id_builder.append_value(task_dump.stack_id)?;
+        source_key_builder.append_value(&task_dump.source_key);
+        host_builder.append_value(&task_dump.host);
+        service_builder.append_value(&task_dump.service);
+        date_builder.append_value(&task_dump.date);
+    }
+
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(timestamp_builder.finish()),
+            Arc::new(task_id_builder.finish()),
+            Arc::new(stack_id_builder.finish()),
+            Arc::new(source_key_builder.finish()),
+            Arc::new(host_builder.finish()),
+            Arc::new(service_builder.finish()),
+            Arc::new(date_builder.finish()),
+        ],
+    )?;
     arrow_writer.write(&batch)?;
     arrow_writer.close()?;
     Ok(())

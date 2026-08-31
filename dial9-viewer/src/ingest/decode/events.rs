@@ -87,6 +87,13 @@ pub(crate) struct CpuSample {
 }
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct TaskDump {
+    pub(crate) timestamp_ns: u64,
+    pub(crate) task_id: u64,
+    pub(crate) callchain: Vec<u64>,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct WorkerPark {
     pub(crate) timestamp_ns: u64,
     pub(crate) worker_id: u64,
@@ -726,6 +733,7 @@ pub(crate) fn find_first_single_colon(s: &str) -> Option<usize> {
 
 pub(crate) enum TraceEvent {
     CpuSample(CpuSample),
+    TaskDump(TaskDump),
     WorkerPark(WorkerPark),
     WorkerUnpark(WorkerUnpark),
     PollStart(PollStart),
@@ -739,6 +747,7 @@ impl TraceEvent {
     pub(crate) fn timestamp_ns(&self) -> u64 {
         match self {
             Self::CpuSample(e) => e.timestamp_ns,
+            Self::TaskDump(e) => e.timestamp_ns,
             Self::WorkerPark(e) => e.timestamp_ns,
             Self::WorkerUnpark(e) => e.timestamp_ns,
             Self::PollStart(e) => e.timestamp_ns,
@@ -874,6 +883,13 @@ pub(crate) fn decode_trace(data: &[u8], source_key: &str) -> anyhow::Result<Deco
                         && !s.callchain.is_empty()
                     {
                         events.push(TraceEvent::CpuSample(s));
+                    }
+                }
+                "TaskDumpEvent" => {
+                    if let Ok(task_dump) = ev.deserialize::<TaskDump>()
+                        && !task_dump.callchain.is_empty()
+                    {
+                        events.push(TraceEvent::TaskDump(task_dump));
                     }
                 }
                 "WorkerParkEvent" => {

@@ -55,6 +55,7 @@ deterministically-named Parquet part-file:
 {output_prefix}/v{SAMPLES_FORMAT_VERSION}/bucket={source_bucket}/samples/service=…/date=…/host=…/{blake3(source_key)}.parquet
 {output_prefix}/v{SAMPLES_FORMAT_VERSION}/bucket={source_bucket}/dict/stacks/{blake3(source_key)}.parquet
 {output_prefix}/v{SAMPLES_FORMAT_VERSION}/bucket={source_bucket}/polls/{blake3(source_key)}.parquet
+{output_prefix}/v{SAMPLES_FORMAT_VERSION}/bucket={source_bucket}/task-dumps/{blake3(source_key)}.parquet
 ```
 
 The part-file's **existence is the record that the file is folded** — there is
@@ -107,6 +108,7 @@ literal "how accurate is this sample") are a planned later addition.
   samples/service={svc}/date={YYYY-MM-DD}/host={host}/{hash}.parquet  ← one row per sample
   dict/stacks/{hash}.parquet                                          ← stack_id → frame names
   polls/{hash}.parquet                                                ← poll spans (for /tokio-stats)
+  task-dumps/{hash}.parquet                                           ← async task dumps
 ```
 
 Hive-partitioned paths make the folded-set LIST scope-prunable and give
@@ -200,8 +202,8 @@ climbing from the baseline to the cap. `--serve` leaves it up for the browser.
 dial9-viewer/src/ingest/aggregate.rs   ← kit of parts: order key, scope→matched-set, fold_one,
                                           folded-set LIST, incremental FlamegraphAccum, coverage, versioned paths
 dial9-viewer/src/ingest/refine.rs      ← resolve (list→scope→cap→folded) + fold_stream (streamed folds), shared by all endpoints
-dial9-viewer/src/ingest/decode.rs      ← raw trace bytes → resolved CPU samples + stacks + polls
-dial9-viewer/src/ingest/parquet_writer.rs ← write samples / stacks / polls part-files
+dial9-viewer/src/ingest/decode.rs      ← raw trace bytes → resolved CPU samples + task dumps + stacks + polls
+dial9-viewer/src/ingest/parquet_writer.rs ← write samples / task dumps / stacks / polls part-files
 dial9-viewer/src/ingest/mod.rs         ← module wiring for the aggregation building blocks
 dial9-viewer/src/server/flamegraph.rs  ← /api/flamegraph SSE: resolve → fold_stream → merge samples/ → tree per event
 dial9-viewer/src/server/tokio_stats.rs ← /api/tokio-stats SSE: resolve → fold_stream → merge polls/ → poll stats per event

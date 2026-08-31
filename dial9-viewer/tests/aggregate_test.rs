@@ -1361,7 +1361,9 @@ async fn escaped_service_and_instance_survive_aggregation_and_cache_paths() {
         ),
     )
     .await;
-    assert_eq!(result.coverage.unwrap().files_matched, 1);
+    let coverage = result.coverage.as_ref().unwrap();
+    assert_eq!(coverage.files_matched, 1);
+    assert_eq!(coverage.fold_errors, 0, "response: {}", result.body);
 
     let version = dial9_viewer::ingest::aggregate::SAMPLES_FORMAT_VERSION;
     let listed = uploader
@@ -1373,12 +1375,16 @@ async fn escaped_service_and_instance_survive_aggregation_and_cache_paths() {
         .send()
         .await
         .unwrap();
-    assert!(listed.contents().iter().any(|object| {
-        object.key().is_some_and(|key| {
-            key.contains("/service=payments%2Fapi/")
-                && key.contains("/host=cluster%2Fworker%3Dblue%251/")
-        })
-    }));
+    assert!(
+        listed.contents().iter().any(|object| {
+            object.key().is_some_and(|key| {
+                key.contains("/service=payments%2Fapi/")
+                    && key.contains("/host=cluster%2Fworker%3Dblue%251/")
+            })
+        }),
+        "listed objects: {:?}",
+        listed.contents()
+    );
 }
 
 /// A multi-host scope (repeatable `host=` params, as the heatmap box sends)
@@ -1707,7 +1713,7 @@ async fn fold_failures_are_reported_in_coverage() {
 /// (`list_folded_leaves` lists it), so a committed file is never re-folded.
 #[tokio::test]
 async fn partial_write_failure_does_not_commit_fold() {
-    for fail_substr in ["/polls/", "/spans/"] {
+    for fail_substr in ["/polls/", "/spans/", "/task-dumps/"] {
         let fs = tempfile::tempdir().unwrap();
         std::fs::create_dir(fs.path().join("src-bucket")).unwrap();
         std::fs::create_dir(fs.path().join("out-bucket")).unwrap();
