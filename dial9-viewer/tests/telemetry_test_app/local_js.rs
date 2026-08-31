@@ -8,37 +8,34 @@ use std::{path::Path, process::Command};
 const MIN_FIXTURE_CPU_SAMPLES: u64 = 20;
 
 #[derive(Debug, Deserialize)]
-struct LocalObservations {
-    stacks: Vec<ObservedStack>,
-    spans: Vec<ObservedSpan>,
-    associations: Vec<ObservedSpanAssociation>,
+pub(crate) struct Observations {
+    pub(crate) stacks: Vec<ObservedStack>,
+    pub(crate) spans: Vec<ObservedSpan>,
+    pub(crate) associations: Vec<ObservedSpanAssociation>,
 }
 
 #[derive(Debug, Deserialize)]
-struct ObservedStack {
-    feature: FixtureFeature,
-    frames: Vec<FunctionSymbol>,
-    count: u64,
+pub(crate) struct ObservedStack {
+    pub(crate) feature: FixtureFeature,
+    pub(crate) frames: Vec<FunctionSymbol>,
+    pub(crate) count: u64,
 }
 
 #[derive(Debug, Deserialize)]
-struct ObservedSpan {
-    name: SpanName,
-    parent: Option<SpanName>,
-    field_names: Vec<String>,
+pub(crate) struct ObservedSpan {
+    pub(crate) name: SpanName,
+    pub(crate) parent: Option<SpanName>,
+    pub(crate) field_names: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
-struct ObservedSpanAssociation {
-    feature: FixtureFeature,
-    symbol: FunctionSymbol,
-    active_span: SpanName,
+pub(crate) struct ObservedSpanAssociation {
+    pub(crate) feature: FixtureFeature,
+    pub(crate) symbol: FunctionSymbol,
+    pub(crate) active_span: SpanName,
 }
 
-pub(crate) fn check_local_trace(
-    trace_paths: &[impl AsRef<Path>],
-    expected: &ExpectedModel,
-) -> Result<()> {
+pub(crate) fn observe_local_trace(trace_paths: &[impl AsRef<Path>]) -> Result<Observations> {
     let script =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/telemetry_test_app/check_local.js");
     let output = Command::new("node")
@@ -51,16 +48,18 @@ pub(crate) fn check_local_trace(
         "local JavaScript telemetry checker failed:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let observed: LocalObservations = serde_json::from_slice(&output.stdout)
-        .context("decode local JavaScript telemetry observations")?;
-    compare_observations(expected, &observed)
+    serde_json::from_slice(&output.stdout).context("decode local JavaScript telemetry observations")
 }
 
-fn compare_observations(expected: &ExpectedModel, observed: &LocalObservations) -> Result<()> {
+pub(crate) fn compare_observations(
+    parser: &str,
+    expected: &ExpectedModel,
+    observed: &Observations,
+) -> Result<()> {
     for symbol in &expected.symbols {
         ensure!(
             symbol_count(observed, symbol.feature, &symbol.symbol) > 0,
-            "local JavaScript parser did not observe {:?} symbol {:?}",
+            "{parser} did not observe {:?} symbol {:?}",
             symbol.feature,
             symbol.symbol.as_str()
         );
@@ -74,7 +73,7 @@ fn compare_observations(expected: &ExpectedModel, observed: &LocalObservations) 
         .sum();
     ensure!(
         cpu_samples >= MIN_FIXTURE_CPU_SAMPLES,
-        "local JavaScript parser observed only {cpu_samples} fixture CPU samples"
+        "{parser} observed only {cpu_samples} fixture CPU samples"
     );
     assert_cpu_weight_order(expected, observed)?;
 
@@ -90,22 +89,35 @@ fn compare_observations(expected: &ExpectedModel, observed: &LocalObservations) 
                 )
             })?
             .feature;
+        let feature_stacks: Vec<_> = observed
+            .stacks
+            .iter()
+            .filter(|stack| stack.feature == feature)
+            .map(|stack| {
+                stack
+                    .frames
+                    .iter()
+                    .map(FunctionSymbol::as_str)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
         ensure!(
             observed
                 .stacks
                 .iter()
                 .any(|stack| stack.feature == feature && stack_has_edge(stack, edge)),
-            "local JavaScript parser did not observe {:?} stack edge {:?} -> {:?}",
+            "{parser} did not observe {:?} stack edge {:?} -> {:?}; observed stacks: {:?}",
             feature,
             edge.parent.as_str(),
-            edge.child.as_str()
+            edge.child.as_str(),
+            feature_stacks,
         );
     }
 
     for span in &expected.spans {
         ensure!(
             observed.spans.iter().any(|item| &item.name == span),
-            "local JavaScript parser did not observe span {:?}",
+            "{parser} did not observe span {:?}",
             span.as_str()
         );
     }
@@ -114,7 +126,7 @@ fn compare_observations(expected: &ExpectedModel, observed: &LocalObservations) 
             observed.spans.iter().any(|span| {
                 span.name == edge.child && span.parent.as_ref() == Some(&edge.parent)
             }),
-            "local JavaScript parser did not observe span edge {:?} -> {:?}",
+            "{parser} did not observe span edge {:?} -> {:?}",
             edge.parent.as_str(),
             edge.child.as_str()
         );
@@ -137,7 +149,7 @@ fn compare_observations(expected: &ExpectedModel, observed: &LocalObservations) 
                     && item.symbol == association.symbol
                     && item.active_span == association.active_span
             }),
-            "local JavaScript parser did not associate {:?} with span {:?}",
+            "{parser} did not associate {:?} with span {:?}",
             association.symbol.as_str(),
             association.active_span.as_str()
         );
@@ -153,17 +165,13 @@ fn compare_observations(expected: &ExpectedModel, observed: &LocalObservations) 
             && cycle_spans
                 .iter()
                 .all(|span| span.field_names.iter().any(|field| field == "cycle")),
-        "local JavaScript parser did not retain the cycle field on cycle spans"
+        "{parser} did not retain the cycle field on cycle spans"
     );
 
     Ok(())
 }
 
-fn symbol_count(
-    observed: &LocalObservations,
-    feature: FixtureFeature,
-    symbol: &FunctionSymbol,
-) -> u64 {
+fn symbol_count(observed: &Observations, feature: FixtureFeature, symbol: &FunctionSymbol) -> u64 {
     observed
         .stacks
         .iter()
@@ -180,7 +188,7 @@ fn stack_has_edge(stack: &ObservedStack, edge: &ExpectedStackEdge) -> bool {
     matches!((parent, child), (Some(parent), Some(child)) if parent < child)
 }
 
-fn assert_cpu_weight_order(expected: &ExpectedModel, observed: &LocalObservations) -> Result<()> {
+fn assert_cpu_weight_order(expected: &ExpectedModel, observed: &Observations) -> Result<()> {
     let symbols: Vec<_> = expected
         .symbols
         .iter()

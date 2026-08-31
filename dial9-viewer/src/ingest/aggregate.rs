@@ -385,12 +385,12 @@ impl Default for FoldLimits {
 }
 
 /// Encoded part-file buffers produced by the CPU stage of a fold, ready to write.
-struct EncodedParts {
-    samples_buf: Vec<u8>,
-    dict_buf: Vec<u8>,
-    polls_buf: Vec<u8>,
-    spans_buf: Vec<u8>,
-    task_dumps_buf: Vec<u8>,
+pub(crate) struct EncodedParts {
+    pub(crate) samples_buf: Vec<u8>,
+    pub(crate) dict_buf: Vec<u8>,
+    pub(crate) polls_buf: Vec<u8>,
+    pub(crate) spans_buf: Vec<u8>,
+    pub(crate) task_dumps_buf: Vec<u8>,
     /// CPU-stage timing/count breakdown, threaded out to the per-file metric.
     cpu_stats: CpuStageStats,
 }
@@ -411,7 +411,7 @@ struct CpuStageStats {
 /// blocking thread under a CPU concurrency permit, decoupled from the
 /// network-bound fetch and write stages. (The parquet encode previously ran on
 /// the async executor thread; moving it here keeps CPU work off the runtime.)
-fn decode_and_encode(bytes: &[u8], full_key: &str) -> anyhow::Result<EncodedParts> {
+pub(crate) fn decode_and_encode(bytes: &[u8], full_key: &str) -> anyhow::Result<EncodedParts> {
     use std::time::Instant;
     let mut cpu_stats = CpuStageStats::default();
 

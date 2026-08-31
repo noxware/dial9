@@ -7,12 +7,16 @@
 mod expectations;
 
 #[cfg(target_os = "linux")]
+#[path = "telemetry_test_app/aggregate.rs"]
+mod aggregate;
+
+#[cfg(target_os = "linux")]
 #[path = "telemetry_test_app/local_js.rs"]
 mod local_js;
 
 #[cfg(target_os = "linux")]
 #[test]
-fn local_javascript_matches_the_self_described_fixture() {
+fn production_parsers_match_the_self_described_fixture() {
     use flate2::read::GzDecoder;
     use std::{ffi::OsStr, io::Read as _, path::Path, process::Command};
 
@@ -64,6 +68,13 @@ fn local_javascript_matches_the_self_described_fixture() {
         .collect();
     let expected = expectations::read_expected_model(raw_segments.iter().map(Vec::as_slice))
         .expect("read fixture expectations");
-    local_js::check_local_trace(&trace_paths, &expected)
+    let local = local_js::observe_local_trace(&trace_paths)
+        .expect("observe fixture through local JavaScript parser");
+    local_js::compare_observations("local JavaScript parser", &expected, &local)
         .expect("local JavaScript observations must match fixture expectations");
+
+    let aggregate = aggregate::observe_aggregate_trace(&raw_segments)
+        .expect("observe fixture through aggregate decode and Parquet");
+    local_js::compare_observations("aggregate Parquet parser", &expected, &aggregate)
+        .expect("aggregate observations must match fixture expectations");
 }
