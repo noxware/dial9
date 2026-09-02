@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1](https://github.com/noxware/dial9-tokio-telemetry/compare/dial9-v0.5.0...dial9-v0.5.1) - 2026-09-02
+
+### Fixed
+
+- *(perf-self-profile)* detect missing frame pointers before install ([#814](https://github.com/noxware/dial9-tokio-telemetry/pull/814))
+
 ## [0.5.0](https://github.com/dial9-rs/dial9/compare/dial9-v0.5.0-rc2.1...dial9-v0.5.0) - 2026-08-26
 
 ### Fixed
