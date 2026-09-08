@@ -108,7 +108,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .task_tracking_enabled(true)
             .task_dump_config(
                 TaskDumpConfig::builder()
-                    .idle_threshold(Duration::from_millis(1))
+                    .captures_per_second_per_worker(1000)
                     .rng_seed(1)
                     .build(),
             )

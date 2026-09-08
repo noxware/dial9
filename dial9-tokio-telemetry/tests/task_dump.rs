@@ -51,7 +51,7 @@ fn task_dump_callchains(spawn_with_dial9: bool) -> Vec<Vec<u64>> {
     let handle = Dial9TokioHandle::current();
     rt.block_on(async {
         let future = async {
-            // Well above the 10ms default threshold.
+            // Long enough for the seeded emission sampler to select this idle.
             tokio::time::sleep(Duration::from_millis(50)).await;
         };
         let join = if spawn_with_dial9 {
@@ -105,7 +105,7 @@ fn task_dump_captures_each_sequential_idle() {
             .task_tracking_enabled(true)
             .maybe_task_dump_config(Some(
                 TaskDumpConfig::builder()
-                    .idle_threshold(Duration::from_nanos(1))
+                    .captures_per_second_per_worker(1_000_000_000)
                     .rng_seed(42)
                     .build(),
             ))
@@ -162,7 +162,7 @@ fn no_task_dump_for_short_sleep() {
             .task_tracking_enabled(true)
             .maybe_task_dump_config(Some(
                 TaskDumpConfig::builder()
-                    .idle_threshold(Duration::from_secs(1))
+                    .captures_per_second_per_worker(1)
                     .rng_seed(42)
                     .build(),
             ))
@@ -265,7 +265,7 @@ fn spawn_with_joinset_emits_task_dump() {
         let mut set: JoinSet<()> = JoinSet::new();
         handle.spawn_with(
             async {
-                // Well above the 10ms default threshold.
+                // Long enough for the seeded emission sampler to select this idle.
                 tokio::time::sleep(Duration::from_millis(50)).await;
             },
             |f| set.spawn(f),

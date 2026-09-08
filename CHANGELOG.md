@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `TaskDumpConfig` adds `captures_per_second_per_worker` and deprecates the
+  `idle_threshold` setter and accessor. Both setters configure one interval,
+  now defaulting to 100ms (10 captures/s/worker), previously 10ms. Worker-local
+  capture-time sampling is being integrated separately; the existing capture
+  path still uses this interval for idle-time emission sampling.
+
 ### Fixed
 
 - Task dumps no longer skip every other idle-point capture on Tokio 1.53+, and

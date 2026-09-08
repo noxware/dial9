@@ -20,6 +20,15 @@ pub mod memory_profiling {
 #[cfg(feature = "taskdump")]
 pub(crate) use dial9_core::sampling;
 pub(crate) use dial9_core::{primitives, rate_limit};
+#[cfg(any(feature = "taskdump", test))]
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "wired into runtime hooks in the next sampling step"
+    )
+)]
+mod task_dump_sampler;
 #[cfg(feature = "taskdump")]
 pub(crate) mod task_dumped;
 /// Core telemetry types, recording, and trace I/O.

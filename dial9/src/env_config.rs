@@ -689,6 +689,7 @@ fn env_recorder(resolved: ResolvedEnvConfig) -> (Option<Recorder>, RuntimeEnvCon
 /// instrumentation toggle, and task dumps.
 /// The task-dump settings selected by env config, or `None` when task dumps are
 /// off. An unset idle threshold leaves [`TaskDumpConfig`]'s own default.
+#[allow(deprecated)] // Preserve the duration-valued DIAL9_TASK_DUMP_IDLE_THRESHOLD_MS setting.
 fn env_task_dump_config(config: &RuntimeEnvConfig) -> Option<TaskDumpConfig> {
     config
         .task_dump_enabled
@@ -1303,7 +1304,7 @@ mod tests {
         );
         let (_recorder, runtime_config) = env_recorder(resolve_env_config(parse_env_config(&env)));
         assert_eq!(
-            env_task_dump_config(&runtime_config).map(|c| c.idle_threshold()),
+            env_task_dump_config(&runtime_config).map(|c| c.capture_interval()),
             Some(Duration::from_millis(25)),
             "env config should configure task dumps"
         );

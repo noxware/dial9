@@ -588,7 +588,7 @@ fn my_config() -> io::Result<AttachedRuntime> {
         TokioAttachOptions::builder()
             .task_tracking_enabled(true)
             .task_dump_config(
-                TaskDumpConfig::builder().idle_threshold(Duration::from_millis(10)).build(),
+                TaskDumpConfig::builder().captures_per_second_per_worker(10).build(),
             )
             .build(),
     )?;

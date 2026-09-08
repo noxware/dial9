@@ -126,7 +126,7 @@ impl<F: Future> Future for TaskDumped<F> {
             None => {
                 let config = TASKDUMP_CONFIG.with(|c| c.get());
                 if let Some(cfg) = config {
-                    *this.sample_mean_ns = cfg.idle_threshold().as_nanos() as u64;
+                    *this.sample_mean_ns = cfg.capture_interval().as_nanos() as u64;
                     // Fixed seed for deterministic tests; otherwise derive from
                     // task_id + time for production uniqueness.
                     let seed = cfg.rng_seed().unwrap_or_else(|| {
