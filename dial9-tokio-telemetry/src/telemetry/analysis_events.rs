@@ -233,12 +233,15 @@ pub struct CpuSampleEvent {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[non_exhaustive]
 pub struct TaskDumpEvent {
-    /// Timestamp in nanoseconds (monotonic).
+    /// Capture timestamp in nanoseconds (monotonic), shared by sibling callchains.
+    /// Legacy traces used the preceding poll-start timestamp instead.
     pub timestamp_ns: u64,
     /// Task that was idle.
     pub task_id: TaskId,
     /// Raw instruction pointer addresses (leaf first).
     pub callchain: Vec<u64>,
+    /// Selection probability; absent in traces using legacy idle-time sampling.
+    pub inclusion_probability: Option<f64>,
 }
 
 /// One task woke another task.
@@ -474,6 +477,31 @@ mod tests {
     use dial9_trace_format::encoder::Encoder;
 
     #[test]
+    fn legacy_task_dump_has_no_inclusion_probability() {
+        #[derive(dial9_trace_format::TraceEvent)]
+        #[traceevent(name = "TaskDumpEvent")]
+        struct LegacyTaskDump {
+            #[traceevent(timestamp)]
+            timestamp_ns: u64,
+            task_id: TaskId,
+            callchain: dial9_trace_format::StackFrames,
+        }
+        let mut enc = Encoder::new();
+        enc.write(&LegacyTaskDump {
+            timestamp_ns: 42,
+            task_id: TaskId::from_u32(17),
+            callchain: dial9_trace_format::StackFrames(vec![0x1234]),
+        })
+        .unwrap();
+        let events = format::decode_events(&enc.finish()).unwrap();
+        let Dial9Event::TaskDumpEvent(dump) = &events[0] else {
+            panic!("expected a legacy task dump");
+        };
+        assert_eq!(dump.inclusion_probability, None);
+        assert_eq!(dump.callchain, [0x1234]);
+    }
+
+    #[test]
     fn synthetic_trace_round_trip_all_events() {
         let mut enc = Encoder::new();
 
@@ -558,6 +586,7 @@ mod tests {
             timestamp_ns: 8_000_000,
             task_id: TaskId::from_u32(100),
             callchain: dump_chain,
+            inclusion_probability: 0.125,
         })
         .unwrap();
 
@@ -706,6 +735,7 @@ mod tests {
         assert_eq!(e.timestamp_ns, 8_000_000);
         assert_eq!(e.task_id, 100);
         assert_eq!(e.callchain, vec![0x1111, 0x2222, 0x3333]);
+        assert_eq!(e.inclusion_probability, Some(0.125));
 
         // 9. WakeEvent
         let Dial9Event::WakeEvent(ref e) = events[9] else {

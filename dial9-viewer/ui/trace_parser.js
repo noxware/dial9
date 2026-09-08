@@ -1453,7 +1453,15 @@
                     (addr) => internHex(state.hexIntern, addr),
                 );
                 if (!taskDumps.has(taskId)) taskDumps.set(taskId, []);
-                taskDumps.get(taskId).push({ timestamp: ts, callchain: chain });
+                taskDumps.get(taskId).push({
+                    timestamp: ts,
+                    callchain: chain,
+                    // Old schemas predate capture-time sampling. Missing is
+                    // unknown, not p=1: keep those dumps on the unweighted path.
+                    inclusionProbability: v.inclusion_probability != null
+                        ? num(v.inclusion_probability)
+                        : undefined,
+                });
                 break;
             }
             case "AllocEvent": {

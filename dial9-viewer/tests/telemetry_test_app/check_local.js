@@ -9,7 +9,7 @@ const { EVENT_TYPES, parseTrace, symbolizeChain } = require(path.join(
   uiDir,
   "trace_parser.js",
 ));
-const { buildSpanData, buildWorkerSpans, enclosingSpans } = require(
+const { buildSpanData, buildWorkerSpans, enclosingSpans, indexPollsByTask } = require(
   path.join(uiDir, "trace_analysis.js"),
 );
 
@@ -87,14 +87,16 @@ function fixtureFrames(frames) {
   return fixture;
 }
 
-function fixtureSpanForStack(frames, spanNames) {
-  for (let index = frames.length - 1; index >= 0; index--) {
-    const prefix = "dial9_fixture_mixed_";
-    if (!frames[index].startsWith(prefix)) continue;
-    const spanName = `dial9_fixture_span_${frames[index].slice(prefix.length)}`;
-    if (spanNames.has(spanName)) return { spanName };
-  }
-  return null;
+// Resolve observations only from telemetry, never from fixture function names.
+function spanForDump(taskId, timestamp, pollsByTask, allSpans) {
+  const poll = pollsByTask.get(taskId)?.find(
+    (poll) => poll.start <= timestamp && timestamp <= poll.end,
+  );
+  if (poll == null) return null;
+  return enclosingSpans(allSpans, {
+    timestamp,
+    fields: { worker_id: poll.workerId },
+  }).filter((span) => span.taskId === taskId).at(-1) ?? null;
 }
 
 function addStack(stacks, feature, frames) {
@@ -143,11 +145,7 @@ async function observeTrace(paths) {
     trace.tidBindings,
     trace.blockInPlaceGaps,
   ).allSpans;
-  const measuredSpanNames = new Set(
-    allSpans
-      .filter((span) => span.start >= start && span.end <= end)
-      .map((span) => span.spanName),
-  );
+  const pollsByTask = indexPollsByTask(workers);
 
   const stacks = new Map();
   const associations = new Set();
@@ -166,21 +164,22 @@ async function observeTrace(paths) {
     addAssociations(associations, "cpu", frames, active);
   }
 
-  for (const dumps of trace.taskDumps.values()) {
+  for (const [taskId, dumps] of trace.taskDumps) {
     for (const dump of dumps) {
       if (dump.timestamp < start || dump.timestamp > end) continue;
       const frames = fixtureFrames(
         callerFirstSymbols(dump.callchain, trace.callframeSymbols),
       );
       if (frames.length === 0) continue;
+      if (!(dump.inclusionProbability > 0 && dump.inclusionProbability <= 1)) {
+        throw new Error(`invalid task-dump inclusion probability: ${dump.inclusionProbability}`);
+      }
       addStack(stacks, "task_dump", frames);
       addAssociations(
         associations,
         "task_dump",
         frames,
-        // Capture timestamps are poll-start timestamps and can precede the
-        // nested SpanEnter; the innermost mixed fixture frame is unambiguous.
-        fixtureSpanForStack(frames, measuredSpanNames),
+        spanForDump(taskId, dump.timestamp, pollsByTask, allSpans),
       );
     }
   }
@@ -218,4 +217,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { observeTrace };
+module.exports = { observeTrace, spanForDump };

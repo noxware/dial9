@@ -169,6 +169,8 @@ declare module "*/trace_parser.js" {
   export interface TaskDump {
     timestamp: number;
     callchain: string[];
+    /** Absent in legacy traces; those dumps cannot be inverse-probability weighted. */
+    inclusionProbability?: number;
   }
 
   export interface ClockSyncAnchor {

@@ -30,7 +30,9 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 const DEFAULT_CYCLES: u64 = 40;
-const WARMUP_CYCLES: u64 = 4;
+// The first one-second task-dump epoch only calibrates. Warm up by elapsed
+// time, not cycle count, so measurement never includes that zero-coverage epoch.
+const WARMUP_DURATION: Duration = Duration::from_millis(1100);
 const CPU_QUANTUM: Duration = Duration::from_millis(10);
 const WAIT_QUANTUM: Duration = Duration::from_millis(10);
 const MAX_TRACE_SIZE: u64 = 100_000_000;
@@ -118,7 +120,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let handle = recorder.handle().clone();
     runtime.block_on(async move {
         dial9::spawn(async move {
-            run_cycles(WARMUP_CYCLES).await;
+            let warmup = Instant::now();
+            while warmup.elapsed() < WARMUP_DURATION {
+                run_cycles(1).await;
+            }
             emit_expectations(&handle);
             emit_marker(&handle, "measurement_start");
             run_cycles(args.cycles).await;
