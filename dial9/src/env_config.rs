@@ -175,7 +175,7 @@ struct ResolvedEnvConfig {
 
     task_dump_enabled: bool,
 
-    // None means TaskDumpConfig::default() owns the idle threshold.
+    // None means TaskDumpConfig::default() owns the capture budget.
     task_dump_idle_threshold: Option<Duration>,
 
     process_resource_usage_enabled: bool,
@@ -534,7 +534,7 @@ fn build_s3_config(config: ResolvedS3Config) -> dial9_destinations_s3::S3Config 
 /// | Variable | Default | Meaning |
 /// | --- | --- | --- |
 /// | `DIAL9_TASK_DUMP_ENABLED` | `false` | Capture async task dumps at idle yield points. |
-/// | `DIAL9_TASK_DUMP_IDLE_THRESHOLD_MS` | `10` | Mean idle duration for task dump sampling. |
+/// | `DIAL9_TASK_DUMP_IDLE_THRESHOLD_MS` | `100` | Deprecated: mean wall-clock capture interval per worker. |
 ///
 /// See [`TaskDumpConfig`] for configuration details.
 ///
@@ -689,6 +689,7 @@ fn env_recorder(resolved: ResolvedEnvConfig) -> (Option<Recorder>, RuntimeEnvCon
 /// instrumentation toggle, and task dumps.
 /// The task-dump settings selected by env config, or `None` when task dumps are
 /// off. An unset idle threshold leaves [`TaskDumpConfig`]'s own default.
+#[allow(deprecated)] // Preserve the legacy duration-based environment setting.
 fn env_task_dump_config(config: &RuntimeEnvConfig) -> Option<TaskDumpConfig> {
     config
         .task_dump_enabled
@@ -1303,8 +1304,8 @@ mod tests {
         );
         let (_recorder, runtime_config) = env_recorder(resolve_env_config(parse_env_config(&env)));
         assert_eq!(
-            env_task_dump_config(&runtime_config).map(|c| c.idle_threshold()),
-            Some(Duration::from_millis(25)),
+            env_task_dump_config(&runtime_config).map(|c| c.captures_per_second_per_worker()),
+            Some(40.0),
             "env config should configure task dumps"
         );
     }

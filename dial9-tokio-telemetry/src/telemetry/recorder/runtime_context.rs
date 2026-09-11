@@ -13,6 +13,8 @@ use crate::telemetry::task_metadata::TaskId;
 use dial9_core::handle::{Dial9Handle, set_tl_handle};
 use metrique_timesource::{Instant, time_source};
 use std::cell::{Cell, RefCell};
+#[cfg(feature = "taskdump")]
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::num::NonZeroU64;
 use std::sync::OnceLock;
@@ -44,6 +46,12 @@ pub(crate) struct RuntimeContext {
     /// Global worker IDs within this runtime.
     /// Populated lazily the first time each worker thread resolves its identity.
     pub worker_ids: Mutex<BTreeSet<u64>>,
+    #[cfg(feature = "taskdump")]
+    pub(super) task_dump_config: Option<crate::telemetry::TaskDumpConfig>,
+    /// A worker stores its calibration completion once; the source reads it
+    /// during flush. No shared access is needed on subsequent pending polls.
+    #[cfg(feature = "taskdump")]
+    task_dump_workers: Mutex<BTreeMap<u64, Arc<AtomicU64>>>,
 }
 
 thread_local! {
@@ -203,7 +211,7 @@ fn advance_park_counter(counter: u64, rate: u64) -> (u64, bool) {
 /// within one poll, or repeated allocations inside a tight loop.
 ///
 /// Used by:
-/// - the task-dump idle/wake bookkeeping in [`crate::task_dumped`].
+/// - worker-local task-dump rate calibration in [`crate::task_dumped`].
 #[cfg(any(feature = "taskdump", test))]
 pub(crate) fn poll_start_ts_monotonic() -> u64 {
     let raw = POLL_START_TS.with(|c| c.get()).map_or_else(
@@ -365,13 +373,28 @@ impl Source for TokioRuntimesSource {
         // Self-detected change: there is no external signal to keep in sync, so
         // a new caller that mutates runtime/worker metadata cannot forget to
         // announce it. The fingerprint is the runtime count plus the total
-        // number of registered workers across all runtimes. Both only ever grow
+        // number of registered workers and calibrated samplers. These only grow
         // (runtimes and workers are added, never removed) and each worker's
         // global id is fixed once assigned, so an unchanged fingerprint means
         // unchanged metadata. Cheap — a few uncontended read locks and no
         // allocation — so it runs every flush cycle.
         let contexts = self.contexts.lock().unwrap();
-        let fingerprint = contexts.len()
+        #[cfg(feature = "taskdump")]
+        let activated_workers = contexts
+            .iter()
+            .map(|ctx| {
+                ctx.task_dump_workers
+                    .lock()
+                    .unwrap()
+                    .values()
+                    .filter(|active| active.load(Ordering::Relaxed) != 0)
+                    .count()
+            })
+            .sum::<usize>();
+        #[cfg(not(feature = "taskdump"))]
+        let activated_workers = 0;
+        let fingerprint = activated_workers
+            + contexts.len()
             + contexts
                 .iter()
                 .map(|c| c.worker_ids.lock().unwrap().len())
@@ -383,6 +406,28 @@ impl Source for TokioRuntimesSource {
         // The writer's merge is additive, so emitting the full current snapshot
         // on each change is correct. A fingerprint bump from an unnamed runtime
         out.extend(contexts.iter().filter_map(|c| c.metadata_entry()));
+        #[cfg(feature = "taskdump")]
+        for ctx in contexts.iter() {
+            let Some(config) = ctx.task_dump_config else {
+                continue;
+            };
+            out.push(("task_dump.sampler".into(), "per_worker_bernoulli_v1".into()));
+            // Always use worker rates: metadata merges are additive, so a
+            // scalar could become stale if a different-rate runtime attaches.
+            for (worker, active) in ctx.task_dump_workers.lock().unwrap().iter() {
+                out.push((
+                    format!("task_dump.worker.{worker}.captures_per_second"),
+                    config.captures_per_second_per_worker().to_string(),
+                ));
+                let timestamp = active.load(Ordering::Relaxed);
+                if timestamp != 0 {
+                    out.push((
+                        format!("task_dump.worker.{worker}.sampling_active_ns"),
+                        timestamp.to_string(),
+                    ));
+                }
+            }
+        }
     }
 }
 
@@ -402,6 +447,10 @@ impl RuntimeContext {
             #[cfg(tokio_unstable)]
             worker_id_base: OnceLock::new(),
             worker_ids: Mutex::new(BTreeSet::new()),
+            #[cfg(feature = "taskdump")]
+            task_dump_config: None,
+            #[cfg(feature = "taskdump")]
+            task_dump_workers: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -542,6 +591,23 @@ fn register_worker_if_needed(ctx: &RuntimeContext, global_id: u64) {
     WORKER_REGISTERED.with(|cell| {
         if cell.get() != Some(key) {
             ctx.worker_ids.lock().unwrap().insert(global_id);
+            #[cfg(feature = "taskdump")]
+            {
+                let activation = ctx.task_dump_config.map(|_| {
+                    ctx.task_dump_workers
+                        .lock()
+                        .unwrap()
+                        .entry(global_id)
+                        .or_insert_with(|| Arc::new(AtomicU64::new(0)))
+                        .clone()
+                });
+                crate::task_dumped::set_worker_sampler(
+                    ctx.id,
+                    global_id,
+                    ctx.task_dump_config,
+                    activation,
+                );
+            }
             // Install the recorder handle on this thread. `on_thread_start` also
             // does this for pool threads, but a `current_thread` runtime's driver
             // thread gets no `on_thread_start`, so set it here on first poll.

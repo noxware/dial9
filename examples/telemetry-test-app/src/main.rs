@@ -30,7 +30,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 const DEFAULT_CYCLES: u64 = 40;
-const WARMUP_CYCLES: u64 = 4;
+// Exceed the sampler's one-second calibration epoch before measurement.
+const WARMUP_CYCLES: u64 = 20;
 const CPU_QUANTUM: Duration = Duration::from_millis(10);
 const WAIT_QUANTUM: Duration = Duration::from_millis(10);
 const MAX_TRACE_SIZE: u64 = 100_000_000;
@@ -108,7 +109,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .task_tracking_enabled(true)
             .task_dump_config(
                 TaskDumpConfig::builder()
-                    .idle_threshold(Duration::from_millis(1))
+                    .captures_per_second_per_worker(1_000)
                     .rng_seed(1)
                     .build(),
             )
