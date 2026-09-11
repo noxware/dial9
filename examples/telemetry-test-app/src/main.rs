@@ -30,10 +30,13 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 const DEFAULT_CYCLES: u64 = 40;
-// Exceed the sampler's one-second calibration epoch before measurement.
-const WARMUP_CYCLES: u64 = 20;
 const CPU_QUANTUM: Duration = Duration::from_millis(10);
 const WAIT_QUANTUM: Duration = Duration::from_millis(10);
+// Each mixed cycle has 4 CPU quanta (1 outer + 3 inner) and 3 wait quanta
+// (1 outer + 2 inner). Add one cycle to exceed the sampler's one-second calibration.
+const WARMUP_CYCLES: u64 = (Duration::from_secs(1).as_nanos()
+    / (4 * CPU_QUANTUM.as_nanos() + 3 * WAIT_QUANTUM.as_nanos())
+    + 1) as u64;
 const MAX_TRACE_SIZE: u64 = 100_000_000;
 
 const MIXED_CYCLE: &str = "dial9_fixture_mixed_cycle";
