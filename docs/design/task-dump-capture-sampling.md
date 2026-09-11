@@ -1,6 +1,6 @@
 # Task Dump Capture Sampling and Mixed Flamegraphs
 
-Status: proposed
+Status: capture sampling implemented (#842); mixed flamegraphs proposed (#843).
 
 ## Summary
 
@@ -81,8 +81,8 @@ let options = TokioAttachOptions::builder()
     .build();
 ```
 
-`captures_per_second_per_worker` is a positive integer. `0` is rejected at
-build time; callers disable task dumps by omitting `task_dump_config`.
+`captures_per_second_per_worker` is a positive integer. Its builder setter
+rejects `0`; callers disable task dumps by omitting `task_dump_config`.
 
 The default is 10 captures/s/worker. `rng_seed` remains available for
 deterministic tests.
@@ -98,6 +98,9 @@ captures-per-second setter converts frequency to that interval; the deprecated
 idle-threshold setter writes the same value. There must not be two independent
 production sampling controls.
 
+The private field may retain the name `idle_threshold` to preserve Bon's
+public builder type-state names; its value has the new capture-interval semantics.
+
 This preserves source compatibility while deliberately changing the behavior
 from "mean cumulative idle time between emitted dumps" to "mean wall-clock
 capture budget per worker." Release notes must call out that semantic change.
@@ -110,7 +113,7 @@ For:
 - `r`: configured captures/s/worker,
 - `c`: seconds per capture,
 
-the expected cost is:
+the expected selected-capture cost at a stable, sufficiently busy poll rate is:
 
 ```text
 captures/s = W * r
@@ -162,8 +165,53 @@ active CPU, or 0.0238% of runtime capacity. These are planning estimates from
 one representative workload, not universal bounds.
 
 The sampling decision still runs on each eligible pending transition. Its fast
-path should be a worker-local counter update and branch; stack capture,
-trimming, interning, and event encoding only run for selected transitions.
+path is a per-worker counter update and branch in a short critical section;
+stack capture, trimming, interning, and event encoding run only for selected
+transitions, after releasing the worker state.
+
+The capture model above excludes this per-transition cost. If worker `w` has
+`lambda_w` eligible transitions/s and one decision costs `s` seconds, the
+combined estimate is:
+
+```text
+added CPU cores ≈ sum(lambda_w) * s + W * r * c
+```
+
+Thus the capture budget bounds expected capture work, not all instrumentation
+work independently of poll rate. Quiet workers capture fewer than `r` times/s;
+abrupt rate changes can temporarily exceed it because calibration uses the
+previous epoch.
+
+### Implementation measurements
+
+`dial9-tokio-telemetry/benches/task_dump_sampling.rs` measures the actual private
+sampler implementation. Release measurements on this ARM64 workstation gave
+about 1.34 ns for the local counter reference, 5.73 ns for shared worker state
+with a fixed clock, and 20.87 ns with a real monotonic-clock read. These are
+decision costs, excluding stack capture and recorder instrumentation.
+
+Continuous contention from two and eight threads on one sampler measured
+about 9.23 and 22.90 ns per transition in aggregate, respectively (about 18.5
+and 183 ns per thread's transition including waiting). These stress contention
+that normally occurs only around worker handoffs; independent workers have
+separate mutexes. Thread scheduling affects these throughput measurements.
+
+The Linux ARM64 reusable VM benchmark also runs real instrumented Tokio polls,
+including selected captures, after calibrating at the workload's poll rate.
+The final run, with 40 samples over five seconds per case, measured
+515.90 ns/poll with task dumps disabled and 540.19 ns/poll at
+10 captures/s/worker: 24.29 ns, or 4.7%, added on this deliberately cheap
+`yield_now` workload. The respective confidence intervals were 506.00–524.50 ns
+and 528.08–550.29 ns. Shorter exploratory runs varied substantially, including
+the disabled baseline. These are local measurements, neither a universal
+overhead percentage nor a tail-latency bound.
+
+Run the decision benchmarks natively, and the full poll benchmark on Linux:
+
+```sh
+cargo bench -p dial9-tokio-telemetry --bench task_dump_sampling
+cargo bench -p dial9-tokio-telemetry --features taskdump --bench task_dump_sampling -- runtime --measurement-time 5 --warm-up-time 2 --sample-size 40
+```
 
 ## Sampling Design
 
@@ -179,6 +227,33 @@ An eligible item is an instrumented task poll that:
 Sampling is worker-local. Tasks may migrate between workers; the probability
 stored on an event is the probability used by the worker that made that
 capture.
+
+### Worker ownership and thread handoffs
+
+A logical Tokio worker is not tied to one OS thread. `block_in_place` can hand
+its core to another thread while the original task continues its poll. A
+`current_thread` runtime can also be driven from different threads over time.
+Thread-local ownership would restart calibration and split a worker's budget.
+
+The runtime context therefore owns one shared sampler per global worker ID;
+TLS caches only a reference to the current worker's sampler. A per-worker mutex
+serializes the decision because the original and replacement threads can both
+finish pending polls concurrently. It is never held across application polling,
+`trace_with`, stack trimming, or event encoding, and separate workers do not
+share it. Do not skip a transition on contention: that would introduce an
+unreported zero inclusion probability.
+
+Each task wrapper also retains a reference to the worker that started its poll.
+Running a nested runtime inside `block_in_place` can replace TLS before that
+poll finishes; selection must still use the enclosing poll's worker. The
+wrapper updates its reference only when the current worker changes, avoiding
+an `Arc` clone on every poll. This adds one pointer per instrumented future,
+not a separate sampler or capture budget per task.
+
+Read the monotonic clock at the pending transition inside this critical
+section. A cached poll-start timestamp can be in an earlier epoch after a long
+application poll. Benchmark both this decision and the full instrumented poll
+path; concurrency tests alone do not establish its cost.
 
 ### Coverage across tasks and workers
 
@@ -249,8 +324,8 @@ sampling-active timestamp
 ```
 
 Use the existing `SplitMix64` PRNG and derive independent worker seeds from
-`rng_seed` plus worker identity. No process-global RNG or atomic increment is
-needed on the poll path.
+`rng_seed` plus worker identity. There is no process-global RNG or capture
+counter on the steady-state poll path.
 
 ### Bursts and overload
 
@@ -428,8 +503,8 @@ The JS decoder must treat it as optional so old traces continue to load.
 configuration as source-owned segment metadata:
 
 ```text
-task_dump.captures_per_second_per_worker = "10"
 task_dump.sampler = "per_worker_bernoulli_v1"
+task_dump.worker.<worker_id>.captures_per_second = "10"
 task_dump.worker.<worker_id>.sampling_active_ns = "<monotonic timestamp>"
 ```
 
@@ -440,14 +515,23 @@ owns the attached-runtime configuration and worker set. As with existing
 runtime-to-worker metadata, the source adds them to the writer's merged
 metadata cache, which carries them across segment rotation.
 
-If one recorder has attached runtimes with different capture rates, the Tokio
-source must emit
-`task_dump.worker.<worker_id>.captures_per_second = "<rate>"` instead of the
-scalar rate shown above. A worker publishes `sampling_active_ns` once, when its
-calibration epoch ends. That one-time update is stored in the shared runtime
-context for the Tokio source to collect; it does not add shared-state access to
-the steady-state poll path. The `inclusion_probability` on each event remains
-the authoritative value for statistical weighting.
+Always emit rates per worker, including when all attached runtimes currently
+use the same rate. The writer's metadata merge is additive: publishing a scalar
+would leave a stale global value if a different-rate runtime attached later.
+
+A logical worker publishes `sampling_active_ns` once, when its calibration
+epoch ends. This atomic value survives thread handoffs and can be read by the
+Tokio source without taking the worker's sampling mutex. Publication is not
+repeated on subsequent pending transitions or when another thread drives the
+same worker. The `inclusion_probability` on each event remains the authoritative
+value for statistical weighting.
+
+Each activation also increments a runtime-owned counter once, with release
+ordering. The source acquires that counter to detect changes without scanning
+or locking all sampler entries on an unchanged flush. It takes the sampler
+registry lock only when rebuilding metadata; it never takes a sampling-decision
+mutex. The pre-existing runtime and worker-ID registry locks remain part of
+each metadata check.
 
 The CPU profiling source already emits these separate segment-metadata
 entries:
@@ -627,8 +711,8 @@ sampling noise. Task scope is the correct first interface.
 
 1. Replace `TaskDumpConfig.idle_threshold` internally with one worker capture
    interval and add the new builder setter plus deprecated aliases.
-2. Replace the thread-local task-dump config cell with worker-local sampler
-   state initialized by runtime thread hooks.
+2. Store sampler state per logical worker in the runtime context and cache its
+   reference in TLS from the runtime hooks.
 3. Move the sampling decision to the `Poll::Pending` path before
    `FrameBuf::capture`.
 4. Emit selected captures immediately and remove delayed idle-time emission
@@ -674,6 +758,14 @@ application should be introduced.
 - Regression test proving every selected capture whose re-poll remains pending
   emits and no second emission sampler remains.
 - Existing no-extra-wake/no-extra-poll and completed-on-repoll tests.
+- Worker state, probability, and one-time activation survive `block_in_place`
+  handoffs and a `current_thread` runtime changing driver threads.
+- The original and replacement threads can finish pending polls concurrently;
+  Shuttle exercises the shared decision state and activation publication.
+- A long application poll uses its pending-transition time for calibration.
+- A nested runtime cannot replace the sampler of the enclosing task's poll.
+- Benchmarks cover the local decision reference, shared state, clock reads,
+  independent workers, contention on one worker, and the full runtime poll path.
 - Trace round-trip tests for the new optional event field.
 - JS parser test for old events where `inclusion_probability` is undefined.
 - Viewer tests that mixed profiles:

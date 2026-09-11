@@ -29,9 +29,8 @@
 //! start. The buffers are reused across polls.
 
 use crate::primitives::sync::Arc;
-use crate::task_dump_sampler::TaskDumpSampler;
+use crate::task_dump_sampler::WorkerTaskDumpSampler;
 use crate::telemetry::format::TaskDumpEvent;
-use crate::telemetry::task_dump_config::TaskDumpConfig;
 use crate::telemetry::task_metadata::TaskId;
 use crate::telemetry::{Encodable, ThreadLocalEncoder};
 use dial9_core::handle::Dial9Handle;
@@ -40,84 +39,33 @@ use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
 
 /// Initial heap reservation for the instruction-pointer buffer on first capture.
 const FRAME_BUF_INITIAL_CAPACITY: usize = 256;
 
-struct WorkerSampler {
-    key: (u64, u64),
-    sampler: TaskDumpSampler,
-    activation: Arc<AtomicU64>,
-    published: bool,
-}
-
-#[derive(Default)]
-struct WorkerSamplers {
-    workers: Vec<WorkerSampler>,
-    current: Option<usize>,
-}
-
 crate::primitives::thread_local! {
-    // Switching between current-thread runtimes preserves each sampler. The
-    // active index is installed by the worker hook, never searched per poll.
-    static SAMPLERS: RefCell<WorkerSamplers> = const {
-        RefCell::new(WorkerSamplers { workers: Vec::new(), current: None })
-    };
+    // Cache the current worker's shared state. RuntimeContext owns its lifetime,
+    // so switching runtimes or moving a worker to another thread preserves it.
+    static SAMPLER: RefCell<Option<Arc<WorkerTaskDumpSampler>>> = const { RefCell::new(None) };
 }
 
 /// Install the sampler when a runtime hook resolves this worker's identity.
-pub(crate) fn set_worker_sampler(
-    runtime_id: u64,
-    worker_id: u64,
-    config: Option<TaskDumpConfig>,
-    activation: Option<Arc<AtomicU64>>,
-) {
-    SAMPLERS.with(|cell| {
-        let mut state = cell.borrow_mut();
-        state.current = config.map(|config| {
-            let key = (runtime_id, worker_id);
-            if let Some(index) = state.workers.iter().position(|w| w.key == key) {
-                return index;
-            }
-            let sampler = TaskDumpSampler::new(
-                config,
-                worker_id,
-                crate::telemetry::events::clock_monotonic_ns(),
-            );
-            let index = state.workers.len();
-            state.workers.push(WorkerSampler {
-                key,
-                sampler,
-                activation: activation.expect("configured worker has activation metadata"),
-                published: false,
-            });
-            index
-        });
-    });
+pub(crate) fn set_worker_sampler(sampler: Option<Arc<WorkerTaskDumpSampler>>) {
+    SAMPLER.with(|cell| *cell.borrow_mut() = sampler);
 }
 
 pub(crate) fn clear_worker_sampler() {
-    SAMPLERS.with(|cell| *cell.borrow_mut() = WorkerSamplers::default());
+    set_worker_sampler(None);
 }
 
-fn observe_pending() -> Option<f64> {
-    SAMPLERS.with(|cell| {
-        let mut state = cell.borrow_mut();
-        let index = state.current?;
-        let worker = &mut state.workers[index];
-        let selected = worker
-            .sampler
-            .observe_pending(crate::telemetry::recorder::poll_start_ts_monotonic());
-        if !worker.published
-            && let Some(timestamp) = worker.sampler.sampling_active_ns
-        {
-            worker.activation.store(timestamp, Ordering::Relaxed);
-            worker.published = true;
+fn refresh_worker_sampler(cached: &mut Option<Arc<WorkerTaskDumpSampler>>) {
+    SAMPLER.with(|cell| {
+        let current = cell.borrow();
+        if current.as_ref().map(Arc::as_ptr) != cached.as_ref().map(Arc::as_ptr) {
+            *cached = current.clone();
         }
-        selected
-    })
+    });
 }
 
 // ─── TaskDumped future wrapper ──────────────────────────────────────────────
@@ -131,6 +79,9 @@ pin_project! {
         handle: Dial9Handle,
         task_id: TaskId,
         frames: FrameBuf,
+        // Retain the poll's worker across nested runtimes that replace TLS.
+        // Refresh only on migration, avoiding an Arc clone on every poll.
+        sampler: Option<Arc<WorkerTaskDumpSampler>>,
         // Skip the next capture, but not the normal poll, to break capture-wake loops.
         just_captured: bool,
     }
@@ -143,6 +94,7 @@ impl<F> TaskDumped<F> {
             handle,
             task_id,
             frames: FrameBuf::new(),
+            sampler: None,
             just_captured: false,
         }
     }
@@ -152,8 +104,12 @@ impl<F: Future> Future for TaskDumped<F> {
     type Output = F::Output;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
         let mut this = self.project();
-        let configured = SAMPLERS.with(|cell| cell.borrow().current.is_some());
-        if !configured || !this.handle.is_enabled() {
+        refresh_worker_sampler(this.sampler);
+        let Some(sampler) = this.sampler.as_ref() else {
+            *this.just_captured = false;
+            return this.inner.poll(cx);
+        };
+        if !this.handle.is_enabled() {
             *this.just_captured = false;
             return this.inner.poll(cx);
         }
@@ -164,7 +120,9 @@ impl<F: Future> Future for TaskDumped<F> {
         if std::mem::take(this.just_captured) {
             return Poll::Pending;
         }
-        let Some(probability) = observe_pending() else {
+        let Some(probability) =
+            sampler.observe_pending(crate::telemetry::events::clock_monotonic_ns)
+        else {
             return Poll::Pending;
         };
         let result = this.frames.capture(this.inner.as_mut(), cx);
@@ -222,7 +180,7 @@ impl FrameBuf {
 
     /// Emit one `TaskDumpEvent` per recorded callchain, then clear.
     /// Trimming via `_Unwind_FindEnclosingFunction` happens here (emit path)
-    /// rather than during capture, keeping the hot path lock-free.
+    /// rather than inside the capture callback.
     fn emit(
         &mut self,
         handle: &Dial9Handle,
@@ -316,6 +274,8 @@ impl Encodable for TaskDumpData<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::primitives::sync::atomic::AtomicU64;
+    use crate::telemetry::TaskDumpConfig;
     use crate::telemetry::analysis_events::Dial9Event;
     use crate::telemetry::encoder::encode_single;
     use crate::telemetry::format::decode_events;
@@ -324,16 +284,14 @@ mod tests {
     fn install_test_sampler(calibrated: bool) {
         clear_worker_sampler();
         let config = TaskDumpConfig::builder().rng_seed(42).build();
-        set_worker_sampler(1, 0, Some(config), Some(Arc::new(AtomicU64::new(0))));
-        if calibrated {
-            SAMPLERS.with(|cell| {
-                cell.borrow_mut().workers[0].sampler = TaskDumpSampler::new(
-                    config,
-                    0,
-                    crate::telemetry::events::clock_monotonic_ns() - 1_000_000_000,
-                );
-            });
-        }
+        let now = crate::telemetry::events::clock_monotonic_ns();
+        let start = if calibrated { now - 1_000_000_000 } else { now };
+        set_worker_sampler(Some(Arc::new(WorkerTaskDumpSampler::new(
+            config,
+            0,
+            start,
+            Arc::new(AtomicU64::new(0)),
+        ))));
     }
 
     #[test]
@@ -360,20 +318,21 @@ mod tests {
         assert_eq!(future.frames.ips.capacity(), 0);
 
         // Exercise the calibrated geometric-skip path as well as warm-up.
-        SAMPLERS.with(|cell| {
+        SAMPLER.with(|cell| {
             let now = crate::telemetry::events::clock_monotonic_ns();
-            let mut sampler = TaskDumpSampler::new(
+            let sampler = WorkerTaskDumpSampler::new(
                 TaskDumpConfig::builder()
                     .captures_per_second_per_worker(1)
                     .rng_seed(42)
                     .build(),
                 0,
                 now - 1_000_000_000,
+                Arc::new(AtomicU64::new(0)),
             );
             for i in 0..100_000 {
-                assert_eq!(sampler.observe_pending(now - 1_000_000_000 + i), None);
+                assert_eq!(sampler.observe_pending(|| now - 1_000_000_000 + i), None);
             }
-            cell.borrow_mut().workers[0].sampler = sampler;
+            *cell.borrow_mut() = Some(Arc::new(sampler));
         });
         for _ in 0..100 {
             assert!(Pin::new(&mut future).poll(&mut cx).is_pending());
