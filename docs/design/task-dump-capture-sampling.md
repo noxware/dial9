@@ -4,10 +4,10 @@ Status: capture sampling implemented (#842); mixed flamegraphs proposed (#843).
 
 ## Summary
 
-Task dumps currently capture an async stack after every instrumented poll that
-returns `Pending`, then use an idle-time Poisson decision to choose which
-captures to emit. Sampling only at emission limits trace volume, but it does
-not limit the expensive stack captures.
+Before #842, task dumps captured an async stack after every instrumented poll
+that returned `Pending`, then used an idle-time Poisson decision to choose
+which captures to emit. Sampling only at emission limited trace volume, but
+did not limit the expensive stack captures.
 
 Replace that behavior with one worker-local sampling decision before stack
 capture:
@@ -213,6 +213,39 @@ cargo bench -p dial9-tokio-telemetry --bench task_dump_sampling
 cargo bench -p dial9-tokio-telemetry --features taskdump --bench task_dump_sampling -- runtime --measurement-time 5 --warm-up-time 2 --sample-size 40
 ```
 
+On 2026-09-15, a separate release-mode experiment at `cbff26c8` measured the
+real sampler through instrumented Tokio tasks in an 11-vCPU Linux ARM64 VM.
+Each case started with 200,000 live futures after calibration and ran three
+times. The 256-call case used 256,000 futures to form complete batches. Every
+future in a blocking case called `block_in_place` once and then yielded.
+
+| Workload | Workers | Mutex initially busy |
+|---|---:|---:|
+| 16 yields per future, no `block_in_place` | 1, 8, 16 | 0 / 28,799,730 acquisitions |
+| 50 us sleeps, up to 64 concurrent blocking calls | 1 | 1.34–1.43% |
+| Same sleeping workload | 8 | 0.25–0.26% |
+| Barrier-synchronized returns, 64 blocking calls per batch | 1 | 2.31–2.74% |
+| Same synchronized workload | 8 | 0.16–0.17% |
+| Barrier-synchronized returns, 256 blocking calls per batch | 1 | 0.63–0.79% |
+
+Batches of 8, 16, and 32 calls also stayed below the observed 2.74% maximum.
+The temporary probe used `try_lock`, timed the following `lock` only when the
+mutex was busy, and accumulated statistics in TLS after releasing the guard.
+Medians among busy acquisitions were 83–125 ns; the longest observed wait was
+580 us. No wait reached 1 ms. The probe perturbs timing, and finding the mutex
+busy does not imply a kernel park. These percentages measure occupied
+acquisitions, not total sampler overhead or production contention frequency.
+They support retaining the short critical section without claiming a portable
+latency bound. The experiment preceded the cache padding described below.
+
+A same-session native ARM64 benchmark compared the unpadded and padded state.
+The fixed-clock decision measured 5.37 and 5.39 ns, respectively; including
+the clock read measured 19.25 and 19.92 ns. With eight independent workers,
+aggregate time per transition decreased from 2.68 to 1.48 ns. These synthetic
+throughput results are not an application-wide speedup; the padding's purpose
+is to keep hot state off neighboring cache lines regardless of allocation
+placement.
+
 ## Sampling Design
 
 ### Population
@@ -230,6 +263,11 @@ capture.
 
 ### Worker ownership and thread handoffs
 
+The original proposal kept the sampler directly in TLS and did not account
+for overlapping polls during a worker-core handoff. The implementation changes
+that ownership and synchronization assumption; the per-worker calibration,
+capture budget, and event probabilities retain the proposed statistical model.
+
 A logical Tokio worker is not tied to one OS thread. `block_in_place` can hand
 its core to another thread while the original task continues its poll. A
 `current_thread` runtime can also be driven from different threads over time.
@@ -242,6 +280,13 @@ finish pending polls concurrently. It is never held across application polling,
 `trace_with`, stack trimming, or event encoding, and separate workers do not
 share it. Do not skip a transition on contention: that would introduce an
 unreported zero inclusion probability.
+
+Wrap the mutex and its mutable sampler state in `crossbeam_utils::CachePadded`,
+as the CPU sampler does for its shared counters. Its architecture-specific
+alignment and padding separate this hot state from neighboring workers, the
+enclosing `Arc` reference counts, and the activation metadata read by the
+source. This prevents false sharing at the library's assumed cache-line size;
+it does not remove contention between threads accessing the same worker.
 
 Each task wrapper also retains a reference to the worker that started its poll.
 Running a nested runtime inside `block_in_place` can replace TLS before that

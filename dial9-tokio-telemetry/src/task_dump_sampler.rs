@@ -5,6 +5,7 @@ use crate::primitives::sync::{
     atomic::{AtomicU64, Ordering},
 };
 use crate::telemetry::TaskDumpConfig;
+use crossbeam_utils::CachePadded;
 use dial9_core::sampling::SplitMix64;
 
 const EPOCH_NS: u64 = 1_000_000_000;
@@ -13,7 +14,8 @@ const EPOCH_NS: u64 = 1_000_000_000;
 /// A block_in_place caller can finish a poll concurrently with the replacement
 /// worker. Serialize only the sampling decision, never application polls or capture.
 pub(crate) struct WorkerTaskDumpSampler {
-    sampler: Mutex<TaskDumpSampler>,
+    // Keep hot writes off the cache lines used by Arc counts and source metadata.
+    sampler: CachePadded<Mutex<TaskDumpSampler>>,
     sampling_active_ns: AtomicU64,
     activated_workers: Arc<AtomicU64>,
 }
@@ -26,7 +28,7 @@ impl WorkerTaskDumpSampler {
         activated_workers: Arc<AtomicU64>,
     ) -> Self {
         Self {
-            sampler: Mutex::new(TaskDumpSampler::new(config, worker_id, now)),
+            sampler: CachePadded::new(Mutex::new(TaskDumpSampler::new(config, worker_id, now))),
             sampling_active_ns: AtomicU64::new(0),
             activated_workers,
         }
