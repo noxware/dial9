@@ -219,35 +219,6 @@ mod tests {
         assert_eq!(sequence(2), sequence(2));
         assert_ne!(sequence(2), sequence(3));
     }
-
-    #[test]
-    fn worker_handoffs_preserve_counts_and_activation() {
-        use crate::primitives::sync::Arc;
-        let worker = Arc::new(WorkerTaskDumpSampler::new(
-            TaskDumpConfig::builder()
-                .captures_per_second_per_worker(10)
-                .rng_seed(42)
-                .build(),
-            0,
-            0,
-            Arc::new(AtomicU64::new(0)),
-        ));
-        for epoch in 0..3 {
-            let worker = worker.clone();
-            std::thread::spawn(move || {
-                for i in 0..100 {
-                    worker.observe_pending(|| epoch * EPOCH_NS + i);
-                }
-                assert_eq!(worker.sampler.lock().unwrap().eligible, 100);
-                if epoch != 0 {
-                    assert_eq!(worker.sampler.lock().unwrap().probability, 0.1);
-                    assert_eq!(worker.sampling_active_ns(), Some(EPOCH_NS));
-                }
-            })
-            .join()
-            .unwrap();
-        }
-    }
 }
 
 #[cfg(all(test, shuttle))]

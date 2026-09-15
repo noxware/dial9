@@ -528,11 +528,9 @@ Field units (from `#[metrics(unit = ..)]` or the value type) are carried into th
 Task dumps are captured only for futures spawned through a dial9 spawner, such as `dial9::spawn`, with the `taskdump` feature on and `TaskDumpConfig` set. `tokio::spawn` tasks are recorded as usual, minus the dump.
 
 Use `TaskDumpConfig::builder().captures_per_second_per_worker(10).build()` to
-set the expected capture rate for each worker. Workers calibrate for one second
-before sampling. All instrumented tasks on a worker share this budget; the
-rate converges to the target under stable traffic. It uses the previous second's
-eligible-transition count, so repeated traffic changes can keep the average
-above the target; this is not a cap.
+set the per-worker target (default: 10 captures/s). Workers calibrate for one
+second before sampling. The target applies under stable traffic; rapid rate
+changes can exceed it.
 
 > Note: The taskdump feature requires Tokio's upstream taskdump support, which only compiles on Linux (aarch64, x86, x86_64) and only under `--cfg tokio_unstable`. Enabling it on another target, or without the flag, is a hard compile error from Tokio.
 

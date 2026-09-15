@@ -183,56 +183,30 @@ than `r` times/s; changing traffic can sustain higher rates, as described in
 
 ### Implementation measurements
 
-`dial9-tokio-telemetry/benches/task_dump_sampling.rs` measures the actual private
-sampler implementation. Native ARM64 decision benchmarks hold the epoch fixed
-at `p = 0.0001`; the clock variant also reads the real monotonic clock, without
-changing that probability. Thirty samples over two seconds per case measured
-1.27 ns for the local reference, 5.33 ns for shared worker state, and 19.34 ns
-with the clock read. Capture and recorder instrumentation are excluded.
+Release measurements on ARM64 using `benches/task_dump_sampling.rs`:
 
-Supporting release measurements cover the additional costs and ownership choices:
+| Scenario | Time per transition |
+|---|---:|
+| Native decision at fixed `p = 0.0001`: local / shared / shared + clock | 1.27 / 5.33 / 19.34 ns |
+| Linux instrumented `yield_now`, sampling disabled / 10 Hz | 406.12 / 425.56 ns |
+| Eight independent native workers, unpadded / padded (aggregate) | 2.68 / 1.48 ns |
 
-| Scenario | Result | Interpretation |
-|---|---:|---|
-| One sampler, 2 / 8 threads continuously contending | 9.23 / 22.90 ns per transition in aggregate | Synthetic throughput including thread scheduling; 18.5 / 183 ns per thread's transition |
-| Instrumented Linux ARM64 polls, disabled / 10 Hz | 406.12 / 425.56 ns per poll | Includes selected captures on a cheap `yield_now` workload |
-| Native decision, unpadded / padded state | 5.37 / 5.39 ns | No meaningful single-worker difference |
-| Eight independent native workers, unpadded / padded | 2.68 / 1.48 ns per transition in aggregate | Padding isolates hot state regardless of allocation placement |
-
-The runtime benchmark calibrates with its workload and uses 40 samples over
-five seconds per case. Its confidence intervals were 401.72–412.80 ns and
-423.67–428.02 ns: an observed 19.44 ns (4.8%) difference, not a portable
-overhead percentage or tail-latency bound. Padding throughput is likewise not
-an application-wide speedup.
-
-Run the decision benchmarks natively, and the full poll benchmark on Linux:
+The runtime measurement includes selected captures. These workload-specific
+results do not establish production overhead or tail-latency bounds.
+Run decisions natively and runtime polls on Linux; the runtime benchmark
+reports time per 10,000-poll batch and polls/s:
 
 ```sh
 cargo bench -p dial9-tokio-telemetry --bench task_dump_sampling
-cargo bench -p dial9-tokio-telemetry --features taskdump --bench task_dump_sampling -- runtime --measurement-time 5 --warm-up-time 2 --sample-size 40
+cargo bench -p dial9-tokio-telemetry --features taskdump --bench task_dump_sampling -- runtime
 ```
 
-The handoff experiment (`cbff26c8`, before padding) used an 11-vCPU Linux ARM64
-VM, 200,000 live instrumented futures after calibration, and three runs per
-case. The 256-call case used 256,000 futures for complete batches. Each future
-in a blocking case called `block_in_place` once and then yielded.
-
-| Workload | Workers | Mutex initially busy |
-|---|---:|---:|
-| 16 yields per future, no `block_in_place` | 1, 8, 16 | 0 / 28,799,730 acquisitions |
-| 50 us sleeps, up to 64 concurrent blocking calls | 1 | 1.34–1.43% |
-| Same sleeping workload | 8 | 0.25–0.26% |
-| Barrier-synchronized returns, 64 blocking calls per batch | 1 | 2.31–2.74% |
-| Same synchronized workload | 8 | 0.16–0.17% |
-| Barrier-synchronized returns, 256 blocking calls per batch | 1 | 0.63–0.79% |
-
-The probe used `try_lock`, timed the following `lock` only when busy, and
-accumulated statistics in TLS after releasing the guard. Busy-acquisition
-medians were 83–125 ns, with a 580 us maximum and none reaching 1 ms. Batches
-of 8, 16, and 32 calls also stayed below 2.74% busy acquisitions. The probe
-perturbs timing; busy does not imply a kernel park. These results support the
-short critical section, without estimating production contention frequency,
-total sampler overhead, or a portable latency bound.
+A separate Linux ARM64 stress experiment with 200,000–256,000 live futures
+observed no contention without `block_in_place` in 28,799,730 acquisitions.
+Forced handoffs produced 0.16–2.74% initially busy acquisitions. A temporary
+`try_lock` probe measured busy-acquisition medians of 83–125 ns, maximum 580 us.
+The probe perturbs timing; these are neither production contention rates nor
+counts of kernel parks.
 
 ## Sampling Design
 
@@ -251,37 +225,20 @@ capture.
 
 ### Worker ownership and thread handoffs
 
-A logical Tokio worker is not tied to one OS thread. `block_in_place` can hand
-its core to another thread while the original task continues its poll. A
-`current_thread` runtime can also be driven from different threads over time.
-Thread-local ownership would restart calibration and split a worker's budget.
+`RuntimeContext` owns one sampler per global worker ID. `block_in_place` can
+leave the original and replacement threads finishing polls concurrently, so a
+per-worker mutex protects selection. Application polling, capture, and emission
+run outside it. Contention must not discard transitions, which would introduce
+unreported zero inclusion probabilities. `CachePadded` isolates mutable state
+from neighboring workers, Arc counts, and metadata, as in the CPU sampler.
 
-The runtime context therefore owns one shared sampler per global worker ID;
-TLS caches only a reference to the current worker's sampler. A per-worker mutex
-serializes the decision because the original and replacement threads can both
-finish pending polls concurrently. It is never held across application polling,
-`trace_with`, stack trimming, or event encoding, and separate workers do not
-share it. Do not skip a transition on contention: that would introduce an
-unreported zero inclusion probability.
+TLS caches a reference, preserving calibration when a worker changes threads
+(including a `current_thread` runtime changing drivers). Each task retains that
+worker's `Arc` through its poll because a nested runtime can replace TLS. The
+reference updates only on migration, avoiding an Arc clone on every poll.
 
-Wrap the mutex and its mutable sampler state in `crossbeam_utils::CachePadded`,
-as the CPU sampler does for its shared counters. Its architecture-specific
-alignment and padding separate this hot state from neighboring workers, the
-enclosing `Arc` reference counts, and the activation metadata read by the
-source. This prevents false sharing at the library's assumed cache-line size;
-it does not remove contention between threads accessing the same worker.
-
-Each task wrapper also retains a reference to the worker that started its poll.
-Running a nested runtime inside `block_in_place` can replace TLS before that
-poll finishes; selection must still use the enclosing poll's worker. The
-wrapper updates its reference only when the current worker changes, avoiding
-an `Arc` clone on every poll. This adds one pointer per instrumented future,
-not a separate sampler or capture budget per task.
-
-Read the monotonic clock at the pending transition inside this critical
-section. A cached poll-start timestamp can be in an earlier epoch after a long
-application poll. Benchmark both this decision and the full instrumented poll
-path; concurrency tests alone do not establish its cost.
+Selection reads the clock after acquiring the mutex; a cached poll-start time
+could refer to an earlier epoch after a long application poll.
 
 ### Coverage across tasks and workers
 

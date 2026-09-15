@@ -491,6 +491,7 @@ fn selected_capture_emits_all_leaves_before_any_later_poll() {
 #[test]
 fn worker_metadata_survives_runtime_switches_and_segment_rotation() {
     use dial9_tokio_telemetry::telemetry::DiskBuffer;
+    use dial9_tokio_telemetry::telemetry::analysis_events::Dial9Event;
     use std::collections::BTreeMap;
 
     let dir = tempfile::tempdir().unwrap();
@@ -548,7 +549,7 @@ fn worker_metadata_survives_runtime_switches_and_segment_rotation() {
     recorder.graceful_shutdown(Duration::from_secs(1));
 
     let batches = batches.lock().unwrap();
-    let segments: Vec<Vec<serde_json::Value>> = batches
+    let segments: Vec<Vec<Dial9Event>> = batches
         .iter()
         .map(|b| decode_all(std::slice::from_ref(b)))
         .collect();
@@ -558,17 +559,12 @@ fn worker_metadata_survives_runtime_switches_and_segment_rotation() {
     for events in &segments {
         let mut metadata = BTreeMap::new();
         for event in events {
-            if event["event"] == "SegmentMetadataEvent" {
-                metadata.extend(
-                    event["entries"]
-                        .as_object()
-                        .unwrap()
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.as_str().unwrap().to_owned())),
-                );
-            }
-            if event["event"] == "TaskDumpEvent" {
-                captured_tasks.insert(event["task_id"].as_u64().unwrap());
+            match event {
+                Dial9Event::SegmentMetadataEvent(m) => metadata.extend(m.entries.clone()),
+                Dial9Event::TaskDumpEvent(d) => {
+                    captured_tasks.insert(d.task_id);
+                }
+                _ => {}
             }
         }
         if !metadata.contains_key("runtime.disabled") {

@@ -91,9 +91,11 @@ fn decisions(c: &mut Criterion) {
 
 #[cfg(feature = "taskdump")]
 fn runtime_polls(c: &mut Criterion) {
+    use criterion::Throughput;
     use telemetry::{Dial9HandleTokioExt, Dial9TokioHandle, MemoryBuffer, TokioAttachOptions};
     const POLLS: u64 = 10_000;
-    let mut group = c.benchmark_group("runtime_pending_poll");
+    let mut group = c.benchmark_group("runtime_pending_batch");
+    group.throughput(Throughput::Elements(POLLS));
     for enabled in [false, true] {
         let recorder = telemetry::recorder(MemoryBuffer::new(16 * 1024 * 1024).unwrap()).build();
         let mut builder = tokio::runtime::Builder::new_current_thread();
@@ -126,17 +128,7 @@ fn runtime_polls(c: &mut Criterion) {
             run_batch();
         }
         group.bench_function(if enabled { "sampling_10hz" } else { "disabled" }, |b| {
-            b.iter_custom(|iterations| {
-                let batches = iterations.div_ceil(POLLS);
-                let start = Instant::now();
-                for _ in 0..batches {
-                    run_batch();
-                }
-                // Criterion's iteration unit is one poll, not one batch.
-                start
-                    .elapsed()
-                    .mul_f64(iterations as f64 / (batches * POLLS) as f64)
-            });
+            b.iter(run_batch);
         });
         drop(rt);
         recorder.graceful_shutdown(Duration::from_secs(1));

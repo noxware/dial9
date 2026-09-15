@@ -53,15 +53,11 @@ fn check_worker_capture(events: Vec<Dial9Event>, before: u64, after: u64) {
         dumps(before) > 0,
         "control task must capture after calibration"
     );
-    eprintln!(
-        "worker={}, before captures={}, after captures={}",
-        worker(before),
-        dumps(before),
-        dumps(after)
-    );
     assert!(
         dumps(after) > 0,
-        "same worker must retain its calibrated sampler on another thread"
+        "worker {} must retain its calibrated sampler on another thread; before captures={}",
+        worker(before),
+        dumps(before)
     );
 }
 
