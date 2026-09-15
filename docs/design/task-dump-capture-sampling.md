@@ -89,6 +89,10 @@ deterministic tests.
 
 ### Compatibility
 
+`DIAL9_TASK_DUMP_PER_WORKER_HZ` configures the rate through the environment.
+A valid value takes precedence over the deprecated `DIAL9_TASK_DUMP_IDLE_THRESHOLD_MS`;
+otherwise the legacy interval or the default applies.
+
 `TaskDumpConfig` is a published builder API. Keep the existing
 `idle_threshold(Duration)` builder setter and `idle_threshold()` accessor as
 deprecated aliases during migration.

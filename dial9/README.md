@@ -185,6 +185,7 @@ such as `dial9::spawn`):
 | Name | Default | Meaning |
 | --- | --- | --- |
 | `DIAL9_TASK_DUMP_ENABLED` | `false` | Capture async task dumps at idle yield points. |
+| `DIAL9_TASK_DUMP_PER_WORKER_HZ` | `10` | Expected captures/s/worker; takes precedence over the legacy interval. |
 | `DIAL9_TASK_DUMP_IDLE_THRESHOLD_MS` | `100` | Deprecated: mean wall-clock capture interval per worker. |
 
 See [Task dumps](#task-dumps-linux-only) for setup and usage details.

@@ -47,6 +47,7 @@ const ENV_DIAL9_MEMORY_PROFILE_ENABLED: &str = "DIAL9_MEMORY_PROFILE_ENABLED";
 const ENV_DIAL9_MEMORY_SAMPLE_RATE_BYTES: &str = "DIAL9_MEMORY_SAMPLE_RATE_BYTES";
 const ENV_DIAL9_MEMORY_TRACK_LIVESET: &str = "DIAL9_MEMORY_TRACK_LIVESET";
 const ENV_DIAL9_TASK_DUMP_ENABLED: &str = "DIAL9_TASK_DUMP_ENABLED";
+const ENV_DIAL9_TASK_DUMP_PER_WORKER_HZ: &str = "DIAL9_TASK_DUMP_PER_WORKER_HZ";
 const ENV_DIAL9_TASK_DUMP_IDLE_THRESHOLD_MS: &str = "DIAL9_TASK_DUMP_IDLE_THRESHOLD_MS";
 const ENV_DIAL9_PROCESS_RESOURCE_USAGE_ENABLED: &str = "DIAL9_PROCESS_RESOURCE_USAGE_ENABLED";
 const ENV_DIAL9_PROCESS_RESOURCE_USAGE_SAMPLE_INTERVAL_MS: &str =
@@ -247,8 +248,12 @@ fn parse_env_config(env: &impl EnvSource) -> ParsedEnvConfig {
         memory_track_liveset: env.get_bool(ENV_DIAL9_MEMORY_TRACK_LIVESET),
         task_dump_enabled: env.get_bool(ENV_DIAL9_TASK_DUMP_ENABLED),
         task_dump_idle_threshold: env
-            .get_positive_u64(ENV_DIAL9_TASK_DUMP_IDLE_THRESHOLD_MS)
-            .map(Duration::from_millis),
+            .get_positive_u64(ENV_DIAL9_TASK_DUMP_PER_WORKER_HZ)
+            .map(|hz| Duration::from_secs_f64(1.0 / hz as f64).max(Duration::from_nanos(1)))
+            .or_else(|| {
+                env.get_positive_u64(ENV_DIAL9_TASK_DUMP_IDLE_THRESHOLD_MS)
+                    .map(Duration::from_millis)
+            }),
         process_resource_usage_enabled: env.get_bool(ENV_DIAL9_PROCESS_RESOURCE_USAGE_ENABLED),
         process_resource_usage_sample_interval: env
             .get_positive_u64(ENV_DIAL9_PROCESS_RESOURCE_USAGE_SAMPLE_INTERVAL_MS)
@@ -534,6 +539,7 @@ fn build_s3_config(config: ResolvedS3Config) -> dial9_destinations_s3::S3Config 
 /// | Variable | Default | Meaning |
 /// | --- | --- | --- |
 /// | `DIAL9_TASK_DUMP_ENABLED` | `false` | Capture async task dumps at idle yield points. |
+/// | `DIAL9_TASK_DUMP_PER_WORKER_HZ` | `10` | Expected captures/s/worker; takes precedence over the legacy interval. |
 /// | `DIAL9_TASK_DUMP_IDLE_THRESHOLD_MS` | `100` | Deprecated: mean wall-clock capture interval per worker. |
 ///
 /// See [`TaskDumpConfig`] for configuration details.
@@ -689,7 +695,7 @@ fn env_recorder(resolved: ResolvedEnvConfig) -> (Option<Recorder>, RuntimeEnvCon
 /// instrumentation toggle, and task dumps.
 /// The task-dump settings selected by env config, or `None` when task dumps are
 /// off. An unset idle threshold leaves [`TaskDumpConfig`]'s own default.
-#[allow(deprecated)] // Preserve the legacy duration-based environment setting.
+#[allow(deprecated)] // Both environment settings resolve to one capture interval.
 fn env_task_dump_config(config: &RuntimeEnvConfig) -> Option<TaskDumpConfig> {
     config
         .task_dump_enabled
@@ -1280,6 +1286,44 @@ mod tests {
             has_namespace_dir,
             "recorder_from_env should wire DIAL9_TRACE_DIR so trace segments land in <dir>/<boot_id>/"
         );
+    }
+
+    #[test]
+    fn task_dump_rate_env_takes_precedence_over_legacy_interval() {
+        for (hz, legacy_ms, expected) in [
+            (None, None, 10.0),
+            (Some(" 20 "), None, 20.0),
+            (None, Some("25"), 40.0),
+            (Some("20"), Some("25"), 20.0),
+            (Some("20"), Some("invalid"), 20.0),
+            (Some("0"), Some("25"), 40.0),
+            (Some("invalid"), Some("25"), 40.0),
+            (Some("invalid"), None, 10.0),
+        ] {
+            let mut env = FakeEnv::default().with("DIAL9_TASK_DUMP_ENABLED", "true");
+            if let Some(hz) = hz {
+                env = env.with("DIAL9_TASK_DUMP_PER_WORKER_HZ", hz);
+            }
+            if let Some(ms) = legacy_ms {
+                env = env.with("DIAL9_TASK_DUMP_IDLE_THRESHOLD_MS", ms);
+            }
+            let (_, config) = env_recorder(resolve_env_config(parse_env_config(&env)));
+            assert_eq!(
+                env_task_dump_config(&config)
+                    .unwrap()
+                    .captures_per_second_per_worker(),
+                expected,
+                "hz={hz:?}, legacy_ms={legacy_ms:?}"
+            );
+        }
+        let env = FakeEnv::default().with("DIAL9_TASK_DUMP_PER_WORKER_HZ", "4000000000");
+        let parsed = parse_env_config(&env);
+        assert_eq!(
+            parsed.task_dump_idle_threshold,
+            Some(Duration::from_nanos(1))
+        );
+        let (_, config) = env_recorder(resolve_env_config(parsed));
+        assert!(env_task_dump_config(&config).is_none());
     }
 
     #[test]
