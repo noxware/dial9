@@ -46,9 +46,10 @@ impl Default for TaskDumpConfig {
 impl TaskDumpConfig {
     /// Expected captures per second per runtime worker (default: 10).
     ///
-    /// This is a long-run budget, not a strict cap. Workers calibrate for one
-    /// second before capturing. Low-volume workers may capture every pending
-    /// transition and still remain below the target.
+    /// The rate converges to this target under stable traffic, using the previous
+    /// second's eligible-transition count. Repeated traffic changes can keep the
+    /// average above the target; it is not a cap. Workers calibrate for one second
+    /// before capturing. Low-volume workers may remain below the target.
     pub fn captures_per_second_per_worker(&self) -> f64 {
         1.0 / self.idle_threshold.as_secs_f64()
     }
@@ -71,6 +72,9 @@ impl TaskDumpConfig {
 
 impl<S: task_dump_config_builder::State> TaskDumpConfigBuilder<S> {
     /// Target a positive number of captures per second per worker. Defaults to 10.
+    ///
+    /// This targets stable traffic, not a strict cap; see
+    /// [`TaskDumpConfig::captures_per_second_per_worker`].
     ///
     /// Panics if `rate` is zero. Omit the runtime's `task_dump_config` to disable
     /// capture. Rates above nanosecond resolution are rounded to a 1ns interval.

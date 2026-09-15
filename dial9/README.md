@@ -530,7 +530,9 @@ Task dumps are captured only for futures spawned through a dial9 spawner, such a
 Use `TaskDumpConfig::builder().captures_per_second_per_worker(10).build()` to
 set the expected capture rate for each worker. Workers calibrate for one second
 before sampling. All instrumented tasks on a worker share this budget; the
-rate is a long-run target, not a strict per-second cap.
+rate converges to the target under stable traffic. It uses the previous second's
+eligible-transition count, so repeated traffic changes can keep the average
+above the target; this is not a cap.
 
 > Note: The taskdump feature requires Tokio's upstream taskdump support, which only compiles on Linux (aarch64, x86, x86_64) and only under `--cfg tokio_unstable`. Enabling it on another target, or without the flag, is a hard compile error from Tokio.
 

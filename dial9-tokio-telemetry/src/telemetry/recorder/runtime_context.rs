@@ -370,7 +370,7 @@ impl Source for TokioRuntimesSource {
         }
         self.last_fingerprint = fingerprint;
         // The writer's merge is additive, so emitting the full current snapshot
-        // on each change is correct. A fingerprint bump from an unnamed runtime
+        // on each change is correct.
         out.extend(contexts.iter().filter_map(|c| c.metadata_entry()));
         #[cfg(feature = "taskdump")]
         for ctx in contexts.iter() {
@@ -557,7 +557,6 @@ fn register_worker_if_needed(ctx: &RuntimeContext, global_id: u64) {
     let key = (ctx.id, global_id);
     WORKER_REGISTERED.with(|cell| {
         if cell.get() != Some(key) {
-            ctx.worker_ids.lock().unwrap().insert(global_id);
             #[cfg(feature = "taskdump")]
             {
                 let sampler = ctx.task_dump_config.map(|config| {
@@ -577,6 +576,9 @@ fn register_worker_if_needed(ctx: &RuntimeContext, global_id: u64) {
                 });
                 crate::task_dumped::set_worker_sampler(sampler);
             }
+            // Publish the worker after its sampler so a source snapshot that
+            // sees the worker-count change also sees its capture configuration.
+            ctx.worker_ids.lock().unwrap().insert(global_id);
             // Install the recorder handle on this thread. `on_thread_start` also
             // does this for pool threads, but a `current_thread` runtime's driver
             // thread gets no `on_thread_start`, so set it here on first poll.
@@ -1092,6 +1094,47 @@ mod tests {
                 "steady-state flush cycles must not allocate; a source is \
                  rebuilding metadata or the reused buffer lost its capacity"
             );
+        }
+    }
+}
+
+#[cfg(all(test, shuttle, feature = "taskdump"))]
+mod shuttle_tests {
+    use super::*;
+    use crate::primitives::thread;
+
+    dial9_core::shuttle_test! {
+        num_iters = 1_000, depth = 3;
+        fn worker_registration_publishes_capture_rate_before_activation() {
+            let mut ctx = RuntimeContext::new(
+                Some("main".into()),
+                Dial9Handle::disabled(),
+                Arc::new(AtomicU64::new(0)),
+            );
+            ctx.task_dump_config = Some(crate::telemetry::TaskDumpConfig::default());
+            let ctx = Arc::new(ctx);
+            let contexts = Arc::new(Mutex::new(vec![ctx.clone()]));
+            let mut source = TokioRuntimesSource::new(contexts);
+            let register = {
+                let ctx = ctx.clone();
+                thread::spawn(move || register_worker_if_needed(&ctx, 0))
+            };
+
+            // The writer merges metadata across flushes, including any that
+            // interleave with registration. Never activate or poll this worker:
+            // its configuration must not depend on a later capture repairing it.
+            let mut entries = Vec::new();
+            for _ in 0..3 {
+                source.segment_metadata(&mut entries);
+                shuttle::thread::yield_now();
+            }
+            register.join().unwrap();
+            source.segment_metadata(&mut entries);
+            assert!(entries.contains(&("runtime.main".into(), "0".into())));
+            assert!(entries.contains(&(
+                "task_dump.worker.0.captures_per_second".into(), "10".into(),
+            )));
+            assert_eq!(ctx.task_dump_activations.load(Ordering::Acquire), 0);
         }
     }
 }

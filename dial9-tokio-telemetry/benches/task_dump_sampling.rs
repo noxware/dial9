@@ -43,10 +43,16 @@ fn decisions(c: &mut Criterion) {
     group.bench_function("shared_worker", |b| {
         b.iter(|| black_box(worker.observe_pending(|| black_box(EPOCH))));
     });
-    let now = dial9_core::clock::clock_monotonic_ns();
-    let worker = WorkerTaskDumpSampler::new(config(), 0, now - EPOCH, Arc::new(AtomicU64::new(0)));
+    let worker = calibrated_worker(0);
     group.bench_function("shared_worker_with_clock", |b| {
-        b.iter(|| black_box(worker.observe_pending(dial9_core::clock::clock_monotonic_ns)));
+        b.iter(|| {
+            black_box(worker.observe_pending(|| {
+                // Isolate the clock read with the same probability as shared_worker.
+                // runtime_polls exercises real epoch changes.
+                black_box(dial9_core::clock::clock_monotonic_ns());
+                black_box(EPOCH)
+            }))
+        });
     });
     for threads in [2, 8] {
         for shared in [false, true] {
@@ -102,17 +108,7 @@ fn runtime_polls(c: &mut Criterion) {
             )
             .unwrap();
         let handle = Dial9TokioHandle::current();
-        rt.block_on(async {
-            handle
-                .spawn(async {
-                    tokio::time::sleep(Duration::from_millis(1050)).await;
-                })
-                .await
-                .unwrap();
-        });
-        // Calibrate at the benchmark's poll rate before measuring active sampling.
-        let warmup = Instant::now();
-        while warmup.elapsed() < Duration::from_secs(2) {
+        let run_batch = || {
             rt.block_on(async {
                 handle
                     .spawn(async {
@@ -123,22 +119,18 @@ fn runtime_polls(c: &mut Criterion) {
                     .await
                     .unwrap();
             });
+        };
+        // Calibrate at the benchmark's poll rate before measuring active sampling.
+        let warmup = Instant::now();
+        while warmup.elapsed() < Duration::from_secs(2) {
+            run_batch();
         }
         group.bench_function(if enabled { "sampling_10hz" } else { "disabled" }, |b| {
             b.iter_custom(|iterations| {
                 let batches = iterations.div_ceil(POLLS);
                 let start = Instant::now();
                 for _ in 0..batches {
-                    rt.block_on(async {
-                        handle
-                            .spawn(async {
-                                for _ in 0..POLLS {
-                                    tokio::task::yield_now().await;
-                                }
-                            })
-                            .await
-                            .unwrap();
-                    });
+                    run_batch();
                 }
                 // Criterion's iteration unit is one poll, not one batch.
                 start

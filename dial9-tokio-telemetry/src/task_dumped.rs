@@ -225,8 +225,7 @@ impl FrameBuf {
         let ips = &mut self.ips;
         let chains = &mut self.chains;
 
-        // `trace_with`'s outer closure is `FnOnce`; `Option::take` moves the
-        // pinned reference in without requiring a `Copy` bound or unsafe.
+        // Keep the re-poll's result so a completed future is returned to the caller.
         let mut result = Poll::Pending;
         tokio::runtime::dump::trace_with(
             || {

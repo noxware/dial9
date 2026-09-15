@@ -59,7 +59,7 @@ every attached runtime worker participates in that worker's sampler.
 - A process-wide mixed flamegraph in the first version.
 - Correcting for tasks that were not spawned through dial9 instrumentation.
 - A strict maximum number of captures in every wall-clock second. The
-  configured rate is a long-run expected rate.
+  configured rate is an expected rate under stable traffic.
 - Combining scheduler-event samples with on-CPU samples. Mixed flamegraphs use
   `CpuProfile` samples only.
 - Changing Tokio's task-dump capture mechanism.
@@ -171,40 +171,39 @@ transitions, after releasing the worker state.
 
 The capture model above excludes this per-transition cost. If worker `w` has
 `lambda_w` eligible transitions/s and one decision costs `s` seconds, the
-combined estimate is:
+combined estimate under stable, sufficiently busy traffic is:
 
 ```text
 added CPU cores ≈ sum(lambda_w) * s + W * r * c
 ```
 
-Thus the capture budget bounds expected capture work, not all instrumentation
-work independently of poll rate. Quiet workers capture fewer than `r` times/s;
-abrupt rate changes can temporarily exceed it because calibration uses the
-previous epoch.
+Per-transition cost still scales with poll rate. Quiet workers capture fewer
+than `r` times/s; changing traffic can sustain higher rates, as described in
+[Bursts and overload](#bursts-and-overload).
 
 ### Implementation measurements
 
 `dial9-tokio-telemetry/benches/task_dump_sampling.rs` measures the actual private
-sampler implementation. Release measurements on this ARM64 workstation gave
-about 1.34 ns for the local counter reference, 5.73 ns for shared worker state
-with a fixed clock, and 20.87 ns with a real monotonic-clock read. These are
-decision costs, excluding stack capture and recorder instrumentation.
+sampler implementation. Native ARM64 decision benchmarks hold the epoch fixed
+at `p = 0.0001`; the clock variant also reads the real monotonic clock, without
+changing that probability. Thirty samples over two seconds per case measured
+1.27 ns for the local reference, 5.33 ns for shared worker state, and 19.34 ns
+with the clock read. Capture and recorder instrumentation are excluded.
 
-Continuous contention from two and eight threads on one sampler measured
-about 9.23 and 22.90 ns per transition in aggregate, respectively (about 18.5
-and 183 ns per thread's transition including waiting). These stress contention
-that normally occurs only around worker handoffs; independent workers have
-separate mutexes. Thread scheduling affects these throughput measurements.
+Supporting release measurements cover the additional costs and ownership choices:
 
-The Linux ARM64 reusable VM benchmark also runs real instrumented Tokio polls,
-including selected captures, after calibrating at the workload's poll rate.
-The final run, with 40 samples over five seconds per case, measured
-515.90 ns/poll with task dumps disabled and 540.19 ns/poll at
-10 captures/s/worker: 24.29 ns, or 4.7%, added on this deliberately cheap
-`yield_now` workload. The respective confidence intervals were 506.00–524.50 ns
-and 528.08–550.29 ns. Shorter exploratory runs varied substantially, including
-the disabled baseline. These are local measurements, neither a universal
-overhead percentage nor a tail-latency bound.
+| Scenario | Result | Interpretation |
+|---|---:|---|
+| One sampler, 2 / 8 threads continuously contending | 9.23 / 22.90 ns per transition in aggregate | Synthetic throughput including thread scheduling; 18.5 / 183 ns per thread's transition |
+| Instrumented Linux ARM64 polls, disabled / 10 Hz | 406.12 / 425.56 ns per poll | Includes selected captures on a cheap `yield_now` workload |
+| Native decision, unpadded / padded state | 5.37 / 5.39 ns | No meaningful single-worker difference |
+| Eight independent native workers, unpadded / padded | 2.68 / 1.48 ns per transition in aggregate | Padding isolates hot state regardless of allocation placement |
+
+The runtime benchmark calibrates with its workload and uses 40 samples over
+five seconds per case. Its confidence intervals were 401.72–412.80 ns and
+423.67–428.02 ns: an observed 19.44 ns (4.8%) difference, not a portable
+overhead percentage or tail-latency bound. Padding throughput is likewise not
+an application-wide speedup.
 
 Run the decision benchmarks natively, and the full poll benchmark on Linux:
 
@@ -213,11 +212,10 @@ cargo bench -p dial9-tokio-telemetry --bench task_dump_sampling
 cargo bench -p dial9-tokio-telemetry --features taskdump --bench task_dump_sampling -- runtime --measurement-time 5 --warm-up-time 2 --sample-size 40
 ```
 
-On 2026-09-15, a separate release-mode experiment at `cbff26c8` measured the
-real sampler through instrumented Tokio tasks in an 11-vCPU Linux ARM64 VM.
-Each case started with 200,000 live futures after calibration and ran three
-times. The 256-call case used 256,000 futures to form complete batches. Every
-future in a blocking case called `block_in_place` once and then yielded.
+The handoff experiment (`cbff26c8`, before padding) used an 11-vCPU Linux ARM64
+VM, 200,000 live instrumented futures after calibration, and three runs per
+case. The 256-call case used 256,000 futures for complete batches. Each future
+in a blocking case called `block_in_place` once and then yielded.
 
 | Workload | Workers | Mutex initially busy |
 |---|---:|---:|
@@ -228,23 +226,13 @@ future in a blocking case called `block_in_place` once and then yielded.
 | Same synchronized workload | 8 | 0.16–0.17% |
 | Barrier-synchronized returns, 256 blocking calls per batch | 1 | 0.63–0.79% |
 
-Batches of 8, 16, and 32 calls also stayed below the observed 2.74% maximum.
-The temporary probe used `try_lock`, timed the following `lock` only when the
-mutex was busy, and accumulated statistics in TLS after releasing the guard.
-Medians among busy acquisitions were 83–125 ns; the longest observed wait was
-580 us. No wait reached 1 ms. The probe perturbs timing, and finding the mutex
-busy does not imply a kernel park. These percentages measure occupied
-acquisitions, not total sampler overhead or production contention frequency.
-They support retaining the short critical section without claiming a portable
-latency bound. The experiment preceded the cache padding described below.
-
-A same-session native ARM64 benchmark compared the unpadded and padded state.
-The fixed-clock decision measured 5.37 and 5.39 ns, respectively; including
-the clock read measured 19.25 and 19.92 ns. With eight independent workers,
-aggregate time per transition decreased from 2.68 to 1.48 ns. These synthetic
-throughput results are not an application-wide speedup; the padding's purpose
-is to keep hot state off neighboring cache lines regardless of allocation
-placement.
+The probe used `try_lock`, timed the following `lock` only when busy, and
+accumulated statistics in TLS after releasing the guard. Busy-acquisition
+medians were 83–125 ns, with a 580 us maximum and none reaching 1 ms. Batches
+of 8, 16, and 32 calls also stayed below 2.74% busy acquisitions. The probe
+perturbs timing; busy does not imply a kernel park. These results support the
+short critical section, without estimating production contention frequency,
+total sampler overhead, or a portable latency bound.
 
 ## Sampling Design
 
@@ -262,11 +250,6 @@ stored on an event is the probability used by the worker that made that
 capture.
 
 ### Worker ownership and thread handoffs
-
-The original proposal kept the sampler directly in TLS and did not account
-for overlapping polls during a worker-core handoff. The implementation changes
-that ownership and synchronization assumption; the per-worker calibration,
-capture budget, and event probabilities retain the proposed statistical model.
 
 A logical Tokio worker is not tied to one OS thread. `block_in_place` can hand
 its core to another thread while the original task continues its poll. A
@@ -374,7 +357,12 @@ counter on the steady-state poll path.
 
 ### Bursts and overload
 
-Bernoulli sampling bounds expected cost, not the exact count in every second.
+The controller converges to the target under stable traffic; it does not bound
+the average for arbitrary traffic. Repeated changes can keep the previous
+epoch's estimate stale. For example, alternating 100 and 1,000 eligible
+transitions per epoch at a target of 10 gives expected capture counts of 1 and
+100, averaging 50.5 captures per second.
+
 An emergency burst cap may protect against a stale rate estimate after a sharp
 poll-rate increase, but hitting it makes that worker/epoch statistically
 incomplete.
@@ -469,6 +457,13 @@ emission decision.
 The existing `just_captured` suppression remains necessary. The `trace_with`
 re-poll can cause an immediate wake; that synthetic follow-up poll must not
 consume a new sampling opportunity or start a capture loop.
+
+This relies on Tokio waking captured leaves. Tokio 1.53.1, currently in
+`Cargo.lock`, omits those wakes, so suppression can skip a real pending
+transition instead. In that case, recorded probabilities cover only eligible
+transitions, not all waits. [Tokio #8445](https://github.com/tokio-rs/tokio/pull/8445)
+restores deferred leaf wakes; this limitation applies until the dependency
+includes that fix.
 
 One `trace_with` call can produce more than one callchain. All callchains from
 the same capture share task ID, timestamp, and inclusion probability. Treat
