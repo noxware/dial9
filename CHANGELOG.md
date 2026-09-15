@@ -9,14 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Task dumps now sample before capturing, sharing a budget across instrumented
-  tasks on each runtime worker. `TaskDumpConfig::captures_per_second_per_worker`
-  defaults to 10, after a one-second calibration epoch. Selected pending
-  captures emit immediately with their capture timestamp and inclusion
-  probability. Segment metadata records each worker's rate and sampling start.
-  The deprecated `idle_threshold` builder/accessor and
-  `DIAL9_TASK_DUMP_IDLE_THRESHOLD_MS` remain available, but now mean a wall-clock
-  capture interval per worker, rather than cumulative idle time per task.
+- Task dumps now sample before capture (default target: 10 captures/s/worker).
+  Deprecated `idle_threshold` and `DIAL9_TASK_DUMP_IDLE_THRESHOLD_MS` now mean
+  a per-worker capture interval, rather than cumulative idle time per task.
 
 ### Fixed
 
