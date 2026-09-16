@@ -25,6 +25,7 @@ const DEFAULT_CAPTURE_INTERVAL: Duration = Duration::from_millis(100);
 ///
 /// </div>
 #[derive(Debug, Clone, Copy, bon::Builder)]
+#[builder(finish_fn(name = build_inner, vis = ""))]
 pub struct TaskDumpConfig {
     // Keep the field name for Bon's public IdleThreshold type-state API.
     // Its value is now the mean capture interval per worker.
@@ -76,8 +77,8 @@ impl<S: task_dump_config_builder::State> TaskDumpConfigBuilder<S> {
     /// This targets stable traffic, not a strict cap; see
     /// [`TaskDumpConfig::captures_per_second_per_worker`].
     ///
-    /// Panics if `rate` is zero. Omit the runtime's `task_dump_config` to disable
-    /// capture. Rates above nanosecond resolution are rounded to a 1ns interval.
+    /// `build()` panics if `rate` is zero. Omit the runtime's `task_dump_config`
+    /// to disable capture. Rates above nanosecond resolution use a 1ns interval.
     pub fn captures_per_second_per_worker(
         self,
         rate: u32,
@@ -85,10 +86,12 @@ impl<S: task_dump_config_builder::State> TaskDumpConfigBuilder<S> {
     where
         S::IdleThreshold: task_dump_config_builder::IsUnset,
     {
-        assert!(rate > 0, "captures_per_second_per_worker must be positive");
-        self.capture_interval(
-            Duration::from_secs_f64(1.0 / f64::from(rate)).max(Duration::from_nanos(1)),
-        )
+        self.capture_interval(if rate == 0 {
+            // Preserve the invalid rate for validation in build().
+            Duration::ZERO
+        } else {
+            Duration::from_secs_f64(1.0 / f64::from(rate)).max(Duration::from_nanos(1))
+        })
     }
 
     /// Set the mean wall-clock capture interval per worker.
@@ -125,6 +128,23 @@ impl<S: task_dump_config_builder::State> TaskDumpConfigBuilder<S> {
     }
 }
 
+impl<S: task_dump_config_builder::IsComplete> TaskDumpConfigBuilder<S> {
+    /// Build the task-dump configuration.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `captures_per_second_per_worker` was set to zero.
+    pub fn build(self) -> TaskDumpConfig {
+        let config = self.build_inner();
+        // Same panic convention as MemoryProfilingConfigBuilder; build-time validation per the design doc.
+        assert!(
+            !config.idle_threshold.is_zero(),
+            "captures_per_second_per_worker must be positive"
+        );
+        config
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,14 +161,19 @@ mod tests {
             .build();
         assert_eq!(config.captures_per_second_per_worker(), 40.0);
         assert_eq!(config.rng_seed(), Some(7));
+        assert_eq!(
+            TaskDumpConfig::builder()
+                .captures_per_second_per_worker(u32::MAX)
+                .build()
+                .idle_threshold,
+            Duration::from_nanos(1)
+        );
     }
 
     #[test]
-    #[should_panic(expected = "captures_per_second_per_worker must be positive")]
-    fn zero_rate_is_rejected() {
-        let _ = TaskDumpConfig::builder()
-            .captures_per_second_per_worker(0)
-            .build();
+    fn zero_rate_is_rejected_at_build() {
+        let builder = TaskDumpConfig::builder().captures_per_second_per_worker(0);
+        assert!(std::panic::catch_unwind(|| builder.build()).is_err());
     }
 
     #[test]

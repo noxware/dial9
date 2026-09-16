@@ -81,8 +81,8 @@ let options = TokioAttachOptions::builder()
     .build();
 ```
 
-`captures_per_second_per_worker` is a positive integer. Its builder setter
-rejects `0`; callers disable task dumps by omitting `task_dump_config`.
+`captures_per_second_per_worker` is a positive integer. `0` is rejected at
+build time; callers disable task dumps by omitting `task_dump_config`.
 
 The default is 10 captures/s/worker. `rng_seed` remains available for
 deterministic tests.
