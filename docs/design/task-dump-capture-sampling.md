@@ -1,13 +1,13 @@
 # Task Dump Capture Sampling and Mixed Flamegraphs
 
-Status: capture sampling implemented (#842); mixed flamegraphs proposed (#843).
+Status: proposed
 
 ## Summary
 
-Before #842, task dumps captured an async stack after every instrumented poll
-that returned `Pending`, then used an idle-time Poisson decision to choose
-which captures to emit. Sampling only at emission limited trace volume, but
-did not limit the expensive stack captures.
+Task dumps currently capture an async stack after every instrumented poll that
+returns `Pending`, then use an idle-time Poisson decision to choose which
+captures to emit. Sampling only at emission limits trace volume, but it does
+not limit the expensive stack captures.
 
 Replace that behavior with one worker-local sampling decision before stack
 capture:
@@ -102,9 +102,6 @@ captures-per-second setter converts frequency to that interval; the deprecated
 idle-threshold setter writes the same value. There must not be two independent
 production sampling controls.
 
-The private field may retain the name `idle_threshold` to preserve Bon's
-public builder type-state names; its value has the new capture-interval semantics.
-
 This preserves source compatibility while deliberately changing the behavior
 from "mean cumulative idle time between emitted dumps" to "mean wall-clock
 capture budget per worker." Release notes must call out that semantic change.
@@ -169,48 +166,9 @@ active CPU, or 0.0238% of runtime capacity. These are planning estimates from
 one representative workload, not universal bounds.
 
 The sampling decision still runs on each eligible pending transition. Its fast
-path is a per-worker counter update and branch in a short critical section;
-stack capture, trimming, interning, and event encoding run only for selected
-transitions, after releasing the worker state.
-
-The capture model above excludes this per-transition cost. If worker `w` has
-`lambda_w` eligible transitions/s and one decision costs `s` seconds, the
-combined estimate under stable, sufficiently busy traffic is:
-
-```text
-added CPU cores ≈ sum(lambda_w) * s + W * r * c
-```
-
-Per-transition cost still scales with poll rate. Quiet workers capture fewer
-than `r` times/s; changing traffic can sustain higher rates, as described in
-[Bursts and overload](#bursts-and-overload).
-
-### Implementation measurements
-
-Release measurements on ARM64 using `benches/task_dump_sampling.rs`:
-
-| Scenario | Time per transition |
-|---|---:|
-| Native decision at fixed `p = 0.0001`: local / shared / shared + clock | 1.27 / 5.33 / 19.34 ns |
-| Linux instrumented `yield_now`, sampling disabled / 10 Hz | 406.12 / 425.56 ns |
-| Eight independent native workers, unpadded / padded (aggregate) | 2.68 / 1.48 ns |
-
-The runtime measurement includes selected captures. These workload-specific
-results do not establish production overhead or tail-latency bounds.
-Run decisions natively and runtime polls on Linux; the runtime benchmark
-reports time per 10,000-poll batch and polls/s:
-
-```sh
-cargo bench -p dial9-tokio-telemetry --bench task_dump_sampling
-cargo bench -p dial9-tokio-telemetry --features taskdump --bench task_dump_sampling -- runtime
-```
-
-A separate Linux ARM64 stress experiment with 200,000–256,000 live futures
-observed no contention without `block_in_place` in 28,799,730 acquisitions.
-Forced handoffs produced 0.16–2.74% initially busy acquisitions. A temporary
-`try_lock` probe measured busy-acquisition medians of 83–125 ns, maximum 580 us.
-The probe perturbs timing; these are neither production contention rates nor
-counts of kernel parks.
+path is a worker-local counter update under the worker's mutex; stack capture,
+trimming, interning, and event encoding only run for selected transitions.
+This per-transition cost is not included in the estimate above.
 
 ## Sampling Design
 
@@ -229,20 +187,16 @@ capture.
 
 ### Worker ownership and thread handoffs
 
-`RuntimeContext` owns one sampler per global worker ID. `block_in_place` can
-leave the original and replacement threads finishing polls concurrently, so a
-per-worker mutex protects selection. Application polling, capture, and emission
-run outside it. Contention must not discard transitions, which would introduce
-unreported zero inclusion probabilities. `CachePadded` isolates mutable state
-from neighboring workers, Arc counts, and metadata, as in the CPU sampler.
+`block_in_place` can leave two threads finishing polls for the same logical
+worker. Keep one sampler per worker in `RuntimeContext`, with TLS caching a
+reference. A per-worker mutex protects selection, never application polling,
+capture, or emission. Contention must not discard sampling opportunities.
+Pad each worker's mutable state to avoid false sharing, as in the CPU sampler.
 
-TLS caches a reference, preserving calibration when a worker changes threads
-(including a `current_thread` runtime changing drivers). Each task retains that
-worker's `Arc` through its poll because a nested runtime can replace TLS. The
-reference updates only on migration, avoiding an Arc clone on every poll.
-
-Selection reads the clock after acquiring the mutex; a cached poll-start time
-could refer to an earlier epoch after a long application poll.
+Calibration survives thread changes, including `current_thread` driver changes.
+Each task retains its poll's worker reference across nested runtimes that may
+replace TLS. Selection reads the clock after acquiring the mutex, so long polls
+use their pending-transition time rather than an earlier poll-start timestamp.
 
 ### Coverage across tasks and workers
 
@@ -318,11 +272,8 @@ counter on the steady-state poll path.
 
 ### Bursts and overload
 
-The controller converges to the target under stable traffic; it does not bound
-the average for arbitrary traffic. Repeated changes can keep the previous
-epoch's estimate stale. For example, alternating 100 and 1,000 eligible
-transitions per epoch at a target of 10 gives expected capture counts of 1 and
-100, averaging 50.5 captures per second.
+The target applies under stable traffic. Repeated rate changes can keep the
+previous epoch's estimate stale and sustain an average above the target.
 
 An emergency burst cap may protect against a stale rate estimate after a sharp
 poll-rate increase, but hitting it makes that worker/epoch statistically
@@ -419,12 +370,10 @@ The existing `just_captured` suppression remains necessary. The `trace_with`
 re-poll can cause an immediate wake; that synthetic follow-up poll must not
 consume a new sampling opportunity or start a capture loop.
 
-This relies on Tokio waking captured leaves. Tokio 1.53.1, currently in
-`Cargo.lock`, omits those wakes, so suppression can skip a real pending
-transition instead. In that case, recorded probabilities cover only eligible
-transitions, not all waits. [Tokio #8445](https://github.com/tokio-rs/tokio/pull/8445)
-restores deferred leaf wakes; this limitation applies until the dependency
-includes that fix.
+Tokio 1.53.1 lacks the deferred leaf wakes restored by
+[Tokio #8445](https://github.com/tokio-rs/tokio/pull/8445). Until that fix is
+included, suppression can skip a real pending transition; probabilities describe
+eligible transitions, not all waits.
 
 One `trace_with` call can produce more than one callchain. All callchains from
 the same capture share task ID, timestamp, and inclusion probability. Treat
@@ -504,8 +453,8 @@ The JS decoder must treat it as optional so old traces continue to load.
 configuration as source-owned segment metadata:
 
 ```text
-task_dump.sampler = "per_worker_bernoulli_v1"
 task_dump.worker.<worker_id>.captures_per_second = "10"
+task_dump.sampler = "per_worker_bernoulli_v1"
 task_dump.worker.<worker_id>.sampling_active_ns = "<monotonic timestamp>"
 ```
 
@@ -516,23 +465,12 @@ owns the attached-runtime configuration and worker set. As with existing
 runtime-to-worker metadata, the source adds them to the writer's merged
 metadata cache, which carries them across segment rotation.
 
-Always emit rates per worker, including when all attached runtimes currently
-use the same rate. The writer's metadata merge is additive: publishing a scalar
-would leave a stale global value if a different-rate runtime attached later.
-
-A logical worker publishes `sampling_active_ns` once, when its calibration
-epoch ends. This atomic value survives thread handoffs and can be read by the
-Tokio source without taking the worker's sampling mutex. Publication is not
-repeated on subsequent pending transitions or when another thread drives the
-same worker. The `inclusion_probability` on each event remains the authoritative
-value for statistical weighting.
-
-Each activation also increments a runtime-owned counter once, with release
-ordering. The source acquires that counter to detect changes without scanning
-or locking all sampler entries on an unchanged flush. It takes the sampler
-registry lock only when rebuilding metadata; it never takes a sampling-decision
-mutex. The pre-existing runtime and worker-ID registry locks remain part of
-each metadata check.
+Always emit rates per worker. The writer's metadata merge is additive: a global
+rate would become stale if a runtime with a different rate attached later.
+A worker publishes `sampling_active_ns` once, when its calibration epoch ends.
+That update survives thread handoffs and is collected by the Tokio source
+without taking the sampling mutex. The `inclusion_probability` on each event
+remains the authoritative value for statistical weighting.
 
 The CPU profiling source already emits these separate segment-metadata
 entries:
@@ -759,14 +697,9 @@ application should be introduced.
 - Regression test proving every selected capture whose re-poll remains pending
   emits and no second emission sampler remains.
 - Existing no-extra-wake/no-extra-poll and completed-on-repoll tests.
-- Worker state, probability, and one-time activation survive `block_in_place`
-  handoffs and a `current_thread` runtime changing driver threads.
-- The original and replacement threads can finish pending polls concurrently;
-  Shuttle exercises the shared decision state and activation publication.
+- Worker calibration and metadata survive thread handoffs, concurrent pending
+  completions, and nested runtimes.
 - A long application poll uses its pending-transition time for calibration.
-- A nested runtime cannot replace the sampler of the enclosing task's poll.
-- Benchmarks cover the local decision reference, shared state, clock reads,
-  independent workers, contention on one worker, and the full runtime poll path.
 - Trace round-trip tests for the new optional event field.
 - JS parser test for old events where `inclusion_probability` is undefined.
 - Viewer tests that mixed profiles:
