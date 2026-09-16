@@ -205,7 +205,3 @@ harness = false
 [[bench]]
 name = "traced_poll_iai"
 harness = false
-
-[[bench]]
-name = "task_dump_sampling"
-harness = false
