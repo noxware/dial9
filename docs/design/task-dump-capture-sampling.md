@@ -59,7 +59,7 @@ every attached runtime worker participates in that worker's sampler.
 - A process-wide mixed flamegraph in the first version.
 - Correcting for tasks that were not spawned through dial9 instrumentation.
 - A strict maximum number of captures in every wall-clock second. The
-  configured rate is an expected rate under stable traffic.
+  configured rate is a sampling target.
 - Combining scheduler-event samples with on-CPU samples. Mixed flamegraphs use
   `CpuProfile` samples only.
 - Changing Tokio's task-dump capture mechanism.
@@ -114,7 +114,7 @@ For:
 - `r`: configured captures/s/worker,
 - `c`: seconds per capture,
 
-the expected selected-capture cost at a stable, sufficiently busy poll rate is:
+the expected cost is:
 
 ```text
 captures/s = W * r
@@ -166,7 +166,7 @@ active CPU, or 0.0238% of runtime capacity. These are planning estimates from
 one representative workload, not universal bounds.
 
 The sampling decision still runs on each eligible pending transition. Its fast
-path is a worker-local counter update under the worker's mutex; stack capture,
+path should be a worker-local counter update and branch; stack capture,
 trimming, interning, and event encoding only run for selected transitions.
 This per-transition cost is not included in the estimate above.
 
@@ -187,7 +187,9 @@ capture.
 
 ### Worker ownership and thread handoffs
 
-`block_in_place` can leave two threads finishing polls for the same logical
+During `block_in_place`, Tokio
+[hands the worker's core to another thread](https://github.com/tokio-rs/tokio/blob/eb9cdf2ff012ec22d4efd74cf46d04222264cd8e/tokio/src/runtime/scheduler/multi_thread/worker.rs#L486-L506).
+The original task can finish its poll concurrently with the replacement
 worker. Keep one sampler per worker in `RuntimeContext`, with TLS caching a
 reference. A per-worker mutex protects selection, never application polling,
 capture, or emission. Contention must not discard sampling opportunities.
@@ -272,8 +274,9 @@ counter on the steady-state poll path.
 
 ### Bursts and overload
 
-The target applies under stable traffic. Repeated rate changes can keep the
-previous epoch's estimate stale and sustain an average above the target.
+The cost model assumes workers have enough eligible transitions to reach the
+target, with similar counts in successive epochs. Repeated rate changes can
+keep the previous epoch's estimate stale and sustain an average above the target.
 
 An emergency burst cap may protect against a stale rate estimate after a sharp
 poll-rate increase, but hitting it makes that worker/epoch statistically
@@ -650,8 +653,8 @@ sampling noise. Task scope is the correct first interface.
 
 1. Replace `TaskDumpConfig.idle_threshold` internally with one worker capture
    interval and add the new builder setter plus deprecated aliases.
-2. Store sampler state per logical worker in the runtime context and cache its
-   reference in TLS from the runtime hooks.
+2. Replace the thread-local task-dump config cell with worker-local sampler
+   state initialized by runtime thread hooks.
 3. Move the sampling decision to the `Poll::Pending` path before
    `FrameBuf::capture`.
 4. Emit selected captures immediately and remove delayed idle-time emission
