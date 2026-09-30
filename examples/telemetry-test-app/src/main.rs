@@ -75,6 +75,10 @@ struct Args {
     /// Number of mixed workload cycles in the measurement window.
     #[arg(long, default_value_t = DEFAULT_CYCLES)]
     cycles: u64,
+
+    /// Experimental task-sampling target per worker.
+    #[arg(long, default_value_t = 1_000, value_parser = clap::value_parser!(u32).range(1..))]
+    task_sampling_per_worker_hz: u32,
 }
 
 #[derive(TraceEvent)]
@@ -112,7 +116,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "linux")]
     let options = options.task_sampling_config(
         TaskSamplingConfig::builder()
-            .captures_per_second_per_worker(1_000)
+            .captures_per_second_per_worker(args.task_sampling_per_worker_hz)
             .rng_seed(1)
             .build(),
     );

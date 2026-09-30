@@ -14,8 +14,17 @@ mod local_js;
 #[path = "telemetry_test_app/observations.rs"]
 mod observations;
 
-#[test]
-fn local_javascript_matches_the_self_described_fixture() {
+#[path = "telemetry_test_app/aggregate.rs"]
+mod aggregate;
+
+#[tokio::test]
+async fn production_analysis_matches_the_self_described_fixture() {
+    for (cycles, rate) in [(200, 1_000), (300, 10)] {
+        check_fixture(cycles, rate).await;
+    }
+}
+
+async fn check_fixture(cycles: u64, rate: u32) {
     use flate2::read::GzDecoder;
     use std::{ffi::OsStr, io::Read as _, path::Path, process::Command};
 
@@ -26,6 +35,12 @@ fn local_javascript_matches_the_self_described_fixture() {
     let output = Command::new(env!("CARGO"))
         .current_dir(workspace)
         .args(["run", "--release", "-p", "telemetry-test-app", "--"])
+        .args([
+            "--cycles",
+            &cycles.to_string(),
+            "--task-sampling-per-worker-hz",
+            &rate.to_string(),
+        ])
         .arg("--trace-dir")
         .arg(trace_dir.path())
         .output()
@@ -71,4 +86,7 @@ fn local_javascript_matches_the_self_described_fixture() {
         .expect("observe fixture through local JavaScript parser");
     observations::compare_observations("local JavaScript parser", &expected, &local)
         .expect("local JavaScript observations must match fixture expectations");
+    aggregate::check(trace_dir.path(), &raw_segments, &expected, rate < 1_000)
+        .await
+        .expect("Rust HTTP analysis must match fixture weights and structure");
 }
