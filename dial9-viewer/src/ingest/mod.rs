@@ -11,6 +11,7 @@ pub mod aggregate;
 pub(crate) mod decode;
 pub(crate) mod parquet_writer;
 pub(crate) mod refine;
+pub(crate) mod task_profile;
 
 /// Narrow harness for the external Criterion benchmark target.
 #[doc(hidden)]

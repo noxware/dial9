@@ -24,7 +24,7 @@
 
 mod attribution;
 pub(crate) mod clock;
-mod events;
+pub(crate) mod events;
 pub(crate) mod polls;
 pub(crate) mod spans;
 mod types;
@@ -112,6 +112,13 @@ pub(crate) fn decode_samples_with_stats(
     data: &[u8],
     source_key: &str,
 ) -> anyhow::Result<(DecodeResult, DecodeStats)> {
+    decode_segment_with_stats(data, source_key).map(|(result, stats, _profile)| (result, stats))
+}
+
+pub(crate) fn decode_segment_with_stats(
+    data: &[u8],
+    source_key: &str,
+) -> anyhow::Result<(DecodeResult, DecodeStats, super::task_profile::Segment)> {
     use std::time::Instant;
 
     let mut stats = DecodeStats::default();
@@ -119,6 +126,9 @@ pub(crate) fn decode_samples_with_stats(
     let events::DecodedTrace {
         interner,
         mut addr_to_keys,
+        profile_symbols,
+        task_samples,
+        metadata,
         mut events,
         mut clock_offset,
         mut first_clock_sync_mono,
@@ -138,6 +148,7 @@ pub(crate) fn decode_samples_with_stats(
     let timestamp_bounds = events
         .iter()
         .map(TraceEvent::timestamp_ns)
+        .chain(task_samples.iter().map(|sample| sample.timestamp_ns))
         .chain(legacy_enters.iter().map(|(_, event)| event.timestamp_ns))
         .chain(legacy_exits.iter().map(|(_, event)| event.timestamp_ns))
         .chain(legacy_closes.iter().map(|event| event.timestamp_ns))
@@ -265,6 +276,25 @@ pub(crate) fn decode_samples_with_stats(
             None => (path_boot_id, "flat"),
         };
 
+    // Flat, unnamespaced keys cannot safely join task IDs across files.
+    let recording_id = serde_json::to_string(&(
+        &parsed_host,
+        &parsed_service,
+        if single_event_identity_quality == "flat" {
+            source_key
+        } else {
+            &boot_id
+        },
+    ))?;
+    let task_profile = super::task_profile::Segment::resolve(
+        recording_id,
+        clock_offset,
+        metadata,
+        &events,
+        &task_samples,
+        &profile_symbols,
+    );
+
     // Reconstruct spans from the old-producer enter/exit/close events:
     //   SpanEnter:{target}::{name}:{file}:{line} → dial9.tokio.task_id
     //     (current) or worker_id (legacy), span_id, parent_span_id, span_name, ...
@@ -349,6 +379,7 @@ pub(crate) fn decode_samples_with_stats(
             resolved_spans,
         ),
         stats,
+        task_profile,
     ))
 }
 
