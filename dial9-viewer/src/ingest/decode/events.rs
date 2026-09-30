@@ -95,6 +95,8 @@ pub(crate) struct TaskSample {
     pub task_id: u64,
     pub callchain: Vec<u64>,
     pub inclusion_probability: f64,
+    pub idle_start_ns: Option<u64>,
+    pub idle_end_ns: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]

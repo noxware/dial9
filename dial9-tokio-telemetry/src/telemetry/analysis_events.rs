@@ -257,6 +257,10 @@ pub struct TaskSampleEvent {
     pub callchain: Vec<u64>,
     /// Probability used to select this pending transition for capture.
     pub inclusion_probability: f64,
+    /// Start of the completed wait (monotonic). Absent in older experimental traces.
+    pub idle_start_ns: Option<u64>,
+    /// Resumption before capture (monotonic). Absent in older experimental traces.
+    pub idle_end_ns: Option<u64>,
 }
 
 /// One task woke another task.
@@ -502,6 +506,8 @@ mod tests {
             task_id: TaskId::from_u32(17),
             callchain,
             inclusion_probability: 0.125,
+            idle_start_ns: 30_000,
+            idle_end_ns: 40_000,
         })
         .unwrap();
         let events = format::decode_events(&enc.finish()).unwrap();

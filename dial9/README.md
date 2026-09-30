@@ -538,6 +538,8 @@ For experimental task sampling, use `TaskSamplingConfig` through
 `TokioAttachOptions::builder().task_sampling_config(...)`. It requires the
 `unstable-task-sampling` feature and is not yet
 intended for production use.
+It requires Tokio's [deferred leaf wake fix](https://github.com/tokio-rs/tokio/pull/8445);
+until released, this workspace pins the fixed revision.
 Existing task-dump settings retain their behavior.
 
 > Note: The taskdump feature requires Tokio's upstream taskdump support, which only compiles on Linux (aarch64, x86, x86_64) and only under `--cfg tokio_unstable`. Enabling it on another target, or without the flag, is a hard compile error from Tokio.

@@ -152,7 +152,11 @@ fn segment(second: bool, sampled: bool) -> Vec<u8> {
             FieldDef::new("callchain", FieldType::StackFrames),
         ];
         if sampled {
-            fields.push(FieldDef::new("inclusion_probability", FieldType::F64));
+            fields.extend([
+                FieldDef::new("inclusion_probability", FieldType::F64),
+                FieldDef::new("idle_start_ns", FieldType::Varint),
+                FieldDef::new("idle_end_ns", FieldType::Varint),
+            ]);
         }
         let capture = encoder
             .register_schema(
@@ -167,9 +171,13 @@ fn segment(second: bool, sampled: bool) -> Vec<u8> {
         for chain in [vec![2, 1], vec![3, 1]] {
             let mut values = vec![FieldValue::Varint(7), FieldValue::StackFrames(chain.into())];
             if sampled {
-                values.push(FieldValue::F64(0.5));
+                values.extend([
+                    FieldValue::F64(0.5),
+                    FieldValue::Varint(100),
+                    FieldValue::Varint(200),
+                ]);
             }
-            encoder.write_event(&capture, 90, &values).unwrap();
+            encoder.write_event(&capture, 210, &values).unwrap();
         }
     }
     encoder.finish()
@@ -229,7 +237,7 @@ async fn mixed_api_reads_cross_segment_polls_and_reuses_parquet_without_changing
     assert_eq!(first["unit"], "nanoseconds");
     assert_eq!(first["files_folded"], 2);
     assert_eq!(first["cpu_ns"], 10.0);
-    assert_eq!(first["idle_ns"], 220.0);
+    assert_eq!(first["idle_ns"], 200.0);
     assert_eq!(first["capture_groups"], 1);
     assert_eq!(first["tree"]["children"]["[idle-at-await]"]["children"]["service::root"]["children"]["service::work"]["alternatives"].as_array().unwrap().len(), 2);
     let cached: Value = serde_json::from_str(&get(app.clone(), uri).await).unwrap();

@@ -4,6 +4,7 @@
 //! Linux/Tokio support as [`TaskDumpConfig`](super::TaskDumpConfig).
 //! Only Dial9-instrumented futures participate. Configure this through
 //! [`TokioAttachOptions`](super::TokioAttachOptions).
+//! Requires Tokio's [deferred leaf wake fix](https://github.com/tokio-rs/tokio/pull/8445).
 
 /// Experimental alternative to [`TaskDumpConfig`](super::TaskDumpConfig).
 ///

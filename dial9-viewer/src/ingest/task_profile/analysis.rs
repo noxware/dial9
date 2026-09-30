@@ -64,7 +64,7 @@ pub(crate) struct Response {
     pub idle_ns: f64,
     pub cpu_samples: usize,
     pub capture_groups: usize,
-    pub unpaired_capture_groups: usize,
+    pub incomplete_capture_groups: usize,
     pub invalid_capture_groups: usize,
     pub limitations: Vec<&'static str>,
     pub unavailable_reason: Option<&'static str>,
@@ -115,6 +115,7 @@ pub(crate) fn analyze(segments: &[Segment], request: Request<'_>) -> Response {
         limitations: vec![
             "Idle-at-await includes scheduler delay.",
             "Estimated total excludes synchronous off-CPU time inside polls.",
+            "Only waits completed in the available trace are represented.",
         ],
         ..Default::default()
     };
@@ -239,25 +240,26 @@ pub(crate) fn analyze(segments: &[Segment], request: Request<'_>) -> Response {
     }
 
     let mut groups: BTreeMap<u64, Vec<&Row>> = BTreeMap::new();
-    for row in segments.iter().flat_map(|s| &s.rows).filter(|row| {
-        row.kind == Kind::Capture && row.task_id == Some(request.task_id) && row.timestamp_ns < end
-    }) {
+    for row in segments
+        .iter()
+        .flat_map(|s| &s.rows)
+        .filter(|row| row.kind == Kind::Capture && row.task_id == Some(request.task_id))
+    {
         groups.entry(row.timestamp_ns).or_default().push(row);
     }
     for (timestamp, group) in groups {
-        let next = polls.partition_point(|poll| poll.timestamp_ns <= timestamp);
-        if next == 0 {
-            result.unpaired_capture_groups += 1;
-            continue;
-        }
-        let Some(next_poll) = polls.get(next) else {
-            result.unpaired_capture_groups += 1;
+        let (Some(idle_start), Some(idle_end)) = (group[0].idle_start_ns, group[0].idle_end_ns)
+        else {
+            result.incomplete_capture_groups += 1;
             continue;
         };
-        let overlap = next_poll
-            .timestamp_ns
+        if idle_start > idle_end || idle_end > timestamp {
+            result.invalid_capture_groups += 1;
+            continue;
+        }
+        let overlap = idle_end
             .min(end)
-            .saturating_sub(timestamp.max(active_start));
+            .saturating_sub(idle_start.max(active_start));
         if overlap == 0 {
             continue;
         }
@@ -268,10 +270,12 @@ pub(crate) fn analyze(segments: &[Segment], request: Request<'_>) -> Response {
             result.invalid_capture_groups += 1;
             continue;
         };
-        if group
-            .iter()
-            .any(|row| row.probability != Some(probability) || row.stack.is_empty())
-        {
+        if group.iter().any(|row| {
+            row.probability != Some(probability)
+                || row.stack.is_empty()
+                || row.idle_start_ns != Some(idle_start)
+                || row.idle_end_ns != Some(idle_end)
+        }) {
             result.invalid_capture_groups += 1;
             continue;
         }
@@ -296,19 +300,22 @@ pub(crate) fn analyze(segments: &[Segment], request: Request<'_>) -> Response {
         result.idle_ns += weight;
     }
     if result.capture_groups == 0 {
+        if result.incomplete_capture_groups > 0 {
+            return result.unavailable("missing_idle_intervals");
+        }
         return result.unavailable("no_usable_task_samples");
     }
     if !tree.weight_ns.is_finite() {
         return result.unavailable("invalid_total_weight");
     }
-    if result.unpaired_capture_groups > 0 {
+    if result.incomplete_capture_groups > 0 {
         result
             .limitations
-            .push("Captures without proven surrounding polls were excluded.");
+            .push("Older samples without completed idle intervals were excluded.");
     }
     if result.invalid_capture_groups > 0 {
         result.limitations.push(
-            "Capture groups with invalid or inconsistent probabilities/stacks were excluded.",
+            "Capture groups with invalid or inconsistent probabilities, intervals or stacks were excluded.",
         );
     }
     result.tree = Some(tree);
@@ -340,6 +347,8 @@ mod tests {
             worker_id: Some(0),
             tid: Some(42),
             probability: (kind == Kind::Capture).then_some(0.5),
+            idle_start_ns: (kind == Kind::Capture).then_some(100),
+            idle_end_ns: (kind == Kind::Capture).then_some(200),
             stack,
         }
     }
@@ -361,7 +370,7 @@ mod tests {
                 row(Kind::PollStart, 10),
                 row(Kind::Cpu, 20),
                 row(Kind::Cpu, 60),
-                row(Kind::Capture, 90),
+                row(Kind::Capture, 210),
                 row(Kind::PollEnd, 100),
                 row(Kind::PollStart, 200),
                 row(Kind::PollEnd, 220),
@@ -381,7 +390,7 @@ mod tests {
     #[test]
     fn weights_group_once_and_joins_polls_across_parquet_parts() {
         let mut a = fixture();
-        a.rows.insert(5, row(Kind::Capture, 90)); // a duplicate sibling
+        a.rows.insert(5, row(Kind::Capture, 210)); // a duplicate sibling
         let mut b = fixture();
         b.rows = a.rows.split_off(6); // poll end is in the following part
         let segments = [a, b]
@@ -394,14 +403,14 @@ mod tests {
         assert_eq!(result.cpu_samples, 1);
         assert_eq!(result.cpu_ns, 10.0);
         assert_eq!(result.capture_groups, 1);
-        assert_eq!(result.idle_ns, 220.0);
+        assert_eq!(result.idle_ns, 200.0);
         let tree = result.tree.unwrap();
-        assert_eq!(tree.weight_ns, 230.0);
+        assert_eq!(tree.weight_ns, 210.0);
         assert_eq!(tree.children.len(), 2);
     }
 
     #[test]
-    fn includes_a_capture_before_the_range_and_clips_both_ends() {
+    fn includes_a_capture_after_the_range_and_clips_both_ends() {
         let result = analyze(&[fixture()], request(120, 180));
         assert_eq!(result.idle_ns, 120.0);
         assert_eq!(result.cpu_ns, 0.0);
@@ -444,7 +453,7 @@ mod tests {
             assert!(result.tree.is_none());
         }
         let mut segment = fixture();
-        let mut sibling = row(Kind::Capture, 90);
+        let mut sibling = row(Kind::Capture, 210);
         sibling.probability = Some(0.25);
         segment.rows.push(sibling);
         assert_eq!(
@@ -482,26 +491,29 @@ mod tests {
         request.recording_id = Some("a");
         let result = analyze(&[a, b], request);
         assert_eq!(result.capture_groups, 1);
-        assert_eq!(result.idle_ns, 220.0);
+        assert_eq!(result.idle_ns, 200.0);
     }
 
     #[test]
-    fn an_unclosed_wait_is_not_extended_to_the_query_end() {
+    fn old_samples_without_interval_bounds_are_not_guessed() {
         let mut segment = fixture();
-        segment.rows.truncate(6);
+        segment.rows[4].idle_start_ns = None;
+        segment.rows[4].idle_end_ns = None;
         let result = analyze(&[segment], request(0, 230));
-        assert_eq!(result.unpaired_capture_groups, 1);
+        assert_eq!(result.incomplete_capture_groups, 1);
         assert_eq!(result.idle_ns, 0.0);
         assert!(result.tree.is_none());
     }
 
     #[test]
-    fn the_next_poll_start_ends_a_wait_even_when_that_polls_end_is_missing() {
+    fn a_capture_wake_does_not_shorten_the_completed_wait() {
         let mut segment = fixture();
-        segment.rows.pop();
+        segment
+            .rows
+            .extend([row(Kind::PollStart, 221), row(Kind::PollEnd, 222)]);
         let result = analyze(&[segment], request(0, 230));
         assert_eq!(result.capture_groups, 1);
-        assert_eq!(result.idle_ns, 220.0);
-        assert_eq!(result.unpaired_capture_groups, 0);
+        assert_eq!(result.idle_ns, 200.0);
+        assert_eq!(result.incomplete_capture_groups, 0);
     }
 }
