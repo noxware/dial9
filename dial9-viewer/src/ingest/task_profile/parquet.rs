@@ -27,6 +27,8 @@ pub(crate) fn write(segment: &Segment) -> anyhow::Result<Vec<u8>> {
         Field::new("worker_id", DataType::UInt64, true),
         Field::new("tid", DataType::UInt32, true),
         Field::new("probability", DataType::Float64, true),
+        Field::new("idle_start_ns", DataType::UInt64, true),
+        Field::new("idle_end_ns", DataType::UInt64, true),
         Field::new("frames", list_type.clone(), false),
         Field::new("files", list_type, false),
     ]));
@@ -62,6 +64,8 @@ pub(crate) fn write(segment: &Segment) -> anyhow::Result<Vec<u8>> {
             Arc::new(UInt64Array::from_iter(rows.iter().map(|r| r.worker_id))),
             Arc::new(UInt32Array::from_iter(rows.iter().map(|r| r.tid))),
             Arc::new(Float64Array::from_iter(rows.iter().map(|r| r.probability))),
+            Arc::new(UInt64Array::from_iter(rows.iter().map(|r| r.idle_start_ns))),
+            Arc::new(UInt64Array::from_iter(rows.iter().map(|r| r.idle_end_ns))),
             Arc::new(frames.finish()),
             Arc::new(files.finish()),
         ];
@@ -103,6 +107,8 @@ pub(crate) fn read(bytes: Bytes) -> anyhow::Result<Segment> {
         let workers = column::<UInt64Array>(&batch, "worker_id")?;
         let tids = column::<UInt32Array>(&batch, "tid")?;
         let probabilities = column::<Float64Array>(&batch, "probability")?;
+        let idle_starts = column::<UInt64Array>(&batch, "idle_start_ns")?;
+        let idle_ends = column::<UInt64Array>(&batch, "idle_end_ns")?;
         let frames = column::<ListArray>(&batch, "frames")?;
         let files = column::<ListArray>(&batch, "files")?;
         for i in 0..batch.num_rows() {
@@ -131,6 +137,8 @@ pub(crate) fn read(bytes: Bytes) -> anyhow::Result<Segment> {
                 worker_id: (!workers.is_null(i)).then(|| workers.value(i)),
                 tid: (!tids.is_null(i)).then(|| tids.value(i)),
                 probability: (!probabilities.is_null(i)).then(|| probabilities.value(i)),
+                idle_start_ns: (!idle_starts.is_null(i)).then(|| idle_starts.value(i)),
+                idle_end_ns: (!idle_ends.is_null(i)).then(|| idle_ends.value(i)),
                 stack,
             });
         }
@@ -155,6 +163,8 @@ mod tests {
                 worker_id: None,
                 tid: None,
                 probability: Some(0.25),
+                idle_start_ns: Some(40),
+                idle_end_ns: Some(120),
                 stack: vec![
                     Frame {
                         name: "root".into(),
@@ -174,6 +184,8 @@ mod tests {
         assert_eq!(output.metadata, input.metadata);
         assert_eq!(output.rows[0].stack, input.rows[0].stack);
         assert_eq!(output.rows[0].probability, Some(0.25));
+        assert_eq!(output.rows[0].idle_start_ns, Some(40));
+        assert_eq!(output.rows[0].idle_end_ns, Some(120));
         assert_eq!(output.rows[0].task_id, Some(7));
         assert_eq!(output.rows[0].worker_id, None);
     }

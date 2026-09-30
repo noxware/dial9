@@ -82,6 +82,7 @@ impl FrameBuf {
         handle: &Dial9Handle,
         task_id: TaskId,
         capture_ts: u64,
+        idle: std::ops::Range<u64>,
         inclusion_probability: f64,
     ) {
         self.emit_with(|chain| {
@@ -90,6 +91,8 @@ impl FrameBuf {
                 task_id,
                 callchain: chain,
                 inclusion_probability,
+                idle_start_ns: idle.start,
+                idle_end_ns: idle.end,
             });
         });
     }
@@ -183,6 +186,8 @@ pub(crate) struct TaskSampleData<'a> {
     pub(crate) task_id: TaskId,
     pub(crate) callchain: &'a [u64],
     pub(crate) inclusion_probability: f64,
+    pub(crate) idle_start_ns: u64,
+    pub(crate) idle_end_ns: u64,
 }
 
 #[cfg(feature = "unstable-task-sampling")]
@@ -194,6 +199,8 @@ impl Encodable for TaskSampleData<'_> {
             task_id: self.task_id,
             callchain: interned_callchain,
             inclusion_probability: self.inclusion_probability,
+            idle_start_ns: self.idle_start_ns,
+            idle_end_ns: self.idle_end_ns,
         });
     }
 }

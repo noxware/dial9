@@ -19,7 +19,7 @@ TaskSamplingConfig::builder()
 ```
 
 Each worker independently targets the configured capture rate across eligible
-pending transitions. A selected transition has no second emission-sampling
+resumptions after `Pending`. A selected transition has no second emission-sampling
 decision: if the `trace_with` re-poll remains pending, all captured callchains
 are emitted immediately. Each `TaskSampleEvent` records its inclusion probability
 so analysis can recover unbiased wait-time estimates.
@@ -172,12 +172,10 @@ This per-transition cost is not included in the estimate above.
 
 ### Population
 
-An eligible item is an instrumented task poll that:
-
-1. is running on a worker whose attached runtime has `TaskSamplingConfig` enabled;
-2. returns `Poll::Pending`;
-3. is not the immediate synthetic re-poll caused by the previous task-dump
-   capture.
+An eligible item is the resumption of an instrumented task after a normal
+`Pending` poll, on a worker with `TaskSamplingConfig` enabled. The continuation
+after a capture is excluded: it drives the future normally rather than
+recapturing the same await.
 
 Sampling is worker-local. Tasks may migrate between workers; the probability
 stored on an event is the probability used by the worker that made that
@@ -195,8 +193,7 @@ Pad each worker's mutable state to avoid false sharing, as in the CPU sampler.
 
 Calibration survives thread changes, including `current_thread` driver changes.
 Each task retains its poll's worker reference across nested runtimes that may
-replace TLS. Selection reads the clock after acquiring the mutex, so long polls
-use their pending-transition time rather than an earlier poll-start timestamp.
+replace TLS. Selection reads the clock after acquiring the mutex at resumption.
 
 ### Coverage across tasks and workers
 
@@ -235,9 +232,8 @@ p_w = min(1, target captures per second / lambda_w)
 Every eligible transition in the next epoch is selected independently with
 probability `p_w`.
 
-The probability is based only on observations that occurred before the
-selection. It is therefore independent of the future idle duration and can be
-used for inverse-probability weighting.
+The random selection uses the current worker probability. Record that exact
+probability for inverse-probability weighting of the completed wait.
 
 The first epoch is calibration-only. Mixed-flamegraph queries must clip away
 that warm-up interval. This avoids an arbitrary initial poll-rate estimate and
@@ -304,78 +300,32 @@ its own reusable frame buffer. Only the experimental policy uses a worker-local
 sampler: its futures polled on one worker contribute to and draw from the same
 budget. Legacy task dumps retain per-task idle-time sampling.
 
-The intended poll flow is:
+The experimental poll flow is:
 
-```rust
-fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
-    if task_dumps_disabled_or_recorder_paused() {
-        return self.inner.poll(cx);
-    }
+1. On the first poll, or immediately after a capture, poll normally. Save the
+   timestamp when that poll returns `Pending`.
+2. On resumption, consult the current worker's sampler before advancing the
+   future. If not selected, poll normally and update the pending timestamp.
+3. When selected, run `trace_with` first. Its leaf intercepts the suspended
+   await, even when the underlying operation is now ready.
+4. Emit the captured callchains with the completed idle interval, actual
+   capture timestamp, and selection probability. If the tracing poll returns
+   `Ready`, return that result without polling a completed future again.
+5. The capture-induced wake schedules a normal continuation. Exclude that
+   continuation from sampling to prevent a capture loop.
 
-    let result = self.inner.poll(cx);
-    let Poll::Pending = result else {
-        self.frames.clear();
-        return result;
-    };
+**Correction to the original design:** capture-to-next-poll timing measures
+Tokio's synthetic wake, not the application wait. The E2E fixture exposed this
+with the deferred leaf wakes restored by
+[Tokio #8445](https://github.com/tokio-rs/tokio/pull/8445). Capturing on resumption
+and recording the completed interval avoids that ambiguity. An outer-task wake
+cannot replace this Tokio fix: combinators may own separate leaf wakers.
 
-    // trace_with re-polls using the real waker. Do not treat the resulting
-    // synthetic wake as another sampling opportunity.
-    if self.just_captured {
-        self.just_captured = false;
-        return Poll::Pending;
-    }
-
-    // observe_pending updates calibration on every eligible transition.
-    // A selection returns the exact probability used for this transition.
-    let Some(inclusion_probability) =
-        WORKER_TASK_DUMP_SAMPLER.with(|s| s.observe_pending(monotonic_now()))
-    else {
-        return Poll::Pending;
-    };
-
-    match self.frames.capture(self.inner.as_mut(), cx) {
-        Poll::Ready(output) => {
-            // The trace_with re-poll completed the future, so there is no
-            // following idle interval to represent.
-            self.frames.clear();
-            Poll::Ready(output)
-        }
-        Poll::Pending => {
-            self.just_captured = true;
-            self.frames.emit_all_callchains(
-                self.task_id,
-                monotonic_now(),
-                inclusion_probability,
-            );
-            Poll::Pending
-        }
-    }
-}
-```
-
-The snippet is structural pseudocode; projection and recorder plumbing are
-omitted. The ordering is normative:
-
-1. poll the inner future normally;
-2. when it returns `Pending`, suppress a capture-induced re-poll if needed;
-3. update and consult the current worker's sampler;
-4. only when selected, run `trace_with` and collect raw instruction pointers;
-5. if the capture re-poll is still pending, trim and emit every callchain with
-   the selected transition's probability; and
-6. clear the reusable frame buffer.
-
-Emission happens in the same selected path. The experimental policy does not
-retain a captured stack until a later poll or apply an idle-time emission
-decision.
-
-The existing `just_captured` suppression remains necessary. The `trace_with`
-re-poll can cause an immediate wake; that synthetic follow-up poll must not
-consume a new sampling opportunity or start a capture loop.
-
-Tokio 1.53.1 lacks the deferred leaf wakes restored by
-[Tokio #8445](https://github.com/tokio-rs/tokio/pull/8445). Until that fix is
-included, suppression can skip a real pending transition; probabilities describe
-eligible transitions, not all waits.
+Only completed waits are represented. A task aborted without resuming, or a
+wait still open at the end of the available trace, contributes no inferred
+idle duration. Explicit bounds also let a later capture describe a wait that
+started in an earlier trace segment. Older experimental events without those
+bounds remain readable but cannot provide correct mixed-profile weights.
 
 One `trace_with` call can produce more than one callchain. All callchains from
 the same capture share task ID, timestamp, and inclusion probability. Treat
@@ -445,6 +395,8 @@ struct TaskSampleEvent {
     task_id: TaskId,
     callchain: InternedStackFrames,
     inclusion_probability: f64,
+    idle_start_ns: u64,
+    idle_end_ns: u64,
 }
 ```
 
@@ -507,7 +459,7 @@ For any stack group `G`:
 estimated wait time(G) = sum(wait weight_j where stack_j belongs to G)
 ```
 
-Because the decision is made before `d_j` is known:
+Conditional on the completed wait and the probability used for its random selection:
 
 ```text
 E[I_j * d_j / p_j] = d_j
@@ -572,8 +524,8 @@ but do not offer the mixed view.
 
 For each selected capture group:
 
-1. identify the idle interval beginning at its capture timestamp;
-2. end the interval at the next poll start for that task;
+1. read the completed interval `[idle_start_ns, idle_end_ns)`;
+2. reject missing, invalid, or inconsistent bounds within a capture group;
 3. intersect the interval with the selected time window;
 4. select its representative stack using the multi-callchain rules above; and
 5. divide the overlap duration by `inclusion_probability`.

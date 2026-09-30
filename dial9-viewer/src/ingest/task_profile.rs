@@ -59,6 +59,8 @@ pub(crate) struct Row {
     pub worker_id: Option<u64>,
     pub tid: Option<u32>,
     pub probability: Option<f64>,
+    pub idle_start_ns: Option<u64>,
+    pub idle_end_ns: Option<u64>,
     pub stack: Stack,
 }
 
@@ -118,6 +120,8 @@ impl Segment {
                 worker_id: None,
                 tid: None,
                 probability: None,
+                idle_start_ns: None,
+                idle_end_ns: None,
                 stack: Arc::from([]),
             };
             match event {
@@ -155,6 +159,8 @@ impl Segment {
             worker_id: None,
             tid: None,
             probability: Some(capture.inclusion_probability),
+            idle_start_ns: capture.idle_start_ns,
+            idle_end_ns: capture.idle_end_ns,
             stack: resolve_stack(&capture.callchain),
         }));
         segment
