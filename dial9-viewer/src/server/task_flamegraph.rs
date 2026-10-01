@@ -14,6 +14,10 @@ use crate::ingest::{
     task_profile::{self, analysis},
 };
 
+// Poll reconstruction needs the parts together; bound retained rows even when
+// all matching files were already folded by an earlier query.
+const MAX_PROFILE_ROWS: usize = 2_000_000;
+
 #[derive(Deserialize)]
 pub(crate) struct Params {
     task_id: u64,
@@ -129,6 +133,7 @@ pub(crate) async fn get_task_flamegraph(
         }));
     }
     let mut segments = Vec::new();
+    let mut rows = 0usize;
     for key in keys {
         let part = aggregate::task_profile_part_key(&agg.output_prefix, &key);
         let bytes = agg
@@ -140,6 +145,20 @@ pub(crate) async fn get_task_flamegraph(
             .await
             .map_err(|e| failure(e.into()))?
             .map_err(failure)?;
+        if params
+            .recording_id
+            .as_ref()
+            .is_some_and(|id| id != &segment.recording_id)
+        {
+            continue;
+        }
+        rows = rows.saturating_add(segment.rows.len());
+        if rows > MAX_PROFILE_ROWS {
+            return Err((
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "task profile exceeds the analysis row limit; select fewer trace files".into(),
+            ));
+        }
         segments.push(segment);
     }
     let profile = tokio::task::spawn_blocking(move || {

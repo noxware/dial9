@@ -348,11 +348,20 @@ fn builtin_signatures(schema_name: &str) -> Option<&'static [BuiltinFieldSignatu
             ],
         ]),
         "TaskDumpEvent" => Some(&[&[("task_id", V), ("callchain", PStack)]]),
-        "TaskSampleEvent" => Some(&[&[
-            ("task_id", V),
-            ("callchain", PStack),
-            ("inclusion_probability", FieldType::F64),
-        ]]),
+        "TaskSampleEvent" => Some(&[
+            &[
+                ("task_id", V),
+                ("callchain", PStack),
+                ("inclusion_probability", FieldType::F64),
+            ],
+            &[
+                ("task_id", V),
+                ("callchain", PStack),
+                ("inclusion_probability", FieldType::F64),
+                ("idle_start_ns", V),
+                ("idle_end_ns", V),
+            ],
+        ]),
         "AllocEvent" => Some(&[
             &[
                 ("tid", U32),
@@ -1022,8 +1031,11 @@ fn classify_field(schema_name: &str, field_name: &str, ft: FieldType) -> FieldRe
         };
     }
 
-    // alloc_timestamp_ns: relative timestamp reference
-    if field_name == "alloc_timestamp_ns" {
+    // Timestamp references move with their containing recording.
+    if field_name == "alloc_timestamp_ns"
+        || (schema_name == "TaskSampleEvent"
+            && matches!(field_name, "idle_start_ns" | "idle_end_ns"))
+    {
         return FieldRepeatMeta {
             semantics: FieldSemantics::TimestampRef,
             namespace: None,
@@ -3453,9 +3465,9 @@ fn shape_value_to_field_value<W: Write>(
                     }
                 }
                 FieldSemantics::TimestampRef => {
-                    // alloc_timestamp_ns: add repetition time shift
+                    // Relative timestamp references share the repetition shift.
                     v.checked_add(timeline.time_shift_ns)
-                        .ok_or_else(|| anyhow::anyhow!("alloc_timestamp_ns overflow"))?
+                        .ok_or_else(|| anyhow::anyhow!("timestamp reference overflow"))?
                 }
                 FieldSemantics::RealtimeOffset => {
                     // B - CLOCK PRIVACY: configured synthetic epoch + event
@@ -4719,6 +4731,66 @@ mod tests {
             alloc_ts_values[1] > alloc_ts_values[0],
             "alloc_timestamp_ns should shift with repetition"
         );
+    }
+
+    #[test]
+    fn task_sample_completed_wait_shifts_with_capture() {
+        let mut enc = Encoder::new();
+        let start = enc
+            .register_schema(
+                "TaskTerminateEvent",
+                vec![FieldDef::new("task_id", FieldType::Varint)],
+            )
+            .unwrap();
+        enc.write_event(&start, BASE_TS, &[FieldValue::Varint(1)])
+            .unwrap();
+        let schema = enc
+            .register_schema(
+                "TaskSampleEvent",
+                vec![
+                    FieldDef::new("task_id", FieldType::Varint),
+                    FieldDef::new("callchain", FieldType::PooledStackFrames),
+                    FieldDef::new("inclusion_probability", FieldType::F64),
+                    FieldDef::new("idle_start_ns", FieldType::Varint),
+                    FieldDef::new("idle_end_ns", FieldType::Varint),
+                ],
+            )
+            .unwrap();
+        let stack = enc.intern_stack_frames(&[0x1234]).unwrap();
+        enc.write_event(
+            &schema,
+            BASE_TS + 100_000,
+            &[
+                FieldValue::Varint(7),
+                FieldValue::PooledStackFrames(stack),
+                FieldValue::F64(0.5),
+                FieldValue::Varint(BASE_TS + 10_000),
+                FieldValue::Varint(BASE_TS + 90_000),
+            ],
+        )
+        .unwrap();
+        let shape = extract_shape(&enc.finish()).unwrap();
+        let generated = generate_trace(&shape, 2).unwrap();
+        let mut decoder = Decoder::new(&generated).unwrap();
+        let mut captures = Vec::new();
+        decoder
+            .for_each_event(|event| {
+                if event.name == "TaskSampleEvent" {
+                    let value: serde_json::Value = event.deserialize().unwrap();
+                    captures.push((
+                        value["timestamp_ns"].as_u64().unwrap(),
+                        value["idle_start_ns"].as_u64().unwrap(),
+                        value["idle_end_ns"].as_u64().unwrap(),
+                    ));
+                }
+            })
+            .unwrap();
+        assert_eq!(captures.len(), 2);
+        assert!(captures[1].0 > captures[0].0);
+        for (capture, start, end) in captures {
+            assert_eq!(end - start, 80_000);
+            assert_eq!(capture - end, 10_000);
+        }
     }
 
     #[test]

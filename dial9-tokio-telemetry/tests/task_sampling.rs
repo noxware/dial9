@@ -223,12 +223,12 @@ fn capture_preserves_nested_leaf_wakes() {
                 .collect();
             while waits.next().await.is_some() {}
         });
-        if tokio::time::timeout(Duration::from_secs(1), &mut task)
-            .await
-            .is_err()
-        {
-            task.abort();
-            panic!("capture lost a nested leaf wake");
+        match tokio::time::timeout(Duration::from_secs(1), &mut task).await {
+            Ok(result) => result.expect("captured task panicked"),
+            Err(_) => {
+                task.abort();
+                panic!("capture lost a nested leaf wake");
+            }
         }
     });
     drop(rt);
