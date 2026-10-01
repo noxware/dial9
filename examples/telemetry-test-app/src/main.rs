@@ -32,8 +32,9 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 const DEFAULT_CYCLES: u64 = 40;
-const CPU_QUANTUM: Duration = Duration::from_millis(10);
-const WAIT_QUANTUM: Duration = Duration::from_millis(10);
+// Keep timer/scheduler latency small relative to the prescribed phase weights.
+const CPU_QUANTUM: Duration = Duration::from_millis(25);
+const WAIT_QUANTUM: Duration = Duration::from_millis(25);
 // Each mixed cycle has 4 CPU quanta (1 outer + 3 inner) and 3 wait quanta
 // (1 outer + 2 inner). Add one cycle to exceed the sampler's one-second calibration.
 const WARMUP_CYCLES: u64 = (Duration::from_secs(1).as_nanos()
