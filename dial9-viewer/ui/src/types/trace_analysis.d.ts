@@ -333,7 +333,7 @@ declare module "*/trace_analysis.js" {
   // ── Flamegraphs ───────────────────────────────────────────────────────
 
   /** Deterministic warm color for a frame name (hsl string). */
-  export function flamegraphColor(name: string): string;
+  export function flamegraphColor(name: string, domain?: "cpu" | "idle" | "mixed"): string;
 
   /**
    * Input sample for tree building. CpuSample satisfies this; the heap
@@ -368,6 +368,7 @@ declare module "*/trace_analysis.js" {
   }
 
   export interface FlamegraphNode {
+    domain?: "cpu" | "idle" | "mixed";
     name: string;
     children: Map<string, FlamegraphNode>;
     count: number;

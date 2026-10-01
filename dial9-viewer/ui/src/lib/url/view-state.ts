@@ -153,6 +153,7 @@ export interface ViewState {
   pollSection?: string;
   /** The pinned spawn location; omitted when nothing is pinned. */
   taskScope?: string;
+  taskProfile?: "mixed";
   expandedPollGroups?: readonly string[];
   pollWorkerZoom?: readonly string[];
   pollOffworkerZoom?: readonly string[];

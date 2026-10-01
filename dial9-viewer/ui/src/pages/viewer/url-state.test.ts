@@ -75,6 +75,7 @@ function mkState(over: {
     view: {
       fieldCharts: [],
       inspectorTab: "task",
+      taskFlamegraphMode: "cpu",
       expandedPollGroups: new Set<string>(),
       pollFlamegraphSection: "cpu",
       pollWorkerZoom: [],
@@ -101,6 +102,14 @@ function roundTrip(state: ReadonlyState<StoreState>) {
   mirrorViewerToQuery(params, projectViewerState(state));
   return { params, out: readViewerUrlState("?" + params.toString()) };
 }
+
+it("preserves explicit mixed mode in shared links while CPU remains the default", () => {
+  const mixed = roundTrip(mkState({ view: { taskFlamegraphMode: "mixed" } }));
+  expect(mixed.params.get("task-profile")).toBe("mixed");
+  expect(mixed.out.taskProfile).toBe("mixed");
+  expect(roundTrip(mkState({})).params.has("task-profile")).toBe(false);
+  expect(readViewerUrlState("?task-profile=unknown").taskProfile).toBeUndefined();
+});
 
 describe("viewer URL state: linked highlight", () => {
   it("round-trips a lane-scoped region", () => {
@@ -456,6 +465,7 @@ describe("viewer URL state: complete durable view", () => {
         },
         view: {
           inspectorTab: "related",
+          taskFlamegraphMode: "cpu",
           expandedPollGroups: new Set(["sched-1", "cpu-0"]),
           pollFlamegraphSection: "sched",
           pollWorkerZoom: ["root", "poll"],

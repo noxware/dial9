@@ -739,6 +739,7 @@
             ambiguousTids: new Set(),
             runtimeWorkers: new Map(), // runtime name → [workerId, ...]
             segmentMetadata: new Map(), // latest segment metadata key → value
+            metadataConflicts: new Set(),
             // Sealed files seen, and how many reported losing or inheriting
             // events.
             sealedFiles: 0,
@@ -1466,6 +1467,9 @@
                 );
                 if (!taskDumps.has(taskId)) taskDumps.set(taskId, []);
                 taskDumps.get(taskId).push({
+                    sampled: frame.name === "TaskSampleEvent",
+                    idleStartNs: v.idle_start_ns != null ? num(v.idle_start_ns) : undefined,
+                    idleEndNs: v.idle_end_ns != null ? num(v.idle_end_ns) : undefined,
                     timestamp: ts,
                     callchain: chain,
                     inclusionProbability: v.inclusion_probability != null
@@ -1535,6 +1539,9 @@
                 }
                 for (const [key, val] of Object.entries(entries)) {
                     const value = String(val);
+                    if (segmentMetadata.has(key) && segmentMetadata.get(key) !== value) {
+                        state.metadataConflicts.add(key);
+                    }
                     segmentMetadata.set(key, value);
                     if (key.startsWith("runtime.")) {
                         const name = key.slice("runtime.".length);
@@ -1785,6 +1792,7 @@
             hasSchedWait: true,
             hasTaskTracking: true,
             ...deriveCapabilities(segmentMetadata, taskSpawnTimes),
+            metadataConflicts: [...state.metadataConflicts],
             sealedFiles: state.sealedFiles,
             incompleteFiles: state.incompleteFiles,
             spawnLocations,

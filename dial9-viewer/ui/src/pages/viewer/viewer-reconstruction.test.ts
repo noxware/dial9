@@ -409,6 +409,7 @@ describe("viewer deep-link reconstruction", () => {
         },
       ],
       inspectorTab: "related",
+      taskFlamegraphMode: "mixed",
       expandedPollGroups: new Set(["cpu-0", "sched-1"]),
       pollFlamegraphSection: "sched",
       pollWorkerZoom: ["root", "poll"],
@@ -555,6 +556,7 @@ describe("viewer deep-link reconstruction", () => {
     });
     store.update("view", {
       inspectorTab: "related",
+      taskFlamegraphMode: "cpu",
       expandedPollGroups: new Set(["cpu-0"]),
       pollFlamegraphSection: "sched",
       pollWorkerZoom: ["old", "poll"],
@@ -611,6 +613,7 @@ describe("viewer deep-link reconstruction", () => {
     expect(state.view).toEqual({
       fieldCharts: [],
       inspectorTab: "task",
+      taskFlamegraphMode: "cpu",
       expandedPollGroups: new Set(),
       pollFlamegraphSection: "cpu",
       pollWorkerZoom: [],

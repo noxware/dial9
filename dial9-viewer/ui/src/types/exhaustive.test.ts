@@ -215,6 +215,7 @@ const initialState: StoreState = {
       },
     ],
     inspectorTab: "related",
+    taskFlamegraphMode: "cpu",
     expandedPollGroups: new Set(["cpu-0"]),
     pollFlamegraphSection: "sched",
     pollWorkerZoom: ["root", "poll"],

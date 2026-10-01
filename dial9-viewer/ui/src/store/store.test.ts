@@ -81,6 +81,7 @@ function initialViewerState(): StoreState {
     view: {
       fieldCharts: [],
       inspectorTab: "task",
+      taskFlamegraphMode: "cpu",
       expandedPollGroups: new Set(),
       pollFlamegraphSection: "cpu",
       pollWorkerZoom: [],

@@ -28,7 +28,8 @@ import type { QueueData } from "./queue-model.js";
 import { createTaskDetailDerivation } from "./task-detail-track.js";
 import type { TaskDetailData } from "./task-detail-model.js";
 import { deriveAxisInputs, fmtAxisTick } from "./axis.js";
-import { formatHumanDuration } from "../../lib/trace/index.js";
+import { formatHumanDuration, localTaskProfile, type TaskProfile } from "../../lib/trace/index.js";
+import { mixedDisplayTree, captureAlternatives, mixedUnavailable } from "./mixed-flamegraph-model.js";
 import type {
   CallframeSymbols,
   CustomTraceEvent,
@@ -543,6 +544,7 @@ export function mountInspector(
         ${taskScopeControls(d)}
         ${offFamilyNote(d)}
         ${showsFamily(d) ? familyStats(d) : singleTaskStats(d)}
+        ${taskProfileControls(d)}
         ${taskFlamegraphBody(d)}
       </div>
     `;
@@ -683,7 +685,53 @@ export function mountInspector(
    * canvas without lit-html reconciling it away (same technique as the poll and
    * region hosts).
    */
+  function taskProfileControls(d: TaskDetailData): TemplateResult | typeof nothing {
+    if (!d.taskDumps.some((sample) => sample.sampled) && state().view.taskFlamegraphMode !== "mixed") return nothing;
+    return html`<div class="d9-task-scope-switch" role="group" aria-label="Task profile">
+      <button type="button" class=${classMap({ "d9-task-scope-btn": true, on: state().view.taskFlamegraphMode === "cpu" })} aria-pressed=${state().view.taskFlamegraphMode === "cpu"}
+        @click=${() => store.update("view", { taskFlamegraphMode: "cpu" })}>CPU samples</button>
+      <button type="button" class=${classMap({ "d9-task-scope-btn": true, on: state().view.taskFlamegraphMode === "mixed" })} aria-pressed=${state().view.taskFlamegraphMode === "mixed"}
+        @click=${() => store.update("view", { taskFlamegraphMode: "mixed" })}>CPU + async</button>
+    </div>`;
+  }
+
+  let mixedCache: { sig: string; profile: TaskProfile } | null = null;
+  function mixedProfile(d: TaskDetailData): TaskProfile | null {
+    const { trace: { trace }, viewport } = state();
+    if (trace === null || d.taskId === null) return null;
+    const sig = `${traceId(trace)}:${d.taskId}:${viewport.viewStart}:${viewport.viewEnd}`;
+    if (mixedCache?.sig === sig) return mixedCache.profile;
+    const profile = localTaskProfile(trace, d.taskId, d.polls, viewport.viewStart, viewport.viewEnd);
+    mixedCache = { sig, profile };
+    return profile;
+  }
+
+  function mixedBody(d: TaskDetailData): TemplateResult {
+    if (showsFamily(d)) return html`<p class="d9-inspector-hint">Choose “This task” to compare CPU and async time for one task.</p>`;
+    const profile = mixedProfile(d);
+    if (profile === null || profile.tree === null) return html`<p class="d9-inspector-hint" data-mixed-unavailable>
+      ${mixedUnavailable(profile?.unavailable_reason ?? "no_usable_task_samples")}</p>`;
+    return html`
+      <div class="d9-task-fg-note" data-mixed-summary>
+        Visible range · estimated CPU ${formatHumanDuration(profile.cpu_ns)} + idle ${formatHumanDuration(profile.idle_ns)}
+        · ${profile.cpu_samples} CPU samples, ${profile.capture_groups} async captures
+      </div>
+      <div class="d9-task-fg-host d9-mixed-fg-host" id="d9-task-fg" data-task-fg-host></div>
+      <p class="d9-inspector-hint">Orange: CPU. Blue: idle at await, including scheduler delay.
+        Open waits and synchronous blocking inside polls are not included.</p>
+      ${profile.effective_start_ns !== null && profile.effective_start_ns > profile.start_ns
+        ? html`<p class="d9-inspector-hint">The calibration interval is excluded.</p>` : nothing}
+      ${profile.invalid_capture_groups || profile.incomplete_capture_groups
+        ? html`<p class="d9-inspector-hint">${profile.invalid_capture_groups + profile.incomplete_capture_groups} incomplete or invalid captures excluded.</p>` : nothing}
+      ${captureAlternatives(profile.tree).map((node) => html`<details class="d9-capture-alternatives">
+        <summary>${node.alternatives?.length} captured alternatives · ${formatHumanDuration(node.weight_ns)}</summary>
+        <ol>${node.alternatives?.map((stack) => html`<li>${stack.join(" → ")}</li>`)}</ol>
+      </details>`)}
+    `;
+  }
+
   function taskFlamegraphBody(d: TaskDetailData): TemplateResult {
+    if (state().view.taskFlamegraphMode === "mixed") return mixedBody(d);
     const view = taskFlamegraphViewFor(d);
     if (view.samples.length === 0) {
       return html`<p class="d9-inspector-hint" id="d9-task-fg">
@@ -1017,6 +1065,22 @@ export function mountInspector(
       return;
     }
     const d = taskDetail();
+    if (s.view.taskFlamegraphMode === "mixed") {
+      const profile = showsFamily(d) ? null : mixedProfile(d);
+      if (!profile?.tree) { taskFg.detach(); return; }
+      const tree = profile.tree;
+      taskFg.sync({ hostEl, sig: `mixed:${mixedCache?.sig}`, apply: (instance) => {
+        instance.setTreeDirect(mixedDisplayTree(tree), tree.weight_ns, {
+          workerLabel: "CPU + async (estimated)",
+          exportTitle: `CPU + async — task 0x${d.taskId?.toString(16)}`,
+          exportFormatValue: formatHumanDuration,
+          formatCount: (count, total, self) => `${formatHumanDuration(count)} (${(100 * count / total).toFixed(1)}%) · ${formatHumanDuration(self)} self`,
+        });
+        const body = hostEl.querySelector<HTMLElement>(".fg-body");
+        if (body && !instance.getInspectFocus() && !instance.isZoomed()) body.scrollTop = body.scrollHeight;
+      } });
+      return;
+    }
     const view = taskFlamegraphViewFor(d);
     if (view.samples.length === 0) {
       taskFg.detach();

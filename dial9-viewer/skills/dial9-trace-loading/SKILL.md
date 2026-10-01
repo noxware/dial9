@@ -37,6 +37,7 @@ decompress or parse a trace.
   clockSyncAnchors: [{monotonicNs, realtimeNs}],
   runtimeWorkers: Map<string, number[]>, // runtime name → worker IDs
   segmentMetadata: Map<string, string>,  // latest segment metadata key → value
+  metadataConflicts: string[],       // keys whose values changed across segments
   runtimeMetrics: [{t, runtimeName, globalQueue, aliveTasks}], // per-runtime scheduler samples (empty on pre-RuntimeMetrics traces)
   legacyActiveTaskSamples: [{t, count}], // process-wide QueueSample active-task samples from the transitional format
   truncated: boolean,
@@ -52,7 +53,7 @@ decompress or parse a trace.
   sealedFiles: number,                   // files carrying a seal record (0 on traces predating it)
   incompleteFiles: number,               // of those, how many lost buffered events or inherited them; > 0 means counts are understated
   taskInstrumented: Map<number, boolean>, // task ID → whether task has tracing instrumentation
-  taskDumps: Map<number, [{timestamp, callchain, inclusionProbability}]>, // async captures sorted by timestamp; probability only on TaskSampleEvent
+  taskDumps: Map<number, [{timestamp, callchain, inclusionProbability, sampled, idleStartNs, idleEndNs}]>, // async captures sorted by timestamp; probability only on TaskSampleEvent
   allocEvents: AllocEvent[],     // Sampled memory allocations (requires dial9-tokio-telemetry memory-profiling feature)
   freeEvents: FreeEvent[],       // Deallocations paired with sampled allocs (requires `track_liveset`)
   memoryOverflows: [{timestamp, droppedAllocs, droppedFrees}], // Ring buffer overflow events (dropped samples per flush period)

@@ -545,7 +545,7 @@
         }
       }
 
-      const fill = isRoot ? flamegraphColor("root") : flamegraphColor(node.name || "");
+      const fill = isRoot ? flamegraphColor("root") : flamegraphColor(node.name || "", node.domain);
       out.push("<g>");
       out.push(`<title>${escapeXml(info)}</title>`);
       out.push(
