@@ -86,7 +86,7 @@ This is one mixed trace, not three adjacent feature demos. It declares:
 
 The integration test uses the same names to check the `4:3` whole-cycle and
 `3:2` inner-subtree mixes through `/api/task-flamegraph`, with coarse sampling
-tolerances. It exercises near-full capture and a longer run at 10 captures/s/worker.
+tolerances. It exercises near-full capture and a longer run at 3 captures/s/worker.
 
 Use `#[inline(never)]` and `black_box` where needed so release builds retain
 the fixture function hierarchy.
@@ -170,7 +170,8 @@ One profiling-capable Linux test:
 6. compares each observed result with the declared model.
 
 Use the production HTTP router with local storage; no listening server or
-simulated S3 is needed.
+simulated S3 is needed. Check span structure and associations in the Parquet
+artifacts produced by that request; weights come from the API response.
 
 Each production path returns only the test-local facts needed here:
 

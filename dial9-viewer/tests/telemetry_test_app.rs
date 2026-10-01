@@ -17,9 +17,12 @@ mod observations;
 #[path = "telemetry_test_app/aggregate.rs"]
 mod aggregate;
 
+#[path = "telemetry_test_app/aggregate_spans.rs"]
+mod aggregate_spans;
+
 #[tokio::test]
 async fn production_analysis_matches_the_self_described_fixture() {
-    for (cycles, rate) in [(200, 1_000), (300, 10)] {
+    for (cycles, rate) in [(200, 1_000), (300, 3)] {
         check_fixture(cycles, rate).await;
     }
 }

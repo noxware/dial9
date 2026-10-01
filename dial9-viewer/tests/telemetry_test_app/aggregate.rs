@@ -89,9 +89,10 @@ pub(crate) async fn check(
     let end = u64::try_from(expected.measurement.end_ns as i128 + offset)?;
     let source = Arc::new(LocalBackend::new(trace_dir));
     let output_dir = tempfile::tempdir()?;
+    let output = Arc::new(LocalBackend::new(output_dir.path()));
     let state = AppState::new(source.clone(), None, None).with_agg(AggContext {
         source,
-        output: Arc::new(LocalBackend::new(output_dir.path())),
+        output: output.clone(),
         source_bucket: "fixture".into(),
         source_is_local: true,
         output_bucket: "fixture".into(),
@@ -136,10 +137,17 @@ pub(crate) async fn check(
         profile.cpu_samples,
         profile.capture_groups
     );
+    super::aggregate_spans::check(output.as_ref(), expected, offset).await?;
     compare_weights(
         expected,
         profile.tree.as_ref().context("mixed profile has no tree")?,
     )
+    .with_context(|| {
+        format!(
+            "{} CPU samples, {} captures",
+            profile.cpu_samples, profile.capture_groups
+        )
+    })
 }
 
 fn compare_weights(expected: &ExpectedModel, tree: &Node) -> Result<()> {
