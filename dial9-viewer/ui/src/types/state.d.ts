@@ -474,6 +474,7 @@ export interface ViewerViewSlice {
   /** Dynamic numeric-field tracks, persisted only through URL state. */
   fieldCharts: readonly FieldChartSpec[];
   inspectorTab: InspectorTab;
+  taskFlamegraphMode: "cpu" | "mixed";
   /** Poll sample groups expanded in list mode (`cpu-N` / `sched-N`). */
   expandedPollGroups: ReadonlySet<string>;
   /** Which sample family the poll flamegraph displays when both are present. */

@@ -74,7 +74,7 @@ declare module "*/flamegraph.js" {
      * API mode: render a pre-built tree directly (no worker/off-worker
      * split, filters hidden). Preserves the current structural zoom path.
      */
-    setTreeDirect(tree: FlamegraphNode, totalCount: number): void;
+    setTreeDirect(tree: FlamegraphNode, totalCount: number, opts?: FlamegraphSetDataOptions): void;
     /** Re-render after a container resize. */
     resize(): void;
     /** Detach listeners and empty the container. */
