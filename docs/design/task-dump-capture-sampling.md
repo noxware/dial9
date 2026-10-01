@@ -605,8 +605,8 @@ sampling noise. Task scope is the correct first interface.
 1. Add `TaskSamplingConfig` alongside the unchanged `TaskDumpConfig`.
 2. Initialize worker-local sampler state for the experimental mode through
    runtime hooks, retaining the legacy per-task path.
-3. Move the sampling decision to the `Poll::Pending` path before
-   `FrameBuf::capture`.
+3. Sample on resumption after `Pending`, before advancing the future in
+   `FrameBuf::capture`, and record the completed idle interval.
 4. Emit selected captures immediately; legacy task dumps retain delayed
    idle-time emission.
 5. Add `TaskSampleEvent` with `inclusion_probability` and decode both event types.
@@ -652,7 +652,7 @@ application should be introduced.
 - Existing no-extra-wake/no-extra-poll and completed-on-repoll tests.
 - Worker calibration and metadata survive thread handoffs, concurrent pending
   completions, and nested runtimes.
-- A long application poll uses its pending-transition time for calibration.
+- Calibration uses the eligible resumption time, not the preceding poll start.
 - Trace round-trip tests for both legacy and sampled events.
 - JS parser test for old events where `inclusion_probability` is undefined.
 - Viewer tests that mixed profiles:

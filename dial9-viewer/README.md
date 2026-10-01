@@ -83,7 +83,8 @@ Only experimental `TaskSampleEvent` captures contribute idle weight. The
 response reports the effective sampling range, limitations, and an
 `unavailable_reason` when required data is missing. All matching segments must
 be folded before joining polls across them; narrow the scope or increase
-`max_files` if it reports `incomplete_segments`. The existing CPU endpoint
+`max_files` if it reports `incomplete_segments`. Queries retain at most two
+million profile rows; larger scopes return HTTP 413. The existing CPU endpoint
 continues to return sample counts. See the
 [design](../docs/design/task-dump-capture-sampling.md#task-scoped-mixed-flamegraph)
 for weighting and sibling-stack selection.
