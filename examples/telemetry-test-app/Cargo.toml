@@ -11,6 +11,7 @@ dial9 = { path = "../../dial9", default-features = false, features = ["tokio"] }
 dial9-utils = { path = "../../dial9-utils", features = ["span"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+libc.workspace = true
 dial9 = { path = "../../dial9", default-features = false, features = [
     "tokio",
     "cpu-profiling",
