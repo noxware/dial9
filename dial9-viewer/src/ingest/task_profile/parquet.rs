@@ -81,7 +81,17 @@ fn column<'a, T: 'static>(batch: &'a RecordBatch, name: &str) -> anyhow::Result<
         .with_context(|| format!("missing or invalid task profile column {name}"))
 }
 
-pub(crate) fn read(bytes: Bytes) -> anyhow::Result<Segment> {
+pub(crate) enum ReadOutcome {
+    Segment(Segment),
+    OtherRecording,
+    RowLimitExceeded,
+}
+
+pub(crate) fn read(
+    bytes: Bytes,
+    recording_filter: Option<&str>,
+    max_rows: usize,
+) -> anyhow::Result<ReadOutcome> {
     let builder = ParquetRecordBatchReaderBuilder::try_new(bytes)?;
     let header = builder
         .metadata()
@@ -92,6 +102,13 @@ pub(crate) fn read(bytes: Bytes) -> anyhow::Result<Segment> {
         .context("missing task profile metadata")?;
     let (recording_id, offset, metadata): (String, Option<String>, _) =
         serde_json::from_str(header)?;
+    if recording_filter.is_some_and(|id| id != recording_id) {
+        return Ok(ReadOutcome::OtherRecording);
+    }
+    // Reject from the footer before decoding any column pages.
+    if usize::try_from(builder.metadata().file_metadata().num_rows())? > max_rows {
+        return Ok(ReadOutcome::RowLimitExceeded);
+    }
     let mut segment = Segment {
         recording_id,
         clock_offset: offset.map(|s| s.parse().map(ClockOffset)).transpose()?,
@@ -101,6 +118,9 @@ pub(crate) fn read(bytes: Bytes) -> anyhow::Result<Segment> {
     let mut stacks = HashMap::<Vec<Frame>, Stack>::new();
     for batch in builder.build()? {
         let batch = batch?;
+        if batch.num_rows() > max_rows - segment.rows.len() {
+            return Ok(ReadOutcome::RowLimitExceeded);
+        }
         let kinds = column::<UInt8Array>(&batch, "kind")?;
         let timestamps = column::<UInt64Array>(&batch, "timestamp_ns")?;
         let tasks = column::<UInt64Array>(&batch, "task_id")?;
@@ -149,16 +169,15 @@ pub(crate) fn read(bytes: Bytes) -> anyhow::Result<Segment> {
             });
         }
     }
-    Ok(segment)
+    Ok(ReadOutcome::Segment(segment))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn round_trip_retains_probability_provenance_and_identity() {
-        let input = Segment {
+    fn sample_segment() -> Segment {
+        Segment {
             recording_id: "process-a".into(),
             clock_offset: Some(ClockOffset(-42)),
             metadata: [("cpu.profile.frequency_hz".into(), "99".into())].into(),
@@ -183,8 +202,17 @@ mod tests {
                 ]
                 .into(),
             }],
+        }
+    }
+
+    #[test]
+    fn round_trip_retains_probability_provenance_and_identity() {
+        let input = sample_segment();
+        let ReadOutcome::Segment(output) =
+            read(write(&input).unwrap().into(), Some("process-a"), 1).unwrap()
+        else {
+            panic!("matching recording at the row limit should be decoded");
         };
-        let output = read(write(&input).unwrap().into()).unwrap();
         assert_eq!(output.recording_id, input.recording_id);
         assert_eq!(output.clock_offset, input.clock_offset);
         assert_eq!(output.metadata, input.metadata);
@@ -194,5 +222,29 @@ mod tests {
         assert_eq!(output.rows[0].idle_end_ns, Some(120));
         assert_eq!(output.rows[0].task_id, Some(7));
         assert_eq!(output.rows[0].worker_id, None);
+    }
+
+    #[test]
+    fn excludes_unneeded_parts_before_decoding_pages() {
+        // Corrupt the data pages but preserve the footer: both exclusions must
+        // succeed without attempting to decode those pages.
+        let mut unreadable = write(&sample_segment()).unwrap();
+        let footer_len = u32::from_le_bytes(
+            unreadable[unreadable.len() - 8..unreadable.len() - 4]
+                .try_into()
+                .unwrap(),
+        ) as usize;
+        let footer_start = unreadable.len() - 8 - footer_len;
+        unreadable[4..footer_start].fill(0);
+        let unreadable = Bytes::from(unreadable);
+        assert!(matches!(
+            read(unreadable.clone(), Some("process-b"), 0).unwrap(),
+            ReadOutcome::OtherRecording
+        ));
+        assert!(matches!(
+            read(unreadable.clone(), None, 0).unwrap(),
+            ReadOutcome::RowLimitExceeded
+        ));
+        assert!(read(unreadable, None, 1).is_err());
     }
 }
