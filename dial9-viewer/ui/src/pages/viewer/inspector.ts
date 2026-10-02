@@ -679,14 +679,6 @@ export function mountInspector(
     store.update("selection", { scopedSpawnLoc: location });
   }
 
-  /**
-   * The CPU profile for the active scope. Always rendered: it is the tab's only
-   * expandable surface, so a toggle bought a click and no choice.
-   *
-   * `[data-task-fg-host]` is binding-free so the post-render sync can own the
-   * canvas without lit-html reconciling it away (same technique as the poll and
-   * region hosts).
-   */
   function taskProfileControls(d: TaskDetailData): TemplateResult | typeof nothing {
     if (!d.taskDumps.some((sample) => sample.sampled) && state().view.taskFlamegraphMode !== "mixed") return nothing;
     return html`<div class="d9-task-scope-switch" role="group" aria-label="Task profile">
@@ -720,7 +712,7 @@ export function mountInspector(
       </div>
       <div class="d9-task-fg-host d9-mixed-fg-host" id="d9-task-fg" data-task-fg-host></div>
       <p class="d9-inspector-hint">Orange: CPU. Blue: idle at await, including scheduler delay.
-        Open waits and synchronous blocking inside polls are not included.</p>
+        Open waits and off-CPU time inside polls are not included.</p>
       <p class="d9-inspector-hint">Experimental: waits without captured frames are omitted;
         non-Tokio waits may be attributed to a later await.</p>
       ${profile.effective_start_ns !== null && profile.effective_start_ns > profile.start_ns
@@ -735,6 +727,11 @@ export function mountInspector(
     `;
   }
 
+  /**
+   * `[data-task-fg-host]` is binding-free so the post-render sync can own the
+   * canvas without lit-html reconciling it away (same technique as the poll and
+   * region hosts).
+   */
   function taskFlamegraphBody(d: TaskDetailData): TemplateResult {
     if (state().view.taskFlamegraphMode === "mixed") return mixedBody(d);
     const view = taskFlamegraphViewFor(d);
