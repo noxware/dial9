@@ -3,6 +3,8 @@
 (function (exports) {
   "use strict";
 
+  const parser = typeof require !== "undefined" ? require("./trace_parser.js") : globalThis.TraceParser;
+
   const sameFrame = (a, b) => a.name === b.name && a.file === b.file;
   const key = (stack) => JSON.stringify(stack);
   function compareStacks(a, b) {
@@ -30,10 +32,10 @@
       else if (frame.name.includes("hyper_util::server::graceful::") ||
                frame.name.includes("tokio_util::sync::cancellation_token::")) leaf = notify;
       else return false;
-      return branch.slice(i + 1).some(leaf) && siblings.some((other) =>
+      return branch[i + 1] && leaf(branch[i + 1]) && siblings.some((other) =>
         other.length > i + 1 &&
         branch.slice(0, i + 1).every((f, j) => sameFrame(f, other[j])) &&
-        !other.slice(i + 1).some(leaf));
+        !leaf(other[i + 1]));
     });
   }
   function selectRepresentative(stacks) {
@@ -72,7 +74,7 @@
     current.self_ns += weight;
     if (alternatives.length) {
       current.alternatives = [...new Map([...(current.alternatives || []), ...alternatives].map((s) => [JSON.stringify(s), s])).values()]
-        .sort((a, b) => JSON.stringify(a) < JSON.stringify(b) ? -1 : 1);
+        .sort(compareStacks);
     }
   }
 
@@ -85,6 +87,7 @@
         "Idle-at-await includes scheduler delay.",
         "Estimated total excludes synchronous off-CPU time inside polls.",
         "Only waits completed in the available trace are represented.",
+        "Waits without captured frames are omitted; non-Tokio waits may be attributed to a later await.",
       ],
     };
     const unavailable = (reason) => { result.unavailable_reason = reason; return result; };
@@ -140,7 +143,7 @@
         result.invalid_capture_groups++;
         continue;
       }
-      add(tree, ["[idle-at-await]", ...selected.stack], weight, selected.alternatives.map((s) => s.map((f) => f.name)));
+      add(tree, ["[idle-at-await]", ...selected.stack], weight, selected.alternatives);
       result.capture_groups++;
       result.idle_ns += weight;
     }
@@ -170,13 +173,10 @@
       function stack(chain) {
         const id = chain.join(",");
         if (cache.has(id)) return cache.get(id);
-        const frames = [...chain].reverse().flatMap((addr) => {
-          const resolved = trace.callframeSymbols.get(addr);
-          return (Array.isArray(resolved) ? resolved : [resolved]).filter((f) => f !== null).map((f) => ({
-            name: f?.symbol || addr,
-            file: f?.location?.replace(/:\d+(?::\d+)?$/, "") || null,
-          }));
-        });
+        const frames = parser.symbolizeChain(chain, trace.callframeSymbols).reverse().map((f) => ({
+          name: f.symbol,
+          file: f.location?.replace(/:\d+(?::\d+)?$/, "") || null,
+        }));
         cache.set(id, frames);
         return frames;
       }

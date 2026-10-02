@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { analyzeTaskProfile, selectRepresentative } = require("../../task_flamegraph.js");
+const { analyzeTaskProfile, selectRepresentative, localTaskProfile } = require("../../task_flamegraph.js");
 const frame = (name, file = null) => ({ name, file });
 const stack = (...names) => names.map((name) => frame(name));
 function fixture() {
@@ -55,6 +55,34 @@ describe("time-weighted task profile", () => {
     input.metadata.delete("cpu.profile.frequency_hz");
     expect(analyzeTaskProfile(input).unavailable_reason).toBe("missing_cpu_frequency");
   });
+  it("retains same-named alternatives from different source files", () => {
+    const input = fixture();
+    input.captures = ["src/a.rs", "src/b.rs"].map((file) => ({
+      ...input.captures[0], stack: [frame("service::work", file)],
+    }));
+    const idle = analyzeTaskProfile(input).tree.children["[idle-at-await]"];
+    const node = Object.values(idle.children)[0];
+    expect(node.name).toMatch(/^\[awaiting any of 2\]/);
+    expect(node.alternatives).toEqual(input.captures.map((c) => c.stack));
+  });
+  it("uses the parser's symbol expansion for string and inline entries", () => {
+    const input = fixture();
+    const trace = {
+      events: [{ eventType: 0, taskId: 7, workerId: 0 }],
+      segmentMetadata: input.metadata,
+      callframeSymbols: new Map([
+        ["0x1", "service::root"],
+        ["0x2", [{ symbol: "service::outer", location: "src/main.rs:5" },
+          null, { symbol: "service::inner", location: "src/main.rs:9" }]],
+      ]),
+      taskDumps: new Map([[7, [{ ...input.captures[0], sampled: true, callchain: ["0x2", "0x1"] }]]]),
+    };
+    const result = localTaskProfile(trace, 7, [], 0, 230);
+    const root = result.tree.children["[idle-at-await]"].children["service::root"];
+    expect(root.children["service::outer"].children["service::inner"].alternatives).toEqual([[
+      frame("service::root"), frame("service::outer", "src/main.rs"), frame("service::inner", "src/main.rs"),
+    ]]);
+  });
 });
 
 describe("representative async stack", () => {
@@ -79,5 +107,17 @@ describe("representative async stack", () => {
     const dep = [frame("client::request", "/home/build/.cargo/registry/src/client/src/lib.rs")];
     expect(selectRepresentative([dep, app]).stack).toEqual(["service::request"]);
     expect(selectRepresentative([stack("unknown::a"), stack("unknown::b")]).stack[0]).toMatch(/^\[awaiting any of 2\]/);
+  });
+  it.each([
+    ["tokio::time::timeout::Timeout::poll", "tokio::time::sleep::Sleep::poll"],
+    ["hyper_util::server::graceful::Watcher::watch", "tokio::sync::notify::Notified"],
+  ])("preserves nested peer waits under %s", (wrapper, leaf) => {
+    const selected = selectRepresentative([
+      stack("root", wrapper, leaf),
+      stack("root", wrapper, "app::select", leaf),
+      stack("root", wrapper, "app::select", "app::io"),
+    ]);
+    expect(selected.stack.at(-1)).toMatch(/^\[awaiting any of 2\]/);
+    expect(selected.alternatives).toHaveLength(3);
   });
 });

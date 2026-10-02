@@ -719,13 +719,16 @@ export function mountInspector(
       <div class="d9-task-fg-host d9-mixed-fg-host" id="d9-task-fg" data-task-fg-host></div>
       <p class="d9-inspector-hint">Orange: CPU. Blue: idle at await, including scheduler delay.
         Open waits and synchronous blocking inside polls are not included.</p>
+      <p class="d9-inspector-hint">Experimental: waits without captured frames are omitted;
+        non-Tokio waits may be attributed to a later await.</p>
       ${profile.effective_start_ns !== null && profile.effective_start_ns > profile.start_ns
         ? html`<p class="d9-inspector-hint">The calibration interval is excluded.</p>` : nothing}
       ${profile.invalid_capture_groups || profile.incomplete_capture_groups
         ? html`<p class="d9-inspector-hint">${profile.invalid_capture_groups + profile.incomplete_capture_groups} incomplete or invalid captures excluded.</p>` : nothing}
       ${captureAlternatives(profile.tree).map((node) => html`<details class="d9-capture-alternatives">
         <summary>${node.alternatives?.length} captured alternatives · ${formatHumanDuration(node.weight_ns)}</summary>
-        <ol>${node.alternatives?.map((stack) => html`<li>${stack.join(" → ")}</li>`)}</ol>
+        <ol>${node.alternatives?.map((stack) => html`<li>${stack.map((frame) =>
+          frame.file ? `${frame.name} (${frame.file})` : frame.name).join(" → ")}</li>`)}</ol>
       </details>`)}
     `;
   }
