@@ -70,7 +70,8 @@ function dial9_fixture_mixed_cycle
             `-- TASK_DUMP dial9_fixture_wait_inner_weight_2
 ```
 
-CPU functions busy-loop for their declared number of quanta. Wait functions
+CPU functions busy-loop for their declared number of quanta, measured in thread
+CPU time on Linux so descheduling does not reduce the workload. Wait functions
 use `tokio::time::sleep` for their declared number of quanta. The cycle span is
 open across the entire sequence; the inner span is open across both its CPU
 work and its await.
