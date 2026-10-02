@@ -29,11 +29,12 @@ use dial9_utils::dial9_span;
 use dial9_utils::span::{Instrument as _, Span as _};
 use std::hint::black_box;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const DEFAULT_CYCLES: u64 = 40;
-const CPU_QUANTUM: Duration = Duration::from_millis(10);
-const WAIT_QUANTUM: Duration = Duration::from_millis(10);
+// Keep timer/scheduler latency small relative to the prescribed phase weights.
+const CPU_QUANTUM: Duration = Duration::from_millis(25);
+const WAIT_QUANTUM: Duration = Duration::from_millis(25);
 // Each mixed cycle has 4 CPU quanta (1 outer + 3 inner) and 3 wait quanta
 // (1 outer + 2 inner). Add one cycle to exceed the sampler's one-second calibration.
 const WARMUP_CYCLES: u64 = (Duration::from_secs(1).as_nanos()
@@ -50,19 +51,52 @@ const WAIT_INNER: &str = "dial9_fixture_wait_inner_weight_2";
 const SPAN_CYCLE: &str = "dial9_fixture_span_cycle";
 const SPAN_INNER: &str = "dial9_fixture_span_inner";
 
+// Descheduling must not consume the CPU budget checked by the Linux E2E.
+#[cfg(target_os = "linux")]
+#[inline(always)]
+fn work_time() -> Duration {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: ts is valid writable storage for clock_gettime.
+    let result = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) };
+    assert_eq!(result, 0, "thread CPU clock must be available");
+    Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
+}
+
+#[cfg(not(target_os = "linux"))]
+#[inline(always)]
+fn work_time() -> Duration {
+    Duration::from_nanos(dial9::core::clock::clock_monotonic_ns())
+}
+
 // Expand work into each weighted function so no helper frame obscures its symbol.
 // An `inline(always)` helper may also work, but expansion avoids relying on that hint.
 macro_rules! busy_for {
     ($duration:expr) => {{
-        let start = Instant::now();
+        let start = work_time();
         let mut value = 0_u64;
-        while start.elapsed() < $duration {
-            for i in 0..1_000 {
+        while work_time() - start < $duration {
+            // Amortize the thread CPU clock syscall over a batch of work.
+            for i in 0..100_000 {
                 value = value.wrapping_add(black_box(i));
             }
             black_box(value);
         }
     }};
+}
+
+#[cfg(all(test, target_os = "linux"))]
+#[test]
+fn cpu_work_budget_excludes_sleep() {
+    let start = work_time();
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(work_time() - start < Duration::from_millis(25));
+
+    let start = work_time();
+    busy_for!(Duration::from_millis(5));
+    assert!(work_time() - start >= Duration::from_millis(5));
 }
 
 #[derive(Debug, Parser)]
@@ -75,6 +109,10 @@ struct Args {
     /// Number of mixed workload cycles in the measurement window.
     #[arg(long, default_value_t = DEFAULT_CYCLES)]
     cycles: u64,
+
+    /// Experimental task-sampling target per worker.
+    #[arg(long, default_value_t = 1_000, value_parser = clap::value_parser!(u32).range(1..))]
+    task_sampling_per_worker_hz: u32,
 }
 
 #[derive(TraceEvent)]
@@ -112,7 +150,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "linux")]
     let options = options.task_sampling_config(
         TaskSamplingConfig::builder()
-            .captures_per_second_per_worker(1_000)
+            .captures_per_second_per_worker(args.task_sampling_per_worker_hz)
             .rng_seed(1)
             .build(),
     );

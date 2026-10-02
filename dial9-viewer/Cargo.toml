@@ -111,6 +111,7 @@ hex = "0.4"
 urlencoding = "2"
 
 [dev-dependencies]
+serde_json = { version = "1", features = ["unbounded_depth"] }
 assert2 = { workspace = true }
 metrique = { version = "0.1.28", features = ["emf", "local-format", "test-util"] }
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
