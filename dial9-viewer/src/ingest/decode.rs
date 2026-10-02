@@ -292,7 +292,7 @@ pub(crate) fn decode_segment_with_stats(
         metadata,
         &events,
         &task_samples,
-        &profile_symbols,
+        profile_symbols,
     );
 
     // Reconstruct spans from the old-producer enter/exit/close events:

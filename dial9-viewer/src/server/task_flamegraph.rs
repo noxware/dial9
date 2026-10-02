@@ -72,16 +72,12 @@ pub(crate) async fn get_task_flamegraph(
             )
         })?;
     let agg = Arc::new(agg);
-    // Include the following segment to close a wait/poll across rotation.
+    // A wait may complete arbitrarily later than the requested range. Resolve
+    // the whole source scope; max_files and MAX_PROFILE_ROWS bound the work.
     let scope = Scope {
-        // Local files need not follow the date-partitioned object-key layout.
-        start_ns: (!agg.source_is_local).then_some(params.start_ns as i64),
-        end_ns: (!agg.source_is_local).then_some(
-            (params.end_ns as i64)
-                .saturating_add(agg.segment_duration_secs.saturating_mul(1_000_000_000)),
-        ),
         service: params.service.clone(),
         hosts: params.host.clone(),
+        ..Default::default()
     };
     let resolved = refine::resolve(
         &agg,

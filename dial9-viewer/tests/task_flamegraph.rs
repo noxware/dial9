@@ -17,7 +17,7 @@ use dial9_viewer::{
 use serde_json::Value;
 use tower::ServiceExt;
 
-fn segment(second: bool, sampled: bool) -> Vec<u8> {
+fn segment(second: bool, sampled: bool, resume_ns: u64) -> Vec<u8> {
     let mut encoder = Encoder::new();
     let clock = encoder
         .register_schema(
@@ -105,10 +105,14 @@ fn segment(second: bool, sampled: bool) -> Vec<u8> {
             .write_event(&end, 100, &[FieldValue::Varint(0)])
             .unwrap();
         encoder
-            .write_event(&start, 200, &[FieldValue::Varint(0), FieldValue::Varint(7)])
+            .write_event(
+                &start,
+                resume_ns,
+                &[FieldValue::Varint(0), FieldValue::Varint(7)],
+            )
             .unwrap();
         encoder
-            .write_event(&end, 220, &[FieldValue::Varint(0)])
+            .write_event(&end, resume_ns + 20, &[FieldValue::Varint(0)])
             .unwrap();
     } else {
         let park = encoder
@@ -147,6 +151,8 @@ fn segment(second: bool, sampled: bool) -> Vec<u8> {
                 ],
             )
             .unwrap();
+    }
+    if second {
         let mut fields = vec![
             FieldDef::new("task_id", FieldType::Varint),
             FieldDef::new("callchain", FieldType::StackFrames),
@@ -174,16 +180,18 @@ fn segment(second: bool, sampled: bool) -> Vec<u8> {
                 values.extend([
                     FieldValue::F64(0.5),
                     FieldValue::Varint(100),
-                    FieldValue::Varint(200),
+                    FieldValue::Varint(resume_ns),
                 ]);
             }
-            encoder.write_event(&capture, 210, &values).unwrap();
+            encoder
+                .write_event(&capture, resume_ns + 10, &values)
+                .unwrap();
         }
     }
     encoder.finish()
 }
 
-async fn app(sampled: bool) -> (axum::Router, tempfile::TempDir, tempfile::TempDir) {
+async fn app(sampled: bool, remote: bool) -> (axum::Router, tempfile::TempDir, tempfile::TempDir) {
     let source_dir = tempfile::tempdir().unwrap();
     let output_dir = tempfile::tempdir().unwrap();
     let source = Arc::new(LocalBackend::new(source_dir.path()));
@@ -192,8 +200,19 @@ async fn app(sampled: bool) -> (axum::Router, tempfile::TempDir, tempfile::TempD
         source
             .put_object(
                 "local",
-                &format!("custom/prefix/service/host/trace.{part}.bin"),
-                segment(part == 1, sampled),
+                &if remote {
+                    format!(
+                        "custom/1970-01-01/00/service/host/process-a/{}-0.bin",
+                        part * 180
+                    )
+                } else {
+                    format!("custom/prefix/service/host/trace.{part}.bin")
+                },
+                segment(
+                    part == 1,
+                    sampled,
+                    if remote { 180_000_000_000 } else { 200 },
+                ),
             )
             .await
             .unwrap();
@@ -202,7 +221,7 @@ async fn app(sampled: bool) -> (axum::Router, tempfile::TempDir, tempfile::TempD
         source,
         output,
         source_bucket: "local".into(),
-        source_is_local: true,
+        source_is_local: !remote,
         output_bucket: "local".into(),
         output_prefix: "aggregate".into(),
         source_prefixes: vec!["custom/".into()],
@@ -230,7 +249,7 @@ async fn get(app: axum::Router, uri: &str) -> String {
 
 #[tokio::test]
 async fn mixed_api_reads_cross_segment_polls_and_reuses_parquet_without_changing_cpu_counts() {
-    let (app, _source, _output) = app(true).await;
+    let (app, _source, _output) = app(true, false).await;
     let uri = "/api/task-flamegraph?task_id=7&start_ns=10000&end_ns=10230";
     let first: Value = serde_json::from_str(&get(app.clone(), uri).await).unwrap();
     assert_eq!(first["unavailable_reason"], Value::Null);
@@ -256,7 +275,7 @@ async fn mixed_api_reads_cross_segment_polls_and_reuses_parquet_without_changing
 
 #[tokio::test]
 async fn legacy_dumps_never_acquire_a_default_probability() {
-    let (app, _source, _output) = app(false).await;
+    let (app, _source, _output) = app(false, false).await;
     let profile: Value = serde_json::from_str(
         &get(
             app,
@@ -267,4 +286,16 @@ async fn legacy_dumps_never_acquire_a_default_probability() {
     .unwrap();
     assert_eq!(profile["unavailable_reason"], "no_task_samples");
     assert_eq!(profile["tree"], Value::Null);
+}
+
+#[tokio::test]
+async fn remote_queries_include_completions_beyond_the_following_segment() {
+    let (app, _source, _output) = app(true, true).await;
+    let uri = "/api/task-flamegraph?task_id=7&start_ns=10000&end_ns=30000010000";
+    let complete: Value = serde_json::from_str(&get(app, uri).await).unwrap();
+    assert_eq!(complete["unavailable_reason"], Value::Null);
+    assert_eq!(complete["files_matched"], 2);
+    assert_eq!(complete["files_folded"], 2);
+    assert_eq!(complete["capture_groups"], 1);
+    assert_eq!(complete["idle_ns"], (30_000_000_000.0 - 100.0) / 0.5);
 }

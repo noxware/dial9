@@ -79,7 +79,7 @@ impl Segment {
         metadata: BTreeMap<String, String>,
         events: &[TraceEvent],
         captures: &[TaskSample],
-        symbols: &HashMap<u64, Vec<(u64, Frame)>>,
+        mut symbols: HashMap<u64, Vec<(u64, Frame)>>,
     ) -> Self {
         let mut segment = Self {
             recording_id,
@@ -91,27 +91,30 @@ impl Segment {
         if captures.is_empty() && !segment.metadata.contains_key("task_sampling.sampler") {
             return segment;
         }
+        for frames in symbols.values_mut() {
+            frames.sort_by_key(|(depth, _)| *depth);
+        }
         let mut stacks = HashMap::<Vec<u64>, Stack>::new();
         let mut resolve_stack = |chain: &[u64]| {
-            Arc::clone(stacks.entry(chain.to_vec()).or_insert_with(|| {
-                chain
-                    .iter()
-                    .rev()
-                    .flat_map(|addr| match symbols.get(addr) {
-                        Some(frames) => {
-                            let mut frames = frames.clone();
-                            frames.sort_by_key(|(depth, _)| *depth);
-                            frames.into_iter().map(|(_, frame)| frame).collect()
-                        }
-                        None => vec![Frame {
-                            name: format!("0x{addr:x}"),
-                            file: None,
-                        }],
-                    })
-                    .collect::<Vec<_>>()
-                    .into()
-            }))
+            if let Some(stack) = stacks.get(chain) {
+                return Arc::clone(stack);
+            }
+            let stack: Stack = chain
+                .iter()
+                .rev()
+                .flat_map(|addr| match symbols.get(addr) {
+                    Some(frames) => frames.iter().map(|(_, frame)| frame.clone()).collect(),
+                    None => vec![Frame {
+                        name: format!("0x{addr:x}"),
+                        file: None,
+                    }],
+                })
+                .collect::<Vec<_>>()
+                .into();
+            stacks.insert(chain.to_vec(), Arc::clone(&stack));
+            stack
         };
+        let empty_stack: Stack = Arc::from([]);
         for event in events {
             let mut row = Row {
                 kind: Kind::Cpu,
@@ -122,7 +125,7 @@ impl Segment {
                 probability: None,
                 idle_start_ns: None,
                 idle_end_ns: None,
-                stack: Arc::from([]),
+                stack: Arc::clone(&empty_stack),
             };
             match event {
                 TraceEvent::CpuSample(s) if s.source == 0 => {

@@ -47,33 +47,32 @@ fn shutdown(frame: &Frame) -> bool {
             .contains("tokio_util::sync::cancellation_token::")
 }
 
+fn sleep(frame: &Frame) -> bool {
+    frame.name.contains("tokio::time::sleep::Sleep")
+}
+
+fn notify(frame: &Frame) -> bool {
+    frame.name.contains("tokio::sync::notify::") || frame.name.contains("WaitForCancellationFuture")
+}
+
 fn secondary(branch: &[Frame], siblings: &[Stack]) -> bool {
     for (index, frame) in branch.iter().enumerate() {
-        let deadline = timeout(frame)
-            && branch[index + 1..]
-                .iter()
-                .any(|f| f.name.contains("tokio::time::sleep::Sleep"));
-        let cancellation = shutdown(frame)
-            && branch[index + 1..].iter().any(|f| {
-                f.name.contains("tokio::sync::notify::")
-                    || f.name.contains("WaitForCancellationFuture")
-            });
-        if !(deadline || cancellation) {
+        let leaf = if timeout(frame) {
+            sleep
+        } else if shutdown(frame) {
+            notify
+        } else {
+            continue;
+        };
+        // Only the wrapper's direct control leaf is known to be secondary.
+        // A deeper Sleep/Notify may belong to the guarded operation itself.
+        if !branch.get(index + 1).is_some_and(leaf) {
             continue;
         }
-        // The wrapper must also surround the work branch. A standalone Sleep
-        // or Notify, including a user select! branch, is never secondary.
         if siblings.iter().any(|other| {
             other.len() > index + 1
                 && other[..=index] == branch[..=index]
-                && !other[index + 1..].iter().any(|f| {
-                    if deadline {
-                        f.name.contains("tokio::time::sleep::Sleep")
-                    } else {
-                        f.name.contains("tokio::sync::notify::")
-                            || f.name.contains("WaitForCancellationFuture")
-                    }
-                })
+                && !leaf(&other[index + 1])
         }) {
             return true;
         }
@@ -214,6 +213,33 @@ mod tests {
             "connection",
         ]);
         assert_eq!(select([shutdown, work]).stack.last().unwrap(), "connection");
+    }
+
+    #[test]
+    fn control_wrappers_preserve_nested_peer_waits() {
+        for (wrapper, leaf) in [
+            (
+                "tokio::time::timeout::Timeout::poll",
+                "tokio::time::sleep::Sleep::poll",
+            ),
+            (
+                "hyper_util::server::graceful::Watcher::watch",
+                "tokio::sync::notify::Notified",
+            ),
+        ] {
+            let control = stack(&["root", wrapper, leaf]);
+            let peer = stack(&["root", wrapper, "app::select", leaf]);
+            let io = stack(&["root", wrapper, "app::select", "app::io"]);
+            let selected = select([control, peer, io]);
+            assert!(
+                selected
+                    .stack
+                    .last()
+                    .unwrap()
+                    .starts_with("[awaiting any of 2]")
+            );
+            assert_eq!(selected.alternatives.len(), 3);
+        }
     }
 
     #[test]

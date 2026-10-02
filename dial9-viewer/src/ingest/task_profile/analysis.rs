@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
-use super::{Kind, Row, Segment, selection};
+use super::{Kind, Row, Segment, Stack, selection};
 use crate::ingest::decode::{
     clock::{ClockOffset, MonoNs},
     events::{PollEnd, PollStart, TraceEvent, WorkerPark, WorkerUnpark},
@@ -23,7 +23,7 @@ pub(crate) struct Node {
     pub self_ns: f64,
     pub children: BTreeMap<String, Node>,
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
-    pub alternatives: BTreeSet<Vec<String>>,
+    pub alternatives: BTreeSet<Stack>,
 }
 
 impl Node {
@@ -31,7 +31,7 @@ impl Node {
         &mut self,
         stack: &[String],
         weight: f64,
-        alternatives: impl IntoIterator<Item = Vec<String>>,
+        alternatives: impl IntoIterator<Item = Stack>,
     ) {
         self.weight_ns += weight;
         match stack.split_first() {
@@ -116,6 +116,7 @@ pub(crate) fn analyze(segments: &[Segment], request: Request<'_>) -> Response {
             "Idle-at-await includes scheduler delay.",
             "Estimated total excludes synchronous off-CPU time inside polls.",
             "Only waits completed in the available trace are represented.",
+            "Waits without captured frames are omitted; non-Tokio waits may be attributed to a later await.",
         ],
         ..Default::default()
     };
@@ -288,14 +289,7 @@ pub(crate) fn analyze(segments: &[Segment], request: Request<'_>) -> Response {
         let stack: Vec<_> = std::iter::once("[idle-at-await]".into())
             .chain(selected.stack)
             .collect();
-        tree.add(
-            &stack,
-            weight,
-            selected
-                .alternatives
-                .into_iter()
-                .map(|s| s.iter().map(|f| f.name.clone()).collect()),
-        );
+        tree.add(&stack, weight, selected.alternatives);
         result.capture_groups += 1;
         result.idle_ns += weight;
     }
@@ -415,6 +409,35 @@ mod tests {
         assert_eq!(result.idle_ns, 120.0);
         assert_eq!(result.cpu_ns, 0.0);
         assert_eq!(result.capture_groups, 1);
+    }
+
+    #[test]
+    fn alternatives_keep_source_provenance() {
+        let mut segment = fixture();
+        segment.rows.retain(|r| r.kind != Kind::Capture);
+        for file in ["src/a.rs", "src/b.rs"] {
+            let mut capture = row(Kind::Capture, 210);
+            capture.stack = vec![super::super::Frame {
+                name: "service::work".into(),
+                file: Some(file.into()),
+            }]
+            .into();
+            segment.rows.push(capture);
+        }
+        let result = analyze(&[segment], request(0, 230));
+        let tree = result.tree.unwrap();
+        let node = tree.children["[idle-at-await]"]
+            .children
+            .values()
+            .next()
+            .unwrap();
+        assert!(node.name.starts_with("[awaiting any of 2]"));
+        let files: Vec<_> = node
+            .alternatives
+            .iter()
+            .map(|s| s[0].file.as_deref())
+            .collect();
+        assert_eq!(files, [Some("src/a.rs"), Some("src/b.rs")]);
     }
 
     #[test]
