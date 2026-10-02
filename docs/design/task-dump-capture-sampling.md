@@ -319,10 +319,16 @@ application wait. Completed interval bounds avoid that ambiguity. Capturing
 requires [Tokio #8445](https://github.com/tokio-rs/tokio/pull/8445): an outer-task
 wake cannot replace the deferred wakes of combinators' separate leaves.
 
-**Unresolved merge blocker:** `trace_with` does not stop non-Tokio futures.
+**Unresolved:** `trace_with` does not stop non-Tokio futures.
 On resumption, a completed non-Tokio await can advance into a later Tokio await,
-misattributing the preceding wait to that later stack. For example, an external
-200 ms wait followed by a 5 ms Tokio sleep attributes both waits to the sleep.
+misattributing the preceding wait to that later stack:
+
+```rust
+external_wait().await; // 200 ms; does not use Tokio's tracing hooks
+tokio::time::sleep(Duration::from_millis(5)).await;
+```
+
+The 200 ms wait can be attributed to the later sleep.
 The current API exposes no await identity to verify this association. Reliable
 stack attribution requires a separate capture/instrumentation solution; the
 Tokio-sleep E2E fixture does not establish correctness for arbitrary futures.
