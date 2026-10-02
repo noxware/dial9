@@ -6,7 +6,7 @@ declare module "*/task_flamegraph.js" {
     weight_ns: number;
     self_ns: number;
     children: Record<string, TaskProfileNode>;
-    alternatives?: string[][];
+    alternatives?: { name: string; file: string | null }[][];
   }
   export interface TaskProfile {
     unit: "nanoseconds";
