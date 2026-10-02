@@ -9,14 +9,16 @@
 //! # Sampling model
 //!
 //! All instrumented tasks on a worker share a calibrated Bernoulli sampler.
-//! Non-selected transitions do no capture work. Selected pending captures emit
+//! Non-selected transitions do no capture work. Selected captures emit
 //! every usable callchain immediately, with the probability used for selection.
 //!
 //! # Capture mechanics
 //!
-//! On resumption after `Pending`, capture inspects the await before the future
-//! advances. Its sample describes the completed idle interval. Measuring from
-//! capture to the next poll would measure Tokio's capture-induced wake instead.
+//! On resumption after `Pending`, capture stops at Tokio trace leaves. Non-Tokio
+//! futures can advance to a later await, so associating the captured stack with
+//! the completed idle interval is not yet reliable for arbitrary futures.
+//! Measuring from capture to the next poll would measure Tokio's capture-induced
+//! wake instead.
 //! The following poll drives the future normally without another capture.
 //!
 //! # Allocation

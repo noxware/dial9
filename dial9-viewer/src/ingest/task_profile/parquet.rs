@@ -129,7 +129,13 @@ pub(crate) fn read(bytes: Bytes) -> anyhow::Result<Segment> {
                     file: (!files.is_null(j)).then(|| files.value(j).to_string()),
                 })
                 .collect();
-            let stack = Arc::clone(stacks.entry(stack.clone()).or_insert_with(|| stack.into()));
+            let stack = if let Some(cached) = stacks.get(&stack) {
+                Arc::clone(cached)
+            } else {
+                let shared: Stack = stack.clone().into();
+                stacks.insert(stack, Arc::clone(&shared));
+                shared
+            };
             segment.rows.push(Row {
                 kind: Kind::try_from(kinds.value(i))?,
                 timestamp_ns: timestamps.value(i),

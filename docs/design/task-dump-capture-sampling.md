@@ -163,7 +163,7 @@ capture is therefore expected to add approximately 0.102% relative to observed
 active CPU, or 0.0238% of runtime capacity. These are planning estimates from
 one representative workload, not universal bounds.
 
-The sampling decision still runs on each eligible pending transition. Its fast
+The sampling decision still runs on each eligible resumption. Its fast
 path should be a worker-local counter update and branch; stack capture,
 trimming, interning, and event encoding only run for selected transitions.
 This per-transition cost is not included in the estimate above.
@@ -219,7 +219,7 @@ task-dump inclusion probability.
 
 ### Rate calibration
 
-Each worker maintains a count of eligible pending transitions over a fixed
+Each worker maintains a count of eligible resumptions over a fixed
 epoch. One second is a reasonable initial epoch.
 
 For epoch `e + 1`, calculate:
@@ -306,24 +306,31 @@ The experimental poll flow is:
    timestamp when that poll returns `Pending`.
 2. On resumption, consult the current worker's sampler before advancing the
    future. If not selected, poll normally and update the pending timestamp.
-3. When selected, run `trace_with` first. Its leaf intercepts the suspended
-   await, even when the underlying operation is now ready.
-4. Emit the captured callchains with the completed idle interval, actual
-   capture timestamp, and selection probability. If the tracing poll returns
-   `Ready`, return that result without polling a completed future again.
+3. When selected, run `trace_with` first. Tokio trace leaves return `Pending`
+   before performing their operation, even when it is ready.
+4. If capture returns `Ready` or yields no frames, emit no sample. Otherwise
+   emit the callchains with the completed idle interval, actual capture
+   timestamp, and selection probability. Never poll a completed future again.
 5. The capture-induced wake schedules a normal continuation. Exclude that
    continuation from sampling to prevent a capture loop.
 
-**Correction to the original design:** capture-to-next-poll timing measures
-Tokio's synthetic wake, not the application wait. The E2E fixture exposed this
-with the deferred leaf wakes restored by
-[Tokio #8445](https://github.com/tokio-rs/tokio/pull/8445). Capturing on resumption
-and recording the completed interval avoids that ambiguity. An outer-task wake
-cannot replace this Tokio fix: combinators may own separate leaf wakers.
+Capture-to-next-poll timing measures Tokio's synthetic wake rather than the
+application wait. Completed interval bounds avoid that ambiguity. Capturing
+requires [Tokio #8445](https://github.com/tokio-rs/tokio/pull/8445): an outer-task
+wake cannot replace the deferred wakes of combinators' separate leaves.
+
+**Unresolved merge blocker:** `trace_with` does not stop non-Tokio futures.
+On resumption, a completed non-Tokio await can advance into a later Tokio await,
+misattributing the preceding wait to that later stack. For example, an external
+200 ms wait followed by a 5 ms Tokio sleep attributes both waits to the sleep.
+The current API exposes no await identity to verify this association. Reliable
+stack attribution requires a separate capture/instrumentation solution; the
+Tokio-sleep E2E fixture does not establish correctness for arbitrary futures.
 
 Only completed waits are represented. A task aborted without resuming, or a
 wait still open at the end of the available trace, contributes no inferred
-idle duration. Explicit bounds also let a later capture describe a wait that
+idle duration. Selected resumptions without usable captured frames are also
+omitted. Explicit bounds also let a later capture describe a wait that
 started in an earlier trace segment. Older experimental events without those
 bounds remain readable but cannot provide correct mixed-profile weights.
 
@@ -439,7 +446,7 @@ No new `CpuSampleEvent` field is required for the initial mixed flamegraph.
 
 ## Statistical Contract
 
-For eligible pending transition `j`:
+For eligible resumption after `Pending`, `j`:
 
 - `I_j` is 1 when selected and 0 otherwise;
 - `p_j` is the recorded inclusion probability;
@@ -466,7 +473,9 @@ E[I_j * d_j / p_j] = d_j
 ```
 
 The estimator remains unbiased when probabilities differ by worker or epoch,
-as long as every sampled event records the probability actually used.
+provided each event records its selection probability and the stack genuinely
+represents that wait. The unresolved capture-attribution issue above prevents
+claiming this guarantee for arbitrary instrumented futures.
 
 Do not use raw task-dump counts as time weights. Faster-polling tasks produce
 more eligible transitions, and changing traffic changes `p_j`.
