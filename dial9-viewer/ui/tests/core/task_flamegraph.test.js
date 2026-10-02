@@ -1,8 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { createRequire } from "node:module";
+import { ColumnarEvents } from "../../src/lib/trace/columnar-events.js";
+import { ColumnarWorkerSpans } from "../../src/lib/trace/columnar-worker-spans.js";
+import { buildWorkerSpansColumnar, buildWorkerSpansColumnarStore } from "../../src/lib/trace/worker-spans-columnar.js";
 
 const require = createRequire(import.meta.url);
 const { analyzeTaskProfile, selectRepresentative, localTaskProfile } = require("../../task_flamegraph.js");
+const { buildWorkerSpans, attachCpuSamples } = require("../../trace_analysis.js");
+const { EVENT_TYPES: E } = require("../../trace_parser.js");
 const frame = (name, file = null) => ({ name, file });
 const stack = (...names) => names.map((name) => frame(name));
 function fixture() {
@@ -18,6 +23,78 @@ function fixture() {
 }
 
 describe("time-weighted task profile", () => {
+  it.each([
+    ["timeFiltered", "time_filtered_trace"],
+    ["truncated", "truncated_trace"],
+  ])("does not compare retained stacks against incomplete CPU context (%s)", (flag, reason) => {
+    const trace = {
+      events: [{ eventType: E.PollStart, taskId: 7, workerId: 0 }],
+      segmentMetadata: fixture().metadata,
+      callframeSymbols: new Map([["0x1", "service::work"]]),
+      taskDumps: new Map([[7, [{ ...fixture().captures[0], sampled: true, callchain: ["0x1"] }]]]),
+    };
+    const polls = [{ cpuSamples: [{ timestamp: 60, source: 0, callchain: ["0x1"] }] }];
+    expect(localTaskProfile(trace, 7, polls, 0, 230)).toMatchObject({ cpu_ns: 10, idle_ns: 200 });
+    expect(localTaskProfile({ ...trace, [flag]: true }, 7, polls, 0, 230))
+      .toMatchObject({ unavailable_reason: reason, tree: null, cpu_samples: 0, capture_groups: 0 });
+  });
+
+  it.each(["objects", "columnar objects", "columnar store", "columnar bridge"])(
+    "excludes unproven CPU attribution but retains park-bounded polls (%s)", (storage) => {
+      for (const closedByPark of [false, true]) {
+        const event = (eventType, timestamp, taskId = 0) => ({
+          eventType, timestamp, taskId, workerId: 0, tid: 42, localQueue: 0, cpuTime: 0,
+          spawnLoc: null, spawnLocId: null,
+        });
+        const events = [
+          event(E.WorkerUnpark, 0), event(E.PollStart, 10, 7),
+          event(closedByPark ? E.WorkerPark : E.PollStart, 100, 8),
+          event(closedByPark ? E.WorkerUnpark : E.PollEnd, 105),
+          event(E.PollStart, 110, 7), event(E.PollEnd, 120),
+        ];
+        const samples = [50, 115].map((timestamp) => ({
+          timestamp, workerId: 0, tid: 42, source: 0, callchain: ["0x1"],
+        }));
+        const columns = new ColumnarEvents();
+        for (const e of events) columns.push(e);
+        let polls;
+        if (storage === "columnar store" || storage === "columnar bridge") {
+          const store = storage === "columnar store"
+            ? buildWorkerSpansColumnarStore(columns, [0], 125, []).store
+            : ColumnarWorkerSpans.fromWorkerSpans(buildWorkerSpans(events, [0], 125, []).workerSpans);
+          store.attachCpuSamples(samples);
+          polls = store.pollsForTask(7);
+          expect(store.taskAggregates().find((t) => t.taskId === 7).totalPollNs).toBe(10);
+        } else {
+          const { workerSpans } = storage === "objects"
+            ? buildWorkerSpans(events, [0], 125, [])
+            : buildWorkerSpansColumnar(columns, [0], 125, []);
+          attachCpuSamples(samples, workerSpans);
+          polls = workerSpans[0].polls.filter((p) => p.taskId === 7);
+        }
+        expect(polls[0].openEnded).toBe(true);
+        expect(!!polls[0].closedByPark).toBe(closedByPark);
+        expect(polls.flatMap((p) => p.cpuSamples || [])).toHaveLength(2);
+        const trace = {
+          events: storage === "objects" ? events : columns,
+          segmentMetadata: new Map([
+            ["cpu.profile.frequency_hz", "100000000"],
+            ["task_sampling.worker.0.sampling_started_at_ns", "0"],
+          ]),
+          callframeSymbols: new Map([["0x1", "service::work"]]),
+          taskDumps: new Map([[7, [{
+            timestamp: 115, sampled: true, idleStartNs: 60, idleEndNs: 110,
+            inclusionProbability: 1, callchain: ["0x1"],
+          }]]]),
+        };
+        expect(localTaskProfile(trace, 7, polls, 0, 125)).toMatchObject({
+          unavailable_reason: null, cpu_ns: closedByPark ? 20 : 10, idle_ns: 50,
+          cpu_samples: closedByPark ? 2 : 1, capture_groups: 1,
+        });
+      }
+    },
+  );
+
   it("weights one sibling group once and excludes calibration", () => {
     const input = fixture();
     input.captures.push({ ...input.captures[0] });

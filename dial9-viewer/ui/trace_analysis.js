@@ -565,6 +565,7 @@
               spawnLocId: meta.spawnLocId,
               spawnLoc: meta.spawnLoc,
               openEnded: true,
+              closedByPark: true,
             });
             openPoll[w] = null;
           }

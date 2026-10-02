@@ -94,8 +94,8 @@
     return analyzePreparedTaskProfile({ ...input, captureGroups: groupCaptures(captures) });
   }
 
-  function analyzePreparedTaskProfile({ taskId, startNs, endNs, metadata, workers, cpu, captureGroups, metadataConflicts = [] }) {
-    const result = {
+  function emptyProfile(taskId, startNs, endNs) {
+    return {
       unit: "nanoseconds", task_id: String(taskId), start_ns: startNs, end_ns: endNs,
       effective_start_ns: null, cpu_ns: 0, idle_ns: 0, cpu_samples: 0, capture_groups: 0,
       incomplete_capture_groups: 0, invalid_capture_groups: 0, tree: null, unavailable_reason: null,
@@ -106,6 +106,10 @@
         "Waits without captured frames are omitted; non-Tokio waits may be attributed to a later await.",
       ],
     };
+  }
+
+  function analyzePreparedTaskProfile({ taskId, startNs, endNs, metadata, workers, cpu, captureGroups, metadataConflicts = [] }) {
+    const result = emptyProfile(taskId, startNs, endNs);
     const unavailable = (reason) => { result.unavailable_reason = reason; return result; };
     if (!(startNs < endNs)) return unavailable("invalid_range");
     if ([...metadataConflicts].some((k) => k === "boot_id" || k === "cpu.profile.frequency_hz" || k.startsWith("task_sampling.worker.")))
@@ -173,6 +177,11 @@
 
   const inputs = new WeakMap();
   function localTaskProfile(trace, taskId, polls, startNs, endNs) {
+    // Parsing a subset retains samples but can drop their poll/thread context.
+    if (trace.timeFiltered || trace.truncated) return {
+      ...emptyProfile(taskId, startNs, endNs),
+      unavailable_reason: trace.timeFiltered ? "time_filtered_trace" : "truncated_trace",
+    };
     let tasks = inputs.get(trace);
     if (!tasks) { tasks = new Map(); inputs.set(trace, tasks); }
     let input = tasks.get(taskId);
@@ -195,7 +204,9 @@
       input = {
         taskId, workers: [...workers], metadata: trace.segmentMetadata,
         metadataConflicts: trace.metadataConflicts,
-        cpu: polls.flatMap((p) => (p.cpuSamples || [])
+        // A subsequent PollStart is not evidence that the previous task kept
+        // running until then. Match PollTimeline's PollEnd/WorkerPark policy.
+        cpu: polls.filter((p) => !p.openEnded || p.closedByPark).flatMap((p) => (p.cpuSamples || [])
           .filter((s) => s.source === 0)
           .map((s) => ({ timestamp: s.timestamp, stack: stack(s.callchain) }))),
         // Group membership and representatives do not depend on the viewport.
