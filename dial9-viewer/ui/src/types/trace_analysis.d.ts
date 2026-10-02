@@ -43,6 +43,8 @@ declare module "*/trace_analysis.js" {
      * park closed the poll); the actual duration is unknown.
      */
     openEnded?: boolean;
+    /** WorkerPark bounds CPU attribution even without a matching PollEnd. */
+    closedByPark?: boolean;
     /** On-CPU samples inside this poll; assigned by attachCpuSamples. */
     cpuSamples?: CpuSample[];
     /** Off-CPU samples inside this poll; assigned by attachCpuSamples. */

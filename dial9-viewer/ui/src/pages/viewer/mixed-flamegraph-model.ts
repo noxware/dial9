@@ -25,6 +25,8 @@ export function captureAlternatives(root: TaskProfileNode): TaskProfileNode[] {
 
 export function mixedUnavailable(reason: string): string {
   switch (reason) {
+    case "time_filtered_trace": return "Set Range discarded poll context needed to compare CPU and waits. Clear the range filter, then zoom to the desired interval.";
+    case "truncated_trace": return "The event limit discarded poll context needed to compare CPU and waits. Reload with a higher event limit.";
     case "missing_idle_intervals": return "This older experimental trace has no completed wait intervals.";
     case "missing_cpu_frequency": return "CPU sampling frequency is missing; CPU and waits cannot be compared in time units.";
     case "missing_or_conflicting_activation": return "Sampling coverage is unknown for a worker that ran this task.";

@@ -32,7 +32,7 @@ const defaultMeta = { taskId: 0, spawnLocId: 0 as number | string | null, spawnL
 /** Sink for reconstructed spans. `schedWait` omitted (undefined) => the
  * trace-end park close, which the frozen path pushes WITHOUT a schedWait key. */
 interface SpanEmitter {
-  poll(w: number, start: number, end: number, taskId: number, spawnLocId: number | string | null, spawnLoc: string | null, openEnded: boolean): void;
+  poll(w: number, start: number, end: number, taskId: number, spawnLocId: number | string | null, spawnLoc: string | null, openEnded: boolean, closedByPark?: boolean): void;
   park(w: number, start: number, end: number, schedWait?: number | null): void;
   active(w: number, start: number, end: number, ratio: number): void;
 }
@@ -43,9 +43,10 @@ class FatSpanEmitter implements SpanEmitter {
   ensure(w: number): void {
     if (this.workerSpans[w] === undefined) this.workerSpans[w] = { polls: [], parks: [], actives: [], cpuSampleTimes: [] };
   }
-  poll(w: number, start: number, end: number, taskId: number, spawnLocId: number | string | null, spawnLoc: string | null, openEnded: boolean): void {
+  poll(w: number, start: number, end: number, taskId: number, spawnLocId: number | string | null, spawnLoc: string | null, openEnded: boolean, closedByPark = false): void {
     const poll: PollSpan = { start, end, taskId, spawnLocId, spawnLoc };
     if (openEnded) poll.openEnded = true;
+    if (closedByPark) poll.closedByPark = true;
     this.workerSpans[w]!.polls.push(poll);
   }
   park(w: number, start: number, end: number, schedWait?: number | null): void {
@@ -63,8 +64,8 @@ class StoreSpanEmitter implements SpanEmitter {
   constructor(b: ColumnarWorkerSpansBuilder) {
     this.b = b;
   }
-  poll(w: number, start: number, end: number, taskId: number, _spawnLocId: number | string | null, spawnLoc: string | null, openEnded: boolean): void {
-    this.b.pushPoll(w, start, end, taskId, spawnLoc, openEnded);
+  poll(w: number, start: number, end: number, taskId: number, _spawnLocId: number | string | null, spawnLoc: string | null, openEnded: boolean, closedByPark = false): void {
+    this.b.pushPoll(w, start, end, taskId, spawnLoc, openEnded, closedByPark);
   }
   park(w: number, start: number, end: number, schedWait?: number | null): void {
     this.b.pushPark(w, start, end, schedWait ?? null);
@@ -170,7 +171,7 @@ function reconstruct(
       } else if (et === EVT.WorkerPark) {
         if (openPoll[workerKey] != null) {
           const meta = openPollMeta[workerKey] || defaultMeta;
-          emit.poll(w, openPoll[workerKey]!, t, meta.taskId, meta.spawnLocId, meta.spawnLoc, true);
+          emit.poll(w, openPoll[workerKey]!, t, meta.taskId, meta.spawnLocId, meta.spawnLoc, true, true);
           openPoll[workerKey] = null;
         }
         openPark[workerKey] = t;
