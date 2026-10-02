@@ -8,8 +8,8 @@
 // component renders its whole interior imperatively via lit-html into that
 // aside, so the shell's declarative re-renders never clobber it (no child
 // bindings on the aside). It re-renders on its OWN store subscription
-// (selection / trace / uiPrefs / view / transient, plus viewport in mixed mode)
-// inside the scheduler tick, and on
+// (selection / trace / uiPrefs / view / transient; mixed-mode viewport updates
+// are debounced), and on
 // local UI-state changes (tab switch, section toggle, load-more, frame expand)
 // which render directly.
 //
@@ -31,6 +31,7 @@ import type { TaskDetailData } from "./task-detail-model.js";
 import { deriveAxisInputs, fmtAxisTick } from "./axis.js";
 import { formatHumanDuration, localTaskProfile, type TaskProfile } from "../../lib/trace/index.js";
 import { mixedDisplayTree, captureAlternatives, mixedUnavailable } from "./mixed-flamegraph-model.js";
+import { subscribeInspectorFrames } from "./inspector-updates.js";
 import type {
   CallframeSymbols,
   CustomTraceEvent,
@@ -322,6 +323,7 @@ export function mountInspector(
     reconcileSelection(s.selection);
     host.style.width = `${s.uiPrefs.sidebarWidth}px`;
     render(frameTemplate(s), host);
+    setMixedRangePending(false);
     renderReadout();
     // Populate the Stack tab's region-analysis host. Idempotent + a no-op
     // unless the Stack tab is showing a retained region; runs after the frame
@@ -690,6 +692,11 @@ export function mountInspector(
   }
 
   let mixedCache: { sig: string; profile: TaskProfile } | null = null;
+  function setMixedRangePending(pending: boolean): void {
+    const label = host.querySelector("[data-mixed-range-label]");
+    if (label) label.textContent = pending ? "Previous range (updating…)" : "Visible range";
+  }
+
   function mixedProfile(d: TaskDetailData): TaskProfile | null {
     const { trace: { trace }, viewport } = state();
     if (trace === null || d.taskId === null) return null;
@@ -707,7 +714,7 @@ export function mountInspector(
       ${mixedUnavailable(profile?.unavailable_reason ?? "no_usable_task_samples")}</p>`;
     return html`
       <div class="d9-task-fg-note" data-mixed-summary>
-        Visible range · estimated CPU ${formatHumanDuration(profile.cpu_ns)} + idle ${formatHumanDuration(profile.idle_ns)}
+        <span data-mixed-range-label>Visible range</span> · estimated CPU ${formatHumanDuration(profile.cpu_ns)} + idle ${formatHumanDuration(profile.idle_ns)}
         · ${profile.cpu_samples} CPU samples, ${profile.capture_groups} async captures
       </div>
       <div class="d9-task-fg-host d9-mixed-fg-host" id="d9-task-fg" data-task-fg-host></div>
@@ -1580,17 +1587,10 @@ export function mountInspector(
   // Frame re-render on the content slices; readout-only re-render on the
   // high-frequency transient channel (so a hover never re-runs the tab
   // derivations - the split above).
-  const frameSlices = ["trace", "selection", "uiPrefs", "view"] as const;
-  const unsubFrame = store.subscribe(
-    [...frameSlices, "viewport"],
-    (s, changed) => {
-      if (
-        frameSlices.some((slice) => changed.has(slice)) ||
-        (s.view.inspectorTab === "task" && s.view.taskFlamegraphMode === "mixed")
-      ) {
-        renderFrame();
-      }
-    },
+  const unsubFrame = subscribeInspectorFrames(
+    store,
+    renderFrame,
+    () => setMixedRangePending(true),
   );
   const unsubReadout = store.subscribe(["transient"], () => renderReadout());
 
