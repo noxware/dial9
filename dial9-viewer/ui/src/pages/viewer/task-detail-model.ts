@@ -661,7 +661,9 @@ export function buildTaskDetailRenderModel(
   }
 
   // ── Idle gaps between consecutive polls ──────────────────────────────
-  const dumps = data.taskDumps.filter((dump) => !dump.sampled);
+  const dumps = data.taskDumps.filter(
+    (dump) => !dump.sampled || dump.idleEndNs === undefined,
+  );
   const completedWaits = new Map<number, TaskDump[]>();
   for (const dump of data.taskDumps) {
     if (dump.sampled && dump.idleEndNs !== undefined) {
