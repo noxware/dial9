@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use super::decode::clock::ClockOffset;
 use super::decode::events::{TaskSample, TraceEvent};
 
-pub(crate) use parquet::{read, write};
+pub(crate) use parquet::{ReadOutcome, read, write};
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct Frame {

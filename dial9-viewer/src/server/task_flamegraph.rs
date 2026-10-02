@@ -128,6 +128,14 @@ pub(crate) async fn get_task_flamegraph(
             },
         }));
     }
+    // Cached parts also retain decoded data until analysis finishes.
+    let inflight = state
+        .fold_limits
+        .inflight
+        .clone()
+        .acquire_owned()
+        .await
+        .expect("inflight semaphore is never closed");
     let mut segments = Vec::new();
     let mut rows = 0usize;
     for key in keys {
@@ -137,27 +145,37 @@ pub(crate) async fn get_task_flamegraph(
             .get_object(&agg.output_bucket, &part)
             .await
             .map_err(|e| failure(e.into()))?;
-        let segment = tokio::task::spawn_blocking(move || task_profile::read(bytes.into()))
+        let recording_id = params.recording_id.clone();
+        let remaining_rows = MAX_PROFILE_ROWS - rows;
+        let permit = state
+            .fold_limits
+            .cpu
+            .clone()
+            .acquire_owned()
             .await
-            .map_err(|e| failure(e.into()))?
-            .map_err(failure)?;
-        if params
-            .recording_id
-            .as_ref()
-            .is_some_and(|id| id != &segment.recording_id)
-        {
-            continue;
-        }
-        rows = rows.saturating_add(segment.rows.len());
-        if rows > MAX_PROFILE_ROWS {
-            return Err((
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "task profile exceeds the analysis row limit; select fewer trace files".into(),
-            ));
-        }
+            .expect("cpu semaphore is never closed");
+        let outcome = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            task_profile::read(bytes.into(), recording_id.as_deref(), remaining_rows)
+        })
+        .await
+        .map_err(|e| failure(e.into()))?
+        .map_err(failure)?;
+        let segment = match outcome {
+            task_profile::ReadOutcome::Segment(segment) => segment,
+            task_profile::ReadOutcome::OtherRecording => continue,
+            task_profile::ReadOutcome::RowLimitExceeded => {
+                return Err((
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "task profile exceeds the analysis row limit; select fewer trace files".into(),
+                ));
+            }
+        };
+        rows += segment.rows.len();
         segments.push(segment);
     }
     let profile = tokio::task::spawn_blocking(move || {
+        let _inflight = inflight;
         analysis::analyze(
             &segments,
             analysis::Request {

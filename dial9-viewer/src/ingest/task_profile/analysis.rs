@@ -389,7 +389,15 @@ mod tests {
         b.rows = a.rows.split_off(6); // poll end is in the following part
         let segments = [a, b]
             .iter()
-            .map(|s| super::super::read(super::super::write(s).unwrap().into()).unwrap())
+            .map(|s| {
+                let outcome =
+                    super::super::read(super::super::write(s).unwrap().into(), None, s.rows.len())
+                        .unwrap();
+                let super::super::ReadOutcome::Segment(segment) = outcome else {
+                    panic!("test segment should fit its row budget");
+                };
+                segment
+            })
             .collect::<Vec<_>>();
         let result = analyze(&segments, request(0, 230));
         assert_eq!(result.unavailable_reason, None);
