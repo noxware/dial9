@@ -8,7 +8,8 @@
 // component renders its whole interior imperatively via lit-html into that
 // aside, so the shell's declarative re-renders never clobber it (no child
 // bindings on the aside). It re-renders on its OWN store subscription
-// (selection / trace / uiPrefs / transient) inside the scheduler tick, and on
+// (selection / trace / uiPrefs / view / transient, plus viewport in mixed mode)
+// inside the scheduler tick, and on
 // local UI-state changes (tab switch, section toggle, load-more, frame expand)
 // which render directly.
 //
@@ -308,7 +309,8 @@ export function mountInspector(
   //
   // Two render targets so the transient channel stays cheap: the FRAME (status
   // + tabs + body, incl. the heavy Poll/Related derivations) re-renders only on
-  // trace/selection/uiPrefs changes; the at-cursor READOUT re-renders on the
+  // trace/selection/uiPrefs/view changes or viewport changes in mixed mode;
+  // the at-cursor READOUT re-renders on the
   // high-frequency `transient` channel into its own host, so a hover never
   // re-runs buildPollDetail/buildRelated. The readout host is a binding-free
   // node inside the frame template, so a frame re-render leaves its imperative
@@ -1581,9 +1583,17 @@ export function mountInspector(
   // Frame re-render on the content slices; readout-only re-render on the
   // high-frequency transient channel (so a hover never re-runs the tab
   // derivations - the split above).
+  const frameSlices = ["trace", "selection", "uiPrefs", "view"] as const;
   const unsubFrame = store.subscribe(
-    ["trace", "selection", "uiPrefs", "view"],
-    () => renderFrame(),
+    [...frameSlices, "viewport"],
+    (s, changed) => {
+      if (
+        frameSlices.some((slice) => changed.has(slice)) ||
+        (s.view.inspectorTab === "task" && s.view.taskFlamegraphMode === "mixed")
+      ) {
+        renderFrame();
+      }
+    },
   );
   const unsubReadout = store.subscribe(["transient"], () => renderReadout());
 
