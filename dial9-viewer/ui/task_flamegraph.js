@@ -8,6 +8,7 @@
   const sameFrame = (a, b) => a.name === b.name && a.file === b.file;
   const key = (stack) => JSON.stringify(stack);
   function compareStacks(a, b) {
+    if (a === b) return 0;
     for (let i = 0; i < Math.min(a.length, b.length); i++) {
       if (a[i].name !== b[i].name) return a[i].name < b[i].name ? -1 : 1;
       if (a[i].file !== b[i].file) {
@@ -73,12 +74,27 @@
     }
     current.self_ns += weight;
     if (alternatives.length) {
-      current.alternatives = [...new Map([...(current.alternatives || []), ...alternatives].map((s) => [JSON.stringify(s), s])).values()]
-        .sort(compareStacks);
+      current.alternatives = [...new Set([...(current.alternatives || []), ...alternatives])]
+        .sort(compareStacks)
+        .filter((stack, i, all) => i === 0 || compareStacks(stack, all[i - 1]) !== 0);
     }
   }
 
-  function analyzeTaskProfile({ taskId, startNs, endNs, metadata, workers, cpu, captures, metadataConflicts = [] }) {
+  function groupCaptures(captures) {
+    const groups = new Map();
+    for (const capture of captures) {
+      if (!groups.has(capture.timestamp)) groups.set(capture.timestamp, []);
+      groups.get(capture.timestamp).push(capture);
+    }
+    return [...groups].sort((a, b) => a[0] - b[0])
+      .map(([timestamp, samples]) => ({ timestamp, samples, representative: null }));
+  }
+
+  function analyzeTaskProfile({ captures, ...input }) {
+    return analyzePreparedTaskProfile({ ...input, captureGroups: groupCaptures(captures) });
+  }
+
+  function analyzePreparedTaskProfile({ taskId, startNs, endNs, metadata, workers, cpu, captureGroups, metadataConflicts = [] }) {
     const result = {
       unit: "nanoseconds", task_id: String(taskId), start_ns: startNs, end_ns: endNs,
       effective_start_ns: null, cpu_ns: 0, idle_ns: 0, cpu_samples: 0, capture_groups: 0,
@@ -115,13 +131,9 @@
       result.cpu_ns += weight;
       result.cpu_samples++;
     }
-    const groups = new Map();
-    for (const capture of captures) {
-      if (!groups.has(capture.timestamp)) groups.set(capture.timestamp, []);
-      groups.get(capture.timestamp).push(capture);
-    }
-    for (const [timestamp, group] of [...groups].sort((a, b) => a[0] - b[0])) {
-      const { idleStartNs: a, idleEndNs: b, inclusionProbability: p } = group[0];
+    for (const group of captureGroups) {
+      const { timestamp, samples } = group;
+      const { idleStartNs: a, idleEndNs: b, inclusionProbability: p } = samples[0];
       if (a == null || b == null) {
         result.incomplete_capture_groups++;
         continue;
@@ -132,12 +144,12 @@
       }
       const overlap = Math.min(b, endNs) - Math.max(a, start);
       if (overlap <= 0) continue;
-      if (!Number.isFinite(p) || p <= 0 || p > 1 || group.some((c) =>
+      if (!Number.isFinite(p) || p <= 0 || p > 1 || samples.some((c) =>
         c.inclusionProbability !== p || c.idleStartNs !== a || c.idleEndNs !== b || !c.stack.length)) {
         result.invalid_capture_groups++;
         continue;
       }
-      const selected = selectRepresentative(group.map((c) => c.stack));
+      const selected = group.representative ??= selectRepresentative(samples.map((c) => c.stack));
       const weight = overlap / p;
       if (!Number.isFinite(weight)) {
         result.invalid_capture_groups++;
@@ -186,13 +198,14 @@
         cpu: polls.flatMap((p) => (p.cpuSamples || [])
           .filter((s) => s.source === 0)
           .map((s) => ({ timestamp: s.timestamp, stack: stack(s.callchain) }))),
-        captures: (trace.taskDumps.get(taskId) || [])
+        // Group membership and representatives do not depend on the viewport.
+        captureGroups: groupCaptures((trace.taskDumps.get(taskId) || [])
           .filter((c) => c.sampled === true)
-          .map((c) => ({ ...c, stack: stack(c.callchain) })),
+          .map((c) => ({ ...c, stack: stack(c.callchain) }))),
       };
       tasks.set(taskId, input);
     }
-    return analyzeTaskProfile({ ...input, startNs, endNs });
+    return analyzePreparedTaskProfile({ ...input, startNs, endNs });
   }
 
   exports.selectRepresentative = selectRepresentative;

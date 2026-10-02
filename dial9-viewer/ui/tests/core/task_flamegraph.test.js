@@ -83,6 +83,49 @@ describe("time-weighted task profile", () => {
       frame("service::root"), frame("service::outer", "src/main.rs"), frame("service::inner", "src/main.rs"),
     ]]);
   });
+  it("keeps weights and alternatives scoped to each range when revisiting a task", () => {
+    const capture = (timestamp, idleStartNs, idleEndNs, inclusionProbability, leaf) => ({
+      timestamp, idleStartNs, idleEndNs, inclusionProbability, sampled: true,
+      callchain: [leaf, "0x1"],
+    });
+    const trace = {
+      events: [{ eventType: 0, taskId: 7, workerId: 0 }],
+      segmentMetadata: fixture().metadata,
+      callframeSymbols: new Map([
+        ["0x1", "root"],
+        ["0x2", [{ symbol: "service::work", location: "src/main.rs:5" }]],
+        ["0x3", "tokio::time::sleep::Sleep"],
+        ["0x4", "tokio::sync::notify::Notified"],
+        ["0x5", [{ symbol: "service::work", location: "src/main.rs:5" }]],
+      ]),
+      taskDumps: new Map([[7, [
+        ...["0x2", "0x3"].map((leaf) => capture(110, 60, 100, 0.5, leaf)),
+        ...["0x4", "0x5"].map((leaf) => capture(210, 150, 200, 0.25, leaf)),
+      ]]]),
+    };
+    const polls = [{ cpuSamples: [70, 170].map((timestamp) => ({
+      timestamp, source: 0, callchain: ["0x2", "0x1"],
+    })) }];
+    const profile = (start, end) => localTaskProfile(trace, 7, polls, start, end);
+    const alternatives = (result) => result.tree.children["[idle-at-await]"]
+      .children.root.children["service::work"].alternatives;
+    const first = profile(65, 95);
+    expect(first).toMatchObject({ cpu_ns: 10, idle_ns: 60, capture_groups: 1 });
+    expect(alternatives(first)).toEqual([
+      [frame("root"), frame("service::work", "src/main.rs")],
+      [frame("root"), frame("tokio::time::sleep::Sleep")],
+    ]);
+    const full = profile(0, 230);
+    expect(full).toMatchObject({ cpu_ns: 20, idle_ns: 280, capture_groups: 2 });
+    expect(alternatives(full)).toHaveLength(3);
+    const second = profile(155, 185);
+    expect(second).toMatchObject({ cpu_ns: 10, idle_ns: 120, capture_groups: 1 });
+    expect(alternatives(second).map((s) => s.at(-1).name)).toEqual([
+      "service::work", "tokio::sync::notify::Notified",
+    ]);
+    expect(profile(65, 95)).toEqual(first);
+    expect(profile(0, 230)).toEqual(full);
+  });
 });
 
 describe("representative async stack", () => {
