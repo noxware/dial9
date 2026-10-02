@@ -47,3 +47,8 @@ assert2 = "0.4"
 
 [profile.release]
 debug = 1
+
+# Resumed task capture needs the deferred leaf wakes from Tokio #8445.
+# Remove this patch when a Tokio release includes that fix.
+[patch.crates-io]
+tokio = { git = "https://github.com/tokio-rs/tokio", rev = "d8936239532170d3ee25f3b68811cdad2b79f23b" }

@@ -4,6 +4,7 @@
 //! Linux/Tokio support as [`TaskDumpConfig`](super::TaskDumpConfig).
 //! Only Dial9-instrumented futures participate. Configure this through
 //! [`TokioAttachOptions`](super::TokioAttachOptions).
+//! Requires Tokio's [deferred leaf wake fix](https://github.com/tokio-rs/tokio/pull/8445).
 
 /// Experimental alternative to [`TaskDumpConfig`](super::TaskDumpConfig).
 ///
@@ -37,7 +38,7 @@ impl TaskSamplingConfig {
         #[builder(default = 10)]
         captures_per_second_per_worker: u32,
         /// Fixed seed for reproducible sampling given the same worker IDs and
-        /// pending-transition timestamps. Defaults to a timestamp per worker.
+        /// eligible-resumption timestamps. Defaults to a timestamp per worker.
         rng_seed: Option<u64>,
     ) -> Self {
         // Same panic convention as MemoryProfilingConfigBuilder; build-time validation per the design doc.

@@ -11,6 +11,9 @@ use dial9_trace_format::types::{FieldType, FieldValueRef};
 use lasso::{Rodeo, Spur};
 use rustc_hash::FxHashMap;
 use serde::Deserialize;
+use std::collections::{BTreeMap, HashMap};
+
+use crate::ingest::task_profile::Frame;
 
 use super::clock::{ClockOffset, MonoNs};
 use dial9_core::schema_extensions::{self, roles};
@@ -87,6 +90,16 @@ pub(crate) struct CpuSample {
 }
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct TaskSample {
+    pub timestamp_ns: u64,
+    pub task_id: u64,
+    pub callchain: Vec<u64>,
+    pub inclusion_probability: f64,
+    pub idle_start_ns: Option<u64>,
+    pub idle_end_ns: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct WorkerPark {
     pub(crate) timestamp_ns: u64,
     pub(crate) worker_id: u64,
@@ -149,6 +162,8 @@ pub(crate) struct SymbolEntry {
     pub(crate) addr: u64,
     pub(crate) inline_depth: u64,
     pub(crate) symbol_name: String,
+    #[serde(default)]
+    pub(crate) source_file: Option<String>,
 }
 
 /// Legacy span enter event from old producers.
@@ -754,6 +769,9 @@ impl TraceEvent {
 pub(crate) struct DecodedTrace {
     pub(crate) interner: Rodeo,
     pub(crate) addr_to_keys: FxHashMap<u64, Vec<(u64, Spur)>>,
+    pub(crate) profile_symbols: HashMap<u64, Vec<(u64, Frame)>>,
+    pub(crate) task_samples: Vec<TaskSample>,
+    pub(crate) metadata: BTreeMap<String, String>,
     pub(crate) events: Vec<TraceEvent>,
     pub(crate) clock_offset: Option<ClockOffset>,
     pub(crate) first_clock_sync_mono: Option<MonoNs>,
@@ -770,6 +788,9 @@ pub(crate) fn decode_trace(data: &[u8], source_key: &str) -> anyhow::Result<Deco
 
     let mut interner = Rodeo::default();
     let mut addr_to_keys: FxHashMap<u64, Vec<(u64, Spur)>> = FxHashMap::default();
+    let mut profile_symbols = HashMap::new();
+    let mut task_samples = Vec::new();
+    let mut metadata = BTreeMap::new();
     let mut events: Vec<TraceEvent> = Vec::new();
     let mut clock_offset: Option<ClockOffset> = None;
     let mut first_clock_sync_mono: Option<MonoNs> = None;
@@ -861,14 +882,24 @@ pub(crate) fn decode_trace(data: &[u8], source_key: &str) -> anyhow::Result<Deco
                         #[serde(default)]
                         entries: std::collections::HashMap<String, String>,
                     }
-                    if let Ok(meta) = ev.deserialize::<SegmentMeta>()
-                        && segment_metadata_boot_id.is_none()
-                        && let Some(bid) = meta.entries.get("boot_id")
-                        && !bid.is_empty()
-                    {
-                        segment_metadata_boot_id = Some(bid.clone());
+                    if let Ok(meta) = ev.deserialize::<SegmentMeta>() {
+                        if segment_metadata_boot_id.is_none()
+                            && let Some(bid) =
+                                meta.entries.get("boot_id").filter(|id| !id.is_empty())
+                        {
+                            segment_metadata_boot_id = Some(bid.clone());
+                        }
+                        metadata.extend(meta.entries);
                     }
                 }
+                "TaskSampleEvent" => match ev.deserialize::<TaskSample>() {
+                    Ok(sample) => task_samples.push(sample),
+                    Err(error) => {
+                        dial9_core::rate_limited!(std::time::Duration::from_secs(60), {
+                            tracing::warn!(source_key, %error, "malformed task sample");
+                        });
+                    }
+                },
                 "CpuSampleEvent" | "CpuSample" => {
                     if let Ok(s) = ev.deserialize::<CpuSample>()
                         && !s.callchain.is_empty()
@@ -918,6 +949,16 @@ pub(crate) fn decode_trace(data: &[u8], source_key: &str) -> anyhow::Result<Deco
                             .entry(sym.addr)
                             .or_default()
                             .push((sym.inline_depth, key));
+                        profile_symbols
+                            .entry(sym.addr)
+                            .or_insert_with(Vec::new)
+                            .push((
+                                sym.inline_depth,
+                                Frame {
+                                    name: sym.symbol_name,
+                                    file: sym.source_file.filter(|file| !file.is_empty()),
+                                },
+                            ));
                     }
                 }
                 // Span close: the old producer's `SpanCloseEvent` carries only
@@ -998,6 +1039,9 @@ pub(crate) fn decode_trace(data: &[u8], source_key: &str) -> anyhow::Result<Deco
     Ok(DecodedTrace {
         interner,
         addr_to_keys,
+        profile_symbols,
+        task_samples,
+        metadata,
         events,
         clock_offset,
         first_clock_sync_mono,

@@ -34,6 +34,7 @@ mod s3;
 mod s3;
 mod services;
 pub(crate) mod span_stats;
+mod task_flamegraph;
 pub(crate) mod tokio_stats;
 mod trace;
 mod upload;
@@ -441,6 +442,10 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/flamegraph",
             axum::routing::get(flamegraph::get_flamegraph),
+        )
+        .route(
+            "/task-flamegraph",
+            axum::routing::get(task_flamegraph::get_task_flamegraph),
         )
         .route(
             "/tokio-stats",
