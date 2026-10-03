@@ -408,8 +408,8 @@ describe("buildTaskDetailRenderModel: idle gaps + lifespan", () => {
     const data = detailData({
       polls: [poll(100, 150, 1), poll(300, 350, 1), poll(600, 650, 1)],
       taskDumps: [
-        { timestamp: 101, sampled, callchain: ["first"] },
-        { timestamp: 301, sampled, callchain: ["second"] },
+        { timestamp: 101, ...(sampled === undefined ? {} : { sampled }), callchain: ["first"] },
+        { timestamp: 301, ...(sampled === undefined ? {} : { sampled }), callchain: ["second"] },
       ],
     });
     const m = buildTaskDetailRenderModel({ data, viewStart: 0, viewEnd: 1000, drawW: 1000 });
