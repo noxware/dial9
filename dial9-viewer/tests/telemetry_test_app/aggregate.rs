@@ -36,7 +36,7 @@ struct TaskSample {
     inclusion_probability: f64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, PartialEq)]
 struct Node {
     name: String,
     self_ns: f64,
@@ -136,6 +136,49 @@ pub(crate) async fn check(
         "insufficient observations: {} CPU, {} captures",
         profile.cpu_samples,
         profile.capture_groups
+    );
+    let mut paths: Vec<_> = std::fs::read_dir(trace_dir)?
+        .map(|entry| entry.map(|e| e.path()))
+        .collect::<std::io::Result<_>>()?;
+    paths.retain(|p| matches!(p.extension().and_then(|s| s.to_str()), Some("bin" | "gz")));
+    paths.sort();
+    let js = std::process::Command::new("node")
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/task_flamegraph/local.cjs"
+        ))
+        .args([
+            task.to_string(),
+            expected.measurement.start_ns.to_string(),
+            expected.measurement.end_ns.to_string(),
+        ])
+        .args(paths)
+        .output()
+        .context("run local task profile")?;
+    ensure!(
+        js.status.success(),
+        "local profile failed: {}",
+        String::from_utf8_lossy(&js.stderr)
+    );
+    let mut decoder = serde_json::Deserializer::from_slice(&js.stdout);
+    decoder.disable_recursion_limit();
+    let local = Profile::deserialize(&mut decoder)?;
+    ensure!(
+        local.unavailable_reason.is_none(),
+        "local profile unavailable: {:?}",
+        local.unavailable_reason
+    );
+    ensure!(
+        local.cpu_samples == profile.cpu_samples && local.capture_groups == profile.capture_groups,
+        "local/aggregate counts differ: CPU {} vs {}, captures {} vs {}",
+        local.cpu_samples,
+        profile.cpu_samples,
+        local.capture_groups,
+        profile.capture_groups
+    );
+    ensure!(
+        local.tree == profile.tree,
+        "local/aggregate weighted trees differ"
     );
     super::aggregate_spans::check(output.as_ref(), expected, offset).await?;
     compare_weights(

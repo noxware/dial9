@@ -661,7 +661,17 @@ export function buildTaskDetailRenderModel(
   }
 
   // ── Idle gaps between consecutive polls ──────────────────────────────
-  const dumps = data.taskDumps;
+  const dumps = data.taskDumps.filter(
+    (dump) => !dump.sampled || dump.idleEndNs === undefined,
+  );
+  const completedWaits = new Map<number, TaskDump[]>();
+  for (const dump of data.taskDumps) {
+    if (dump.sampled && dump.idleEndNs !== undefined) {
+      const group = completedWaits.get(dump.idleEndNs) ?? [];
+      group.push(dump);
+      completedWaits.set(dump.idleEndNs, group);
+    }
+  }
   let dumpIdx = 0;
   for (let i = 0; i < polls.length - 1; i++) {
     const gapStart = polls[i]!.end;
@@ -674,7 +684,7 @@ export function buildTaskDetailRenderModel(
     // Tokio inserted a synthetic poll after capture; when that wake owns the
     // whole gap, retain the capture for the next real idle. Prefer a fresh
     // current-poll capture over retained legacy captures.
-    const gapDumps: TaskDump[] = [];
+    const gapDumps: TaskDump[] = [...(completedWaits.get(gapEnd) ?? [])];
     if (!wakeOwnsGap) {
       let eligibleEnd = dumpIdx;
       while (

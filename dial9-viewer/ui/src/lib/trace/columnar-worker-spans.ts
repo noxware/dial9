@@ -84,6 +84,7 @@ export interface PollView {
   spawnLocId: string | null;
   spawnLoc: string | null;
   openEnded: boolean;
+  closedByPark?: boolean;
   cpuSamples?: CpuSample[];
   schedSamples?: CpuSample[];
 }
@@ -260,7 +261,7 @@ class WorkerPollColumns {
   taskId: Float64Array;
   /** index into the store's shared spawn-string table; -1 = null. */
   spawnIdx: Int32Array;
-  /** 1 = openEnded (no matching PollEnd), else 0. */
+  /** 0 = PollEnd, 1 = next PollStart, 2 = WorkerPark (both nonzero are openEnded). */
   openEnded: Uint8Array;
   private _forest: SegmentForest<SpanAgg> | null = null;
 
@@ -377,7 +378,7 @@ export class ColumnarWorkerSpans {
         cols.end[i] = p.end;
         cols.taskId[i] = p.taskId;
         cols.spawnIdx[i] = store.intern(p.spawnLoc ?? null);
-        cols.openEnded[i] = p.openEnded ? 1 : 0;
+        cols.openEnded[i] = p.openEnded ? (p.closedByPark ? 2 : 1) : 0;
       }
       for (let i = 0; i < parks.length; i++) {
         cols.parkStart[i] = parks[i]!.start;
@@ -502,8 +503,9 @@ export class ColumnarWorkerSpans {
     const s = c.spawnIdx[i]! < 0 ? null : this.spawnStrings[c.spawnIdx[i]!]!;
     const view: PollView = {
       start: c.start[i]!, end: c.end[i]!, taskId: c.taskId[i]!,
-      spawnLocId: s, spawnLoc: s, openEnded: c.openEnded[i] === 1,
+      spawnLocId: s, spawnLoc: s, openEnded: c.openEnded[i] !== 0,
     };
+    if (c.openEnded[i] === 2) view.closedByPark = true;
     if (this.cpuSamplesArr && c.cpuOff && c.cpuOff[i + 1]! > c.cpuOff[i]!) {
       view.cpuSamples = this.sliceSamples(c.cpuIdx!, c.cpuOff[i]!, c.cpuOff[i + 1]!);
     }
@@ -534,7 +536,7 @@ export class ColumnarWorkerSpans {
   pollStartAt(w: number, i: number): number { return this.columnsFor(w).start[i]!; }
   pollEndAt(w: number, i: number): number { return this.columnsFor(w).end[i]!; }
   pollTaskIdAt(w: number, i: number): number { return this.columnsFor(w).taskId[i]!; }
-  pollOpenEndedAt(w: number, i: number): boolean { return this.columnsFor(w).openEnded[i] === 1; }
+  pollOpenEndedAt(w: number, i: number): boolean { return this.columnsFor(w).openEnded[i] !== 0; }
 
   /** Per-worker cpu-sample tick timestamps (source!==1), for drawCpuTicks. */
   cpuSampleTimes(w: number): number[] {
@@ -778,7 +780,7 @@ export class ColumnarWorkerSpans {
       const workers = new Set<number>();
       for (let p = lo; p < hi; p++) {
         workers.add(csr.worker[p]!);
-        if (csr.openEnded[p] === 1) continue;
+        if (csr.openEnded[p] !== 0) continue;
         const dur = csr.end[p]! - csr.start[p]!;
         total += dur;
         if (dur > longest) longest = dur;
@@ -1103,10 +1105,10 @@ export class ColumnarWorkerSpansBuilder {
     return b;
   }
 
-  pushPoll(w: number, start: number, end: number, taskId: number, spawnLoc: string | null, openEnded: boolean): void {
+  pushPoll(w: number, start: number, end: number, taskId: number, spawnLoc: string | null, openEnded: boolean, closedByPark = false): void {
     const b = this.col(w);
     b.pStart.push(start); b.pEnd.push(end); b.pTask.push(taskId);
-    b.pSpawn.push(this.store._internSpawn(spawnLoc)); b.pOpen.push(openEnded ? 1 : 0);
+    b.pSpawn.push(this.store._internSpawn(spawnLoc)); b.pOpen.push(openEnded ? (closedByPark ? 2 : 1) : 0);
   }
   pushPark(w: number, start: number, end: number, schedWait: number | null): void {
     const b = this.col(w);

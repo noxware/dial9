@@ -90,6 +90,7 @@ const P_LANES_SCROLL = "lanes-scroll";
 const P_STACK_VIEW = "stack-view";
 const P_INSPECTOR_TAB = "inspector";
 const P_POLL_SECTION = "poll-section";
+const P_TASK_PROFILE = "task-profile";
 const P_TASK_SCOPE = "task-scope";
 const P_POLL_EXPANDED = "poll-expanded";
 const P_POLL_WORKER_ZOOM = "poll-worker-zoom";
@@ -208,6 +209,7 @@ export const VIEWER_STATE_OWNERSHIP = {
   view: {
     fieldCharts: url(P_FIELD_CHART),
     inspectorTab: url(P_INSPECTOR_TAB),
+    taskFlamegraphMode: url(P_TASK_PROFILE),
     expandedPollGroups: url(P_POLL_EXPANDED),
     pollFlamegraphSection: url(P_POLL_SECTION),
     pollWorkerZoom: url(P_POLL_WORKER_ZOOM),
@@ -395,6 +397,7 @@ export function projectViewerState(state: ReadonlyState<StoreState>): ViewState 
   // The tab the selection would auto-activate on load; omitted when it matches.
   const inferredInspectorTab: InspectorTab = preferredTab(sel) ?? "task";
   if (view.inspectorTab !== inferredInspectorTab) vs.inspectorTab = view.inspectorTab;
+  if (view.taskFlamegraphMode === "mixed") vs.taskProfile = "mixed";
   if (view.pollFlamegraphSection !== "cpu") vs.pollSection = view.pollFlamegraphSection;
   if (sel.scopedSpawnLoc !== null) vs.taskScope = sel.scopedSpawnLoc;
   if (view.expandedPollGroups.size > 0) {
@@ -492,6 +495,7 @@ export function mirrorViewerToQuery(
   set(params, P_STACK_VIEW, vs.stackView ?? null);
   set(params, P_INSPECTOR_TAB, vs.inspectorTab ?? null);
   set(params, P_POLL_SECTION, vs.pollSection ?? null);
+  set(params, P_TASK_PROFILE, vs.taskProfile ?? null);
   set(params, P_TASK_SCOPE, vs.taskScope ?? null);
   set(params, P_POLL_EXPANDED, encodeList(vs.expandedPollGroups));
   set(params, P_POLL_WORKER_ZOOM, encodePath(vs.pollWorkerZoom));
@@ -663,6 +667,7 @@ export interface ViewerUrlState {
   stacksAsFlamegraph?: boolean;
   inspectorTab?: InspectorTab;
   pollSection?: "cpu" | "sched";
+  taskProfile?: "mixed";
   taskScope?: SpawnPin;
   expandedPollGroups?: string[];
   pollWorkerZoom?: string[];
@@ -754,6 +759,7 @@ export function hydrateViewerStore(
     view.fieldCharts = urlView.fieldCharts;
   }
   if (urlView.inspectorTab !== undefined) view.inspectorTab = urlView.inspectorTab;
+  if (urlView.taskProfile !== undefined) view.taskFlamegraphMode = urlView.taskProfile;
   if (urlView.pollSection !== undefined) {
     view.pollFlamegraphSection = urlView.pollSection;
   }
@@ -939,6 +945,7 @@ export function readViewerUrlState(search: string): ViewerUrlState {
   if (inspectorTab !== null && (INSPECTOR_TABS as readonly string[]).includes(inspectorTab)) {
     out.inspectorTab = inspectorTab as InspectorTab;
   }
+  if (p.get(P_TASK_PROFILE) === "mixed") out.taskProfile = "mixed";
   const pollSection = p.get(P_POLL_SECTION);
   if (pollSection === "cpu" || pollSection === "sched") out.pollSection = pollSection;
   // Carries the spawn location itself, so a link reproduces the family

@@ -33,6 +33,7 @@ function frozenCoreDevInterop(): Plugin {
     "decode",
     "trace_parser",
     "trace_analysis",
+    "task_flamegraph",
     "format",
     "heatmap",
     "prefix_detect",

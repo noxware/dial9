@@ -74,6 +74,10 @@ under `server::credentials` require the `s3` feature.
 
 ## Task-scoped mixed flamegraph
 
+In the trace viewer, select a task and choose **CPU + async** to estimate time
+over the visible range. This option appears for experimental task samples;
+**CPU samples** keeps the existing count-based view.
+
 `GET /api/task-flamegraph?task_id=7&start_ns=...&end_ns=...` returns CPU and
 async-idle estimates in nanoseconds for one task. The range is half-open and
 uses Unix timestamps. Source/scope options are `bucket`, `prefix`, `aws_region`,

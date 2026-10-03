@@ -69,6 +69,21 @@ test("buildInspect: totals and self across all occurrences", () => {
   assert.strictEqual(ins.focusName, "target");
 });
 
+test("buildInspect: shared CPU/idle frames retain their combined domain", () => {
+  const branch = (domain, weight) => {
+    const focus = Object.assign(node("await", { self: weight }), { domain });
+    const caller = Object.assign(node("shared", { children: [focus] }), { domain });
+    return node(domain, { children: [caller] });
+  };
+  const root = node("all", { children: [branch("cpu", 10), branch("idle", 20)] });
+  const focus = root.children.get("cpu").children.get("shared").children.get("await");
+  const inspected = FG.buildInspect(root, focus);
+  assert.strictEqual(inspected.total, 30);
+  assert.strictEqual(inspected.callees.domain, "mixed");
+  assert.strictEqual(inspected.callers.domain, "mixed");
+  assert.strictEqual(inspected.callers.children.get("shared").domain, "mixed");
+});
+
 test("buildInspect: callees tree merges subtrees (leaves → no children)", () => {
   const root = fixture();
   const focus = root.children.get("a").children.get("target");

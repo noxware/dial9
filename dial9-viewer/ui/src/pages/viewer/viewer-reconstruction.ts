@@ -265,6 +265,7 @@ export function createViewerReconstruction(
     });
     store.update("view", {
       inspectorTab: "task",
+      taskFlamegraphMode: "cpu",
       expandedPollGroups: new Set<string>(),
       pollFlamegraphSection: "cpu",
       pollWorkerZoom: [],
