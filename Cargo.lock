@@ -2036,6 +2036,7 @@ dependencies = [
  "dial9-tokio-telemetry",
  "dial9-trace-format",
  "flate2",
+ "futures-channel",
  "futures-util",
  "hdrhistogram",
  "hostname",

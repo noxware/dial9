@@ -450,6 +450,73 @@ fn task_dump_capture_repoll_does_not_cause_poll_after_ready() {
     );
 }
 
+#[test]
+fn external_wait_is_not_attributed_to_later_sleep() {
+    let (capture, batches) = capture_processor();
+    let recorder = recorder(MemoryBuffer::new(CAPTURE_BUFFER_SIZE).unwrap())
+        .with_custom_pipeline(|p| p.pipe(capture))
+        .build();
+    let rt = common::attach_current_thread(
+        &recorder,
+        TokioAttachOptions::builder()
+            .task_sampling_config(
+                TaskSamplingConfig::builder()
+                    .captures_per_second_per_worker(1000)
+                    .rng_seed(42)
+                    .build(),
+            )
+            .build(),
+    );
+    let handle = Dial9TokioHandle::current();
+    let sleep_started_ns = rt.block_on(async {
+        warm_up(&handle).await;
+        let (sender, receiver) = futures_channel::oneshot::channel();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let task = handle.spawn(async move {
+            started_tx.send(()).unwrap();
+            // The external receiver has no Tokio tracing hooks; only the sleep
+            // can supply a captured stack for this task.
+            receiver.await.unwrap();
+            let sleep_started_ns = dial9_core::clock::clock_monotonic_ns();
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            sleep_started_ns
+        });
+        started_rx.await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        sender.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap()
+    });
+    drop(rt);
+    recorder.graceful_shutdown(Duration::from_secs(1));
+
+    let events: Vec<DumpEvent> = decode_all(&batches.lock().unwrap());
+    let mut captures = 0;
+    for event in events {
+        if let DumpEvent::TaskSampleEvent {
+            callchain,
+            inclusion_probability,
+            idle_start_ns,
+            idle_end_ns,
+            ..
+        } = event
+        {
+            captures += 1;
+            assert!(!callchain.is_empty());
+            assert_eq!(inclusion_probability, 1.0);
+            assert!(
+                idle_start_ns >= sleep_started_ns,
+                "later sleep received a {:.3} ms wait starting {:.3} ms before it was reached",
+                (idle_end_ns - idle_start_ns) as f64 / 1_000_000.0,
+                sleep_started_ns.saturating_sub(idle_start_ns) as f64 / 1_000_000.0,
+            );
+        }
+    }
+    assert!(captures > 0, "expected a capture from the later sleep");
+}
+
 /// One resumed wait emits every leaf with the same completed interval.
 #[test]
 fn selected_capture_emits_all_leaves_on_resumption() {
