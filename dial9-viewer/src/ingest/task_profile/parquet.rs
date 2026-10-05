@@ -1,0 +1,250 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use anyhow::Context;
+use arrow::array::{
+    Array, ArrayRef, Float64Array, ListArray, ListBuilder, StringArray, StringBuilder, UInt8Array,
+    UInt32Array, UInt64Array,
+};
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow::record_batch::RecordBatch;
+use bytes::Bytes;
+use parquet::arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder};
+use parquet::file::properties::WriterProperties;
+use parquet::format::KeyValue;
+
+use super::{Frame, Kind, Row, Segment, Stack};
+use crate::ingest::decode::clock::ClockOffset;
+
+const METADATA_KEY: &str = "dial9.task_profile";
+
+pub(crate) fn write(segment: &Segment) -> anyhow::Result<Vec<u8>> {
+    let list_type = DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("kind", DataType::UInt8, false),
+        Field::new("timestamp_ns", DataType::UInt64, false),
+        Field::new("task_id", DataType::UInt64, true),
+        Field::new("worker_id", DataType::UInt64, true),
+        Field::new("tid", DataType::UInt32, true),
+        Field::new("probability", DataType::Float64, true),
+        Field::new("idle_start_ns", DataType::UInt64, true),
+        Field::new("idle_end_ns", DataType::UInt64, true),
+        Field::new("frames", list_type.clone(), false),
+        Field::new("files", list_type, false),
+    ]));
+    let header = serde_json::to_string(&(
+        &segment.recording_id,
+        segment.clock_offset.map(|offset| offset.0.to_string()),
+        &segment.metadata,
+    ))?;
+    let props = WriterProperties::builder()
+        .set_compression(parquet::basic::Compression::SNAPPY)
+        .set_key_value_metadata(Some(vec![KeyValue::new(METADATA_KEY.into(), header)]))
+        .build();
+    let mut writer = ArrowWriter::try_new(Vec::new(), schema.clone(), Some(props))?;
+    for rows in segment.rows.chunks(1024) {
+        let mut frames = ListBuilder::new(StringBuilder::new());
+        let mut files = ListBuilder::new(StringBuilder::new());
+        for row in rows {
+            for frame in row.stack.iter() {
+                frames.values().append_value(&frame.name);
+                files.values().append_option(frame.file.as_deref());
+            }
+            frames.append(true);
+            files.append(true);
+        }
+        let arrays: Vec<ArrayRef> = vec![
+            Arc::new(UInt8Array::from_iter_values(
+                rows.iter().map(|r| r.kind as u8),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                rows.iter().map(|r| r.timestamp_ns),
+            )),
+            Arc::new(UInt64Array::from_iter(rows.iter().map(|r| r.task_id))),
+            Arc::new(UInt64Array::from_iter(rows.iter().map(|r| r.worker_id))),
+            Arc::new(UInt32Array::from_iter(rows.iter().map(|r| r.tid))),
+            Arc::new(Float64Array::from_iter(rows.iter().map(|r| r.probability))),
+            Arc::new(UInt64Array::from_iter(rows.iter().map(|r| r.idle_start_ns))),
+            Arc::new(UInt64Array::from_iter(rows.iter().map(|r| r.idle_end_ns))),
+            Arc::new(frames.finish()),
+            Arc::new(files.finish()),
+        ];
+        writer.write(&RecordBatch::try_new(schema.clone(), arrays)?)?;
+    }
+    Ok(writer.into_inner()?)
+}
+
+fn column<'a, T: 'static>(batch: &'a RecordBatch, name: &str) -> anyhow::Result<&'a T> {
+    batch
+        .column_by_name(name)
+        .and_then(|column| column.as_any().downcast_ref())
+        .with_context(|| format!("missing or invalid task profile column {name}"))
+}
+
+pub(crate) enum ReadOutcome {
+    Segment(Segment),
+    OtherRecording,
+    RowLimitExceeded,
+}
+
+pub(crate) fn read(
+    bytes: Bytes,
+    recording_filter: Option<&str>,
+    max_rows: usize,
+) -> anyhow::Result<ReadOutcome> {
+    let builder = ParquetRecordBatchReaderBuilder::try_new(bytes)?;
+    let header = builder
+        .metadata()
+        .file_metadata()
+        .key_value_metadata()
+        .and_then(|entries| entries.iter().find(|entry| entry.key == METADATA_KEY))
+        .and_then(|entry| entry.value.as_deref())
+        .context("missing task profile metadata")?;
+    let (recording_id, offset, metadata): (String, Option<String>, _) =
+        serde_json::from_str(header)?;
+    if recording_filter.is_some_and(|id| id != recording_id) {
+        return Ok(ReadOutcome::OtherRecording);
+    }
+    // Reject from the footer before decoding any column pages.
+    if usize::try_from(builder.metadata().file_metadata().num_rows())? > max_rows {
+        return Ok(ReadOutcome::RowLimitExceeded);
+    }
+    let mut segment = Segment {
+        recording_id,
+        clock_offset: offset.map(|s| s.parse().map(ClockOffset)).transpose()?,
+        metadata,
+        rows: Vec::new(),
+    };
+    let mut stacks = HashMap::<Vec<Frame>, Stack>::new();
+    for batch in builder.build()? {
+        let batch = batch?;
+        if batch.num_rows() > max_rows - segment.rows.len() {
+            return Ok(ReadOutcome::RowLimitExceeded);
+        }
+        let kinds = column::<UInt8Array>(&batch, "kind")?;
+        let timestamps = column::<UInt64Array>(&batch, "timestamp_ns")?;
+        let tasks = column::<UInt64Array>(&batch, "task_id")?;
+        let workers = column::<UInt64Array>(&batch, "worker_id")?;
+        let tids = column::<UInt32Array>(&batch, "tid")?;
+        let probabilities = column::<Float64Array>(&batch, "probability")?;
+        let idle_starts = column::<UInt64Array>(&batch, "idle_start_ns")?;
+        let idle_ends = column::<UInt64Array>(&batch, "idle_end_ns")?;
+        let frames = column::<ListArray>(&batch, "frames")?;
+        let files = column::<ListArray>(&batch, "files")?;
+        for i in 0..batch.num_rows() {
+            let frame_values = frames.value(i);
+            let file_values = files.value(i);
+            let names = frame_values
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .context("invalid frame names")?;
+            let files = file_values
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .context("invalid frame files")?;
+            anyhow::ensure!(names.len() == files.len(), "mismatched frame provenance");
+            let stack: Vec<_> = (0..names.len())
+                .map(|j| Frame {
+                    name: names.value(j).to_string(),
+                    file: (!files.is_null(j)).then(|| files.value(j).to_string()),
+                })
+                .collect();
+            let stack = if let Some(cached) = stacks.get(&stack) {
+                Arc::clone(cached)
+            } else {
+                let shared: Stack = stack.clone().into();
+                stacks.insert(stack, Arc::clone(&shared));
+                shared
+            };
+            segment.rows.push(Row {
+                kind: Kind::try_from(kinds.value(i))?,
+                timestamp_ns: timestamps.value(i),
+                task_id: (!tasks.is_null(i)).then(|| tasks.value(i)),
+                worker_id: (!workers.is_null(i)).then(|| workers.value(i)),
+                tid: (!tids.is_null(i)).then(|| tids.value(i)),
+                probability: (!probabilities.is_null(i)).then(|| probabilities.value(i)),
+                idle_start_ns: (!idle_starts.is_null(i)).then(|| idle_starts.value(i)),
+                idle_end_ns: (!idle_ends.is_null(i)).then(|| idle_ends.value(i)),
+                stack,
+            });
+        }
+    }
+    Ok(ReadOutcome::Segment(segment))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_segment() -> Segment {
+        Segment {
+            recording_id: "process-a".into(),
+            clock_offset: Some(ClockOffset(-42)),
+            metadata: [("cpu.profile.frequency_hz".into(), "99".into())].into(),
+            rows: vec![Row {
+                kind: Kind::Capture,
+                timestamp_ns: 123,
+                task_id: Some(7),
+                worker_id: None,
+                tid: None,
+                probability: Some(0.25),
+                idle_start_ns: Some(40),
+                idle_end_ns: Some(120),
+                stack: vec![
+                    Frame {
+                        name: "root".into(),
+                        file: None,
+                    },
+                    Frame {
+                        name: "work".into(),
+                        file: Some("src/main.rs".into()),
+                    },
+                ]
+                .into(),
+            }],
+        }
+    }
+
+    #[test]
+    fn round_trip_retains_probability_provenance_and_identity() {
+        let input = sample_segment();
+        let ReadOutcome::Segment(output) =
+            read(write(&input).unwrap().into(), Some("process-a"), 1).unwrap()
+        else {
+            panic!("matching recording at the row limit should be decoded");
+        };
+        assert_eq!(output.recording_id, input.recording_id);
+        assert_eq!(output.clock_offset, input.clock_offset);
+        assert_eq!(output.metadata, input.metadata);
+        assert_eq!(output.rows[0].stack, input.rows[0].stack);
+        assert_eq!(output.rows[0].probability, Some(0.25));
+        assert_eq!(output.rows[0].idle_start_ns, Some(40));
+        assert_eq!(output.rows[0].idle_end_ns, Some(120));
+        assert_eq!(output.rows[0].task_id, Some(7));
+        assert_eq!(output.rows[0].worker_id, None);
+    }
+
+    #[test]
+    fn excludes_unneeded_parts_before_decoding_pages() {
+        // Corrupt the data pages but preserve the footer: both exclusions must
+        // succeed without attempting to decode those pages.
+        let mut unreadable = write(&sample_segment()).unwrap();
+        let footer_len = u32::from_le_bytes(
+            unreadable[unreadable.len() - 8..unreadable.len() - 4]
+                .try_into()
+                .unwrap(),
+        ) as usize;
+        let footer_start = unreadable.len() - 8 - footer_len;
+        unreadable[4..footer_start].fill(0);
+        let unreadable = Bytes::from(unreadable);
+        assert!(matches!(
+            read(unreadable.clone(), Some("process-b"), 0).unwrap(),
+            ReadOutcome::OtherRecording
+        ));
+        assert!(matches!(
+            read(unreadable.clone(), None, 0).unwrap(),
+            ReadOutcome::RowLimitExceeded
+        ));
+        assert!(read(unreadable, None, 1).is_err());
+    }
+}

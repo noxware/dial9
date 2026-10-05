@@ -9,18 +9,17 @@
 //! # Sampling model
 //!
 //! All instrumented tasks on a worker share a calibrated Bernoulli sampler.
-//! Non-selected transitions do no capture work. Selected pending captures emit
+//! Non-selected transitions do no capture work. Selected captures emit
 //! every usable callchain immediately, with the probability used for selection.
 //!
 //! # Capture mechanics
 //!
-//! After a normal poll returns `Pending`, capture runs a second `poll` of the
-//! inner future under the real waker inside [`tokio::runtime::dump::trace_with`].
-//! Tokio may defer a wake for each captured leaf. To avoid a wake-and-capture
-//! loop, the poll immediately following a capture polls the future normally
-//! but skips capture.
-//! On Tokio versions without capture-induced wakes, this also skips capture
-//! on the next real wake; it never skips the normal poll.
+//! On resumption after `Pending`, capture stops at Tokio trace leaves. Non-Tokio
+//! futures can advance to a later await, so associating the captured stack with
+//! the completed idle interval is not yet reliable for arbitrary futures.
+//! Measuring from capture to the next poll would measure Tokio's capture-induced
+//! wake instead.
+//! The following poll drives the future normally without another capture.
 //!
 //! # Allocation
 //!
@@ -77,6 +76,7 @@ pin_project! {
         // Retain the poll's worker across nested runtimes that replace TLS.
         // Refresh only on migration, avoiding an Arc clone on every poll.
         sampler: Option<Arc<WorkerSampler>>,
+        pending_since_ns: Option<u64>,
         // Skip the next capture, but not the normal poll, to break capture-wake loops.
         just_captured: bool,
     }
@@ -90,6 +90,7 @@ impl<F> TaskSampled<F> {
             task_id,
             frames: FrameBuf::new(),
             sampler: None,
+            pending_since_ns: None,
             just_captured: false,
         }
     }
@@ -102,37 +103,46 @@ impl<F: Future> Future for TaskSampled<F> {
         refresh_worker_sampler(this.sampler);
         let Some(sampler) = this.sampler.as_ref() else {
             *this.just_captured = false;
+            *this.pending_since_ns = None;
             return this.inner.poll(cx);
         };
         if !this.handle.is_enabled() {
             *this.just_captured = false;
+            *this.pending_since_ns = None;
             return this.inner.poll(cx);
         }
-        let result = this.inner.as_mut().poll(cx);
-        if result.is_ready() {
-            return result;
-        }
-        if std::mem::take(this.just_captured) {
+        if !std::mem::take(this.just_captured)
+            && let Some(idle_start_ns) = this.pending_since_ns.take()
+            && let Some(probability) =
+                sampler.observe_pending(crate::telemetry::events::clock_monotonic_ns)
+        {
+            let idle_end_ns = crate::telemetry::recorder::poll_start_ts_monotonic();
+            let result = this.frames.capture(this.inner.as_mut(), cx);
+            if result.is_ready() || !this.frames.has_data() {
+                this.frames.clear();
+                *this.pending_since_ns = result
+                    .is_pending()
+                    .then(crate::telemetry::events::clock_monotonic_ns);
+                return result;
+            }
+            *this.just_captured = true;
+            // Tokio defers each leaf's own waker, including combinators
+            // such as FuturesUnordered. Waking only the outer task is insufficient.
+            let timestamp = crate::telemetry::events::clock_monotonic_ns();
+            this.frames.emit_sample(
+                this.handle,
+                *this.task_id,
+                timestamp,
+                idle_start_ns..idle_end_ns,
+                probability,
+            );
             return Poll::Pending;
         }
-        let Some(probability) =
-            sampler.observe_pending(crate::telemetry::events::clock_monotonic_ns)
-        else {
-            return Poll::Pending;
-        };
-        let result = this.frames.capture(this.inner.as_mut(), cx);
-        if result.is_ready() {
-            // A completed capture re-poll has no following idle interval.
-            this.frames.clear();
-            return result;
-        }
-        *this.just_captured = true;
-        // Read the actual capture time once for the entire callchain group.
-        // PollStart can precede capture by substantial application work.
-        let timestamp = crate::telemetry::events::clock_monotonic_ns();
-        this.frames
-            .emit_sample(this.handle, *this.task_id, timestamp, probability);
-        Poll::Pending
+        let result = this.inner.poll(cx);
+        *this.pending_since_ns = result
+            .is_pending()
+            .then(crate::telemetry::events::clock_monotonic_ns);
+        result
     }
 }
 
@@ -239,6 +249,10 @@ mod tests {
         let mut future = TaskSampled::new(inner, recorder.handle().clone(), TaskId::from_u32(1));
         assert_eq!(
             Pin::new(&mut future).poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Pending
+        );
+        assert_eq!(
+            Pin::new(&mut future).poll(&mut Context::from_waker(Waker::noop())),
             Poll::Ready(17)
         );
         assert!(future.frames.is_empty());
@@ -253,6 +267,8 @@ mod tests {
             task_id: TaskId::from_u32(17),
             callchain: &[0x1111_2222, 0x3333_4444, 0x5555_6666],
             inclusion_probability: 0.125,
+            idle_start_ns: 30_000,
+            idle_end_ns: 40_000,
         };
         let encoded = encode_single(&dump);
         let events = decode_events(&encoded).expect("decode");
@@ -263,6 +279,8 @@ mod tests {
         assert_eq!(e.timestamp_ns, 42_000);
         assert_eq!(e.task_id, 17);
         assert_eq!(e.inclusion_probability, 0.125);
+        assert_eq!(e.idle_start_ns, Some(30_000));
+        assert_eq!(e.idle_end_ns, Some(40_000));
         assert_eq!(e.callchain, vec![0x1111_2222, 0x3333_4444, 0x5555_6666]);
     }
 }

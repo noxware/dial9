@@ -37,7 +37,7 @@ impl TaskSamplingConfig {
         #[builder(default = 10)]
         captures_per_second_per_worker: u32,
         /// Fixed seed for reproducible sampling given the same worker IDs and
-        /// pending-transition timestamps. Defaults to a timestamp per worker.
+        /// eligible-resumption timestamps. Defaults to a timestamp per worker.
         rng_seed: Option<u64>,
     ) -> Self {
         // Same panic convention as MemoryProfilingConfigBuilder; build-time validation per the design doc.

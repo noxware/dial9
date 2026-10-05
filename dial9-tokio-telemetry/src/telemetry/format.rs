@@ -235,6 +235,9 @@ pub(crate) struct TaskSampleEvent {
     pub callchain: InternedStackFrames,
     /// Probability used before capture; shared by all callchains in this group.
     pub inclusion_probability: f64,
+    /// Completed wait, excluding the poll that captures it on resumption.
+    pub idle_start_ns: u64,
+    pub idle_end_ns: u64,
 }
 
 /// Wire-format event for a wake notification.

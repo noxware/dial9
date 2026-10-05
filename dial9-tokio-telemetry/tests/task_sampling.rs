@@ -23,6 +23,8 @@ enum DumpEvent {
         timestamp_ns: u64,
         task_id: u64,
         inclusion_probability: f64,
+        idle_start_ns: u64,
+        idle_end_ns: u64,
     },
     PollStartEvent {
         timestamp_ns: u64,
@@ -39,10 +41,8 @@ enum DumpEvent {
 
 // Drive a worker during calibration before exercising the selected path.
 async fn warm_up(handle: &Dial9TokioHandle) {
-    handle
-        .spawn(async { tokio::time::sleep(Duration::from_millis(1050)).await })
-        .await
-        .unwrap();
+    handle.spawn(async {}).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(1050)).await;
 }
 
 fn task_dump_callchains(spawn_with_dial9: bool) -> Vec<Vec<u64>> {
@@ -145,12 +145,7 @@ fn task_dump_resumes_capture_after_skip() {
         .iter()
         .filter(|e| matches!(e, DumpEvent::TaskSampleEvent { .. }))
         .count();
-    // Without capture-induced wakes, the second idle is skipped. With them,
-    // the extra polls consume the skip and all three idles can be captured.
-    assert!(
-        (2..=3).contains(&dump_count),
-        "capture must resume after a skipped poll; got {dump_count} dumps"
-    );
+    assert_eq!(dump_count, 3, "every completed sleep must be captured");
 }
 
 fn assert_idle_task_does_not_spin(multi_thread: bool) {
@@ -201,6 +196,43 @@ fn task_dump_does_not_spin_current_thread() {
 #[test]
 fn task_dump_does_not_spin_multi_thread() {
     assert_idle_task_does_not_spin(true);
+}
+
+#[test]
+fn capture_preserves_nested_leaf_wakes() {
+    use futures_util::{StreamExt, stream::FuturesUnordered};
+
+    let recorder = recorder(MemoryBuffer::new(CAPTURE_BUFFER_SIZE).unwrap()).build();
+    let rt = common::attach_current_thread(
+        &recorder,
+        TokioAttachOptions::builder()
+            .task_sampling_config(
+                TaskSamplingConfig::builder()
+                    .captures_per_second_per_worker(1000)
+                    .build(),
+            )
+            .build(),
+    );
+    let handle = Dial9TokioHandle::current();
+    rt.block_on(async {
+        warm_up(&handle).await;
+        let mut task = handle.spawn(async {
+            let mut waits: FuturesUnordered<_> = [10, 20]
+                .into_iter()
+                .map(|ms| tokio::time::sleep(Duration::from_millis(ms)))
+                .collect();
+            while waits.next().await.is_some() {}
+        });
+        match tokio::time::timeout(Duration::from_secs(1), &mut task).await {
+            Ok(result) => result.expect("captured task panicked"),
+            Err(_) => {
+                task.abort();
+                panic!("capture lost a nested leaf wake");
+            }
+        }
+    });
+    drop(rt);
+    recorder.graceful_shutdown(Duration::from_secs(1));
 }
 
 /// A task spawned directly through Tokio should not produce task dumps.
@@ -254,10 +286,10 @@ fn no_task_dump_during_calibration() {
     assert_eq!(dump_count, 0, "expected no TaskDump events");
 }
 
-/// Wrapping with `TaskDumped` must not produce duplicate wake or poll events.
+/// A captured leaf adds one continuation, not a wake-and-capture loop.
 #[test]
-fn task_dump_does_not_produce_extra_events() {
-    fn run(enable: bool) -> (usize, usize, usize) {
+fn task_sampling_only_adds_one_continuation_per_capture() {
+    fn run(enable: bool) -> (usize, usize, usize, usize) {
         let (capture, batches) = capture_processor();
 
         let recorder = recorder(MemoryBuffer::new(CAPTURE_BUFFER_SIZE).unwrap())
@@ -291,23 +323,24 @@ fn task_dump_does_not_produce_extra_events() {
         let mut starts = 0usize;
         let mut ends = 0usize;
         let mut wakes = 0usize;
+        let mut samples = 0usize;
         for e in &events {
             match e {
                 DumpEvent::PollStartEvent { .. } => starts += 1,
                 DumpEvent::PollEndEvent { .. } => ends += 1,
                 DumpEvent::WakeEventEvent { .. } => wakes += 1,
+                DumpEvent::TaskSampleEvent { .. } => samples += 1,
                 _ => {}
             }
         }
-        (starts, ends, wakes)
+        (starts, ends, wakes, samples)
     }
 
     let baseline = run(false);
     let with_dumps = run(true);
-    assert_eq!(
-        baseline, with_dumps,
-        "enabling task dumps changed PollStart/PollEnd/WakeEvent counts: {baseline:?} vs {with_dumps:?}"
-    );
+    assert_eq!(with_dumps.0, with_dumps.1);
+    assert_eq!(with_dumps.0 - baseline.0, with_dumps.3);
+    assert_eq!(with_dumps.2 - baseline.2, with_dumps.3);
 }
 
 /// Custom spawn APIs should get the same task-dump instrumentation.
@@ -417,10 +450,76 @@ fn task_dump_capture_repoll_does_not_cause_poll_after_ready() {
     );
 }
 
-/// A task aborted while still waiting must already have emitted every leaf,
-/// once, with the capture's probability and actual (post-work) timestamp.
 #[test]
-fn selected_capture_emits_all_leaves_before_any_later_poll() {
+fn external_wait_is_not_attributed_to_later_sleep() {
+    let (capture, batches) = capture_processor();
+    let recorder = recorder(MemoryBuffer::new(CAPTURE_BUFFER_SIZE).unwrap())
+        .with_custom_pipeline(|p| p.pipe(capture))
+        .build();
+    let rt = common::attach_current_thread(
+        &recorder,
+        TokioAttachOptions::builder()
+            .task_sampling_config(
+                TaskSamplingConfig::builder()
+                    .captures_per_second_per_worker(1000)
+                    .rng_seed(42)
+                    .build(),
+            )
+            .build(),
+    );
+    let handle = Dial9TokioHandle::current();
+    let sleep_started_ns = rt.block_on(async {
+        warm_up(&handle).await;
+        let (sender, receiver) = futures_channel::oneshot::channel();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let task = handle.spawn(async move {
+            started_tx.send(()).unwrap();
+            // The external receiver has no Tokio tracing hooks; only the sleep
+            // can supply a captured stack for this task.
+            receiver.await.unwrap();
+            let sleep_started_ns = dial9_core::clock::clock_monotonic_ns();
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            sleep_started_ns
+        });
+        started_rx.await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        sender.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap()
+    });
+    drop(rt);
+    recorder.graceful_shutdown(Duration::from_secs(1));
+
+    let events: Vec<DumpEvent> = decode_all(&batches.lock().unwrap());
+    let mut captures = 0;
+    for event in events {
+        if let DumpEvent::TaskSampleEvent {
+            callchain,
+            inclusion_probability,
+            idle_start_ns,
+            idle_end_ns,
+            ..
+        } = event
+        {
+            captures += 1;
+            assert!(!callchain.is_empty());
+            assert_eq!(inclusion_probability, 1.0);
+            assert!(
+                idle_start_ns >= sleep_started_ns,
+                "later sleep received a {:.3} ms wait starting {:.3} ms before it was reached",
+                (idle_end_ns - idle_start_ns) as f64 / 1_000_000.0,
+                sleep_started_ns.saturating_sub(idle_start_ns) as f64 / 1_000_000.0,
+            );
+        }
+    }
+    assert!(captures > 0, "expected a capture from the later sleep");
+}
+
+/// One resumed wait emits every leaf with the same completed interval.
+#[test]
+fn selected_capture_emits_all_leaves_on_resumption() {
     use std::sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -445,17 +544,17 @@ fn selected_capture_emits_all_leaves_before_any_later_poll() {
     rt.block_on(async {
         warm_up(&handle).await;
         let started = started.clone();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
         let task = handle.spawn(async move {
             // Distinguish the capture timestamp from the cached poll start.
             std::thread::sleep(Duration::from_millis(10));
             started.store(dial9_core::clock::clock_monotonic_ns(), Ordering::Relaxed);
             let a = tokio::sync::Notify::new();
-            let b = tokio::sync::Notify::new();
-            tokio::select! { _ = a.notified() => {}, _ = b.notified() => {} }
+            tokio::select! { _ = a.notified() => {}, _ = receiver => {} }
         });
         tokio::time::sleep(Duration::from_millis(30)).await;
-        task.abort();
-        assert!(task.await.unwrap_err().is_cancelled());
+        sender.send(()).unwrap();
+        task.await.unwrap();
     });
     drop(rt);
     recorder.graceful_shutdown(Duration::from_secs(1));
@@ -468,11 +567,16 @@ fn selected_capture_emits_all_leaves_before_any_later_poll() {
                 task_id,
                 inclusion_probability,
                 callchain,
+                idle_start_ns,
+                idle_end_ns,
             } => {
                 assert!(!callchain.is_empty());
                 assert_eq!(*inclusion_probability, 1.0);
                 assert!(*timestamp_ns >= started.load(Ordering::Relaxed));
-                Some((*timestamp_ns, *task_id))
+                assert!(*idle_start_ns >= started.load(Ordering::Relaxed));
+                assert!(*idle_end_ns - *idle_start_ns >= 15_000_000);
+                assert!(*timestamp_ns >= *idle_end_ns);
+                Some((*timestamp_ns, *task_id, *idle_start_ns, *idle_end_ns))
             }
             _ => None,
         })

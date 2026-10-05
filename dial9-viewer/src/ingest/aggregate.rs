@@ -43,7 +43,7 @@ pub(crate) const ORDER_VERSION: u32 = 1;
 /// repopulates lazily. The value is a monotonic cache namespace, not a schema
 /// revision, so skipped values are expected. The old tree is abandoned and
 /// GC'd out-of-band.
-pub const SAMPLES_FORMAT_VERSION: u32 = 9;
+pub const SAMPLES_FORMAT_VERSION: u32 = 11;
 
 /// Default raw-trace segment duration, in seconds. A source file covers
 /// `[epoch, epoch + segment_duration)`; the [`Scope`] time filter pads by this
@@ -140,6 +140,14 @@ fn polls_part_key(output_prefix: &str, source_key: &str) -> String {
         "{root}/polls/{leaf}.parquet",
         root = versioned_root(output_prefix, &parse_source_bucket(source_key)),
         leaf = part_leaf_of(source_key),
+    )
+}
+
+pub(crate) fn task_profile_part_key(output_prefix: &str, source_key: &str) -> String {
+    format!(
+        "{root}/task-profiles/{leaf}.parquet",
+        root = versioned_root(output_prefix, &parse_source_bucket(source_key)),
+        leaf = part_leaf_of(source_key)
     )
 }
 
@@ -384,6 +392,7 @@ struct EncodedParts {
     dict_buf: Vec<u8>,
     polls_buf: Vec<u8>,
     spans_buf: Vec<u8>,
+    task_profile_buf: Vec<u8>,
     /// CPU-stage timing/count breakdown, threaded out to the per-file metric.
     cpu_stats: CpuStageStats,
 }
@@ -413,8 +422,8 @@ fn decode_and_encode(bytes: &[u8], full_key: &str) -> anyhow::Result<EncodedPart
     cpu_stats.gunzip = t_gunzip.elapsed();
     cpu_stats.decompressed_bytes = raw.len() as u64;
 
-    let ((samples, stacks, polls, spans), decode_stats) =
-        decode::decode_samples_with_stats(&raw, full_key)
+    let ((samples, stacks, polls, spans), decode_stats, task_profile) =
+        decode::decode_segment_with_stats(&raw, full_key)
             .map_err(|e| anyhow::anyhow!("decode {full_key}: {e}"))?;
     cpu_stats.decode = decode_stats;
 
@@ -435,6 +444,7 @@ fn decode_and_encode(bytes: &[u8], full_key: &str) -> anyhow::Result<EncodedPart
     // Write spans part-file (may be empty for files with no tracing spans).
     let mut spans_buf = Vec::new();
     parquet_writer::write_spans(&mut spans_buf, &spans)?;
+    let task_profile_buf = super::task_profile::write(&task_profile)?;
     cpu_stats.parquet_encode = t_encode.elapsed();
 
     Ok(EncodedParts {
@@ -442,6 +452,7 @@ fn decode_and_encode(bytes: &[u8], full_key: &str) -> anyhow::Result<EncodedPart
         dict_buf,
         polls_buf,
         spans_buf,
+        task_profile_buf,
         cpu_stats,
     })
 }
@@ -450,12 +461,12 @@ fn decode_and_encode(bytes: &[u8], full_key: &str) -> anyhow::Result<EncodedPart
 ///
 /// The `samples/` part is the durable record of "this file is folded"
 /// ([`list_folded_leaves`] lists it; see ADR-0003), so it MUST be written LAST,
-/// only after the dict, polls, and spans parts have landed. Writing it
+/// only after all auxiliary parts have landed. Writing it
 /// concurrently would let a mid-write failure — or a cancelled fold task (the
 /// streaming endpoints abort in-flight folds whenever the client disconnects) —
-/// commit a file as folded while its dict/polls/spans parts are missing,
+/// commit a file as folded while its auxiliary parts are missing,
 /// permanently: a folded file is never re-folded, so the gap would never heal.
-/// Orphaned dict/polls/spans parts from the reverse interleaving are harmless —
+/// Orphaned auxiliary parts from the reverse interleaving are harmless —
 /// the file stays unfolded and a later re-fold idempotently overwrites the same
 /// keys.
 async fn write_parts(
@@ -469,15 +480,18 @@ async fn write_parts(
     let dict_key = dict_part_key(output_prefix, full_key);
     let polls_key = polls_part_key(output_prefix, full_key);
     let spans_key = spans_part_key(output_prefix, full_key);
-    // Write dict, polls, and spans concurrently — all before the samples commit marker.
-    let (dict_res, polls_res, spans_res) = tokio::join!(
+    let task_profile_key = task_profile_part_key(output_prefix, full_key);
+    // Write auxiliary parts concurrently — all before the samples commit marker.
+    let (dict_res, polls_res, spans_res, task_profile_res) = tokio::join!(
         output.put_object(output_bucket, &dict_key, encoded.dict_buf),
         output.put_object(output_bucket, &polls_key, encoded.polls_buf),
         output.put_object(output_bucket, &spans_key, encoded.spans_buf),
+        output.put_object(output_bucket, &task_profile_key, encoded.task_profile_buf),
     );
     dict_res.map_err(|e| anyhow::anyhow!("write dict {dict_key}: {e}"))?;
     polls_res.map_err(|e| anyhow::anyhow!("write polls {polls_key}: {e}"))?;
     spans_res.map_err(|e| anyhow::anyhow!("write spans {spans_key}: {e}"))?;
+    task_profile_res.map_err(|e| anyhow::anyhow!("write task profile {task_profile_key}: {e}"))?;
     // Samples part LAST — its presence is the folded-set record (ADR-0003).
     output
         .put_object(output_bucket, &part_key, encoded.samples_buf)

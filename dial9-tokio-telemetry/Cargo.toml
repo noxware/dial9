@@ -147,6 +147,7 @@ metrique-timesource = { version = "0.1", features = [
 metrique-writer = { version = "0.1", features = ["test-util"] }
 metrique = { version = "0.1.29", features = ["local-format"] }
 tokio = { version = "1.53.2", features = ["test-util"] }
+futures-channel = "0.3"
 proptest = "1"
 tempfile = "3"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

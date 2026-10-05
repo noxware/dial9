@@ -72,6 +72,27 @@ supply your own backend (below). S3-backed configuration (`bucket`, `agg`, and
 `storage::S3Backend`, `server::AppState::from_bucket`, and the credential types
 under `server::credentials` require the `s3` feature.
 
+## Task-scoped mixed flamegraph
+
+`GET /api/task-flamegraph?task_id=7&start_ns=...&end_ns=...` returns CPU and
+async-idle estimates in nanoseconds for one task. The range is half-open and
+uses Unix timestamps. Source/scope options are `bucket`, `prefix`, `aws_region`,
+`service`, repeated `host`, and `max_files`.
+Use `recording_id` to disambiguate task IDs from different processes.
+
+Only experimental `TaskSampleEvent` captures contribute idle weight. The
+response reports the effective sampling range, limitations, and an
+`unavailable_reason` when required data is missing. All matching segments must
+be folded before joining polls across them. The time range clips weights, not
+source files: a wait can complete in a much later segment. Choose a source
+prefix bounded to the recording of interest; narrow that scope or increase
+`max_files` if it reports `incomplete_segments`. Queries retain at most two
+million profile rows; larger scopes return HTTP 413. The existing CPU endpoint
+continues to return sample counts. See the
+[design](../docs/design/task-dump-capture-sampling.md#task-scoped-mixed-flamegraph)
+for weighting, sibling-stack selection, and the unresolved attribution of
+non-Tokio waits, which currently prevents general-purpose use of mixed profiles.
+
 ## Custom storage backends
 
 To serve traces from a store neither backend covers (Google Cloud Storage,
