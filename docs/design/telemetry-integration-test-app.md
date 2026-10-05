@@ -70,7 +70,8 @@ function dial9_fixture_mixed_cycle
             `-- TASK_DUMP dial9_fixture_wait_inner_weight_2
 ```
 
-CPU functions busy-loop for their declared number of quanta. Wait functions
+CPU functions busy-loop for their declared number of quanta, measured in thread
+CPU time on Linux so descheduling does not reduce the workload. Wait functions
 use `tokio::time::sleep` for their declared number of quanta. The cycle span is
 open across the entire sequence; the inner span is open across both its CPU
 work and its await.
@@ -84,9 +85,9 @@ This is one mixed trace, not three adjacent feature demos. It declares:
 - CPU samples and task dumps directly inside the nested inner span; and
 - a span that remains active across async suspension.
 
-The initial integration test needs only presence, hierarchy, and coarse
-relative-weight assertions. Task-dump mixed-flamegraph tests can later consume
-the same names to check the `4:3` whole-cycle and `3:2` inner-subtree mixes.
+The integration test uses the same names to check the `4:3` whole-cycle and
+`3:2` inner-subtree mixes through `/api/task-flamegraph`, with coarse sampling
+tolerances. It exercises near-full capture and a longer run at 3 captures/s/worker.
 
 Use `#[inline(never)]` and `black_box` where needed so release builds retain
 the fixture function hierarchy.
@@ -161,16 +162,17 @@ cancellation branches, worker-coverage cases, or capture-rate sweeps.
 
 One profiling-capable Linux test:
 
-1. runs the application once in release mode;
+1. runs the application in release mode at high and low capture rates;
 2. collects the generated trace segments;
 3. reads the declared model from fixture events and names;
 4. parses the same bytes with `trace_parser.js`;
-5. sends the bytes through the Rust aggregate decoder and Parquet
-   writer/reader; and
+5. queries the viewer's mixed-flamegraph HTTP handler, exercising the Rust
+   aggregate decoder and Parquet writer/reader; and
 6. compares each observed result with the declared model.
 
-Do not stand up the HTTP server or simulated S3. Those paths have separate
-coverage.
+Use the production HTTP router with local storage; no listening server or
+simulated S3 is needed. Check span structure and associations in the Parquet
+artifacts produced by that request; weights come from the API response.
 
 Each production path returns only the test-local facts needed here:
 
