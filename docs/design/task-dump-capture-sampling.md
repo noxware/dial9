@@ -315,9 +315,8 @@ The experimental poll flow is:
    continuation from sampling to prevent a capture loop.
 
 Capture-to-next-poll timing measures Tokio's synthetic wake rather than the
-application wait. Completed interval bounds avoid that ambiguity. Capturing
-requires [Tokio #8445](https://github.com/tokio-rs/tokio/pull/8445): an outer-task
-wake cannot replace the deferred wakes of combinators' separate leaves.
+application wait. Completed interval bounds avoid that ambiguity. An outer-task
+wake cannot replace Tokio's deferred wakes of combinators' separate leaves.
 
 **Unresolved:** `trace_with` does not stop non-Tokio futures.
 On resumption, a completed non-Tokio await can advance into a later Tokio await,

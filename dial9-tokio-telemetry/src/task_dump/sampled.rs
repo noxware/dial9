@@ -126,7 +126,7 @@ impl<F: Future> Future for TaskSampled<F> {
                 return result;
             }
             *this.just_captured = true;
-            // Tokio #8445 defers each leaf's own waker, including combinators
+            // Tokio defers each leaf's own waker, including combinators
             // such as FuturesUnordered. Waking only the outer task is insufficient.
             let timestamp = crate::telemetry::events::clock_monotonic_ns();
             this.frames.emit_sample(
