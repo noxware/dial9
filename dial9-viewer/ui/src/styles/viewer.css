@@ -2444,6 +2444,17 @@ body {
     color: var(--d9-fg-muted);
     margin: 6px 0 2px;
 }
+.d9-capture-alternatives {
+    margin-top: 8px;
+    font-size: 0.72em;
+    color: var(--d9-fg-muted);
+    overflow-wrap: anywhere;
+}
+.d9-capture-alternatives summary { cursor: pointer; }
+.d9-capture-alternatives li { margin-bottom: 8px; }
+.d9-mixed-fg-host .d9-task-fg { display: flex; flex-direction: column; }
+.d9-mixed-fg-host .fg-body { min-height: 0; }
+.d9-mixed-fg-host .fg-canvas { flex-shrink: 0; }
 
 /* Blocking-calls panel. */
 .d9-block-groupby select {

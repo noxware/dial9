@@ -565,6 +565,7 @@
               spawnLocId: meta.spawnLocId,
               spawnLoc: meta.spawnLoc,
               openEnded: true,
+              closedByPark: true,
             });
             openPoll[w] = null;
           }
@@ -1187,16 +1188,17 @@
   }
 
   /**
-   * Deterministic warm (red/orange) color for a frame, hashed from its name.
+   * Deterministic color: warm for CPU, cool for async waits, purple when merged.
    * Shared by the on-screen canvas (flamegraph.js) and the SVG export
    * (flamegraph_export.js) so an exported graph matches what the user sees.
    * @param {string} name frame name
+   * @param {"cpu"|"idle"|"mixed"} [domain]
    * @returns {string} an `hsl(...)` color string
    */
-  function flamegraphColor(name) {
+  function flamegraphColor(name, domain) {
     let h = 0;
     for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
-    const hue = 10 + (Math.abs(h) % 40);
+    const hue = (domain === "idle" ? 200 : domain === "mixed" ? 260 : 10) + (Math.abs(h) % 40);
     const sat = 60 + (Math.abs(h >> 8) % 30);
     const lit = 40 + (Math.abs(h >> 16) % 15);
     return `hsl(${hue},${sat}%,${lit}%)`;

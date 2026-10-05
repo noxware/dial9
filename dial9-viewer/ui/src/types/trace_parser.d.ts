@@ -167,6 +167,9 @@ declare module "*/trace_parser.js" {
   }
 
   export interface TaskDump {
+    sampled?: boolean;
+    idleStartNs?: number;
+    idleEndNs?: number;
     timestamp: number;
     callchain: string[];
     /** Present for TaskSampleEvent; absent for legacy TaskDumpEvent. */
@@ -271,6 +274,7 @@ declare module "*/trace_parser.js" {
     runtimeWorkers: Map<string, number[]>;
     /** Latest segment-metadata key -> value. */
     segmentMetadata: Map<string, string>;
+    metadataConflicts?: string[];
     /**
      * Per-runtime scheduler-metrics samples (one per runtime per flush cycle),
      * in wire order. Low-volume, so kept as a plain array rather than routed

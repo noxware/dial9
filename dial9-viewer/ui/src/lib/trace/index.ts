@@ -444,3 +444,6 @@ export type {
   StreamMode,
   TimeCompositionView,
 } from "./span_explorer.js";
+
+export { localTaskProfile } from "./task-profile.js";
+export type { TaskProfile, TaskProfileNode } from "./task-profile.js";

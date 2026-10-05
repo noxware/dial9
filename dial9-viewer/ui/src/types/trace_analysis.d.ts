@@ -43,6 +43,8 @@ declare module "*/trace_analysis.js" {
      * park closed the poll); the actual duration is unknown.
      */
     openEnded?: boolean;
+    /** WorkerPark bounds CPU attribution even without a matching PollEnd. */
+    closedByPark?: boolean;
     /** On-CPU samples inside this poll; assigned by attachCpuSamples. */
     cpuSamples?: CpuSample[];
     /** Off-CPU samples inside this poll; assigned by attachCpuSamples. */
@@ -333,7 +335,7 @@ declare module "*/trace_analysis.js" {
   // ── Flamegraphs ───────────────────────────────────────────────────────
 
   /** Deterministic warm color for a frame name (hsl string). */
-  export function flamegraphColor(name: string): string;
+  export function flamegraphColor(name: string, domain?: "cpu" | "idle" | "mixed"): string;
 
   /**
    * Input sample for tree building. CpuSample satisfies this; the heap
@@ -368,6 +370,7 @@ declare module "*/trace_analysis.js" {
   }
 
   export interface FlamegraphNode {
+    domain?: "cpu" | "idle" | "mixed";
     name: string;
     children: Map<string, FlamegraphNode>;
     count: number;

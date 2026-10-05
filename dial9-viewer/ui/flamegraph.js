@@ -176,6 +176,7 @@
       fullName: fullName || null,
       location: src ? src.location || null : null,
       docsUrl: src ? src.docsUrl || null : null,
+      domain: src ? src.domain : undefined,
       count: 0,
       self: 0,
       children: new Map(),
@@ -186,6 +187,7 @@
   // counts. Used to aggregate the callee subtrees of every occurrence of the
   // focus frame into one downward "code called by <focus>" tree.
   function mergeSubtree(dst, src) {
+    if (dst.domain !== src.domain) dst.domain = "mixed";
     dst.count += src.count;
     dst.self += src.self;
     for (const child of src.children.values()) {
@@ -251,6 +253,7 @@
     callees.self = selfTotal; // exact self incl. nested recursion
 
     const callers = newInspectNode(focusName, focusFullName, focus);
+    callers.domain = callees.domain;
     callers.count = inclusiveTotal;
     callers.self = selfTotal;
     for (const occ of occurrences) {
@@ -265,6 +268,7 @@
           d = newInspectNode(anc.name, anc.fullName, anc);
           cur.children.set(k, d);
         }
+        if (d.domain !== anc.domain) d.domain = "mixed";
         d.count += c;
         cur = d;
       }
@@ -700,7 +704,7 @@
         if (dimmed) alpha = 0.25;
         else if (isAncestor) alpha = 0.6;
         ctx.globalAlpha = alpha;
-        ctx.fillStyle = flamegraphColor(node.name);
+        ctx.fillStyle = flamegraphColor(node.name, node.treeNode?.domain);
         ctx.fillRect(x, y, Math.max(w - 0.5, 0.5), FG_ROW_H - 1);
         regions.push({ x1: x, x2: x + w, y, node, totalSamples: data.totalSamples, rootTotal: data.rootTotal });
 
@@ -860,7 +864,7 @@
       setInspectVisible(true);
 
       const pct = res.rootTotal > 0
-        ? ((res.total / res.rootTotal) * 100).toFixed(1) + "% of all samples"
+        ? ((res.total / res.rootTotal) * 100).toFixed(1) + (exportFormatValue ? "% of total" : "% of all samples")
         : "";
       const selfPct = res.total > 0
         ? ((res.self / res.total) * 100).toFixed(1) + "% self"
@@ -879,7 +883,7 @@
       focusBand.appendChild(nameSpan);
       const statSpan = document.createElement("span");
       statSpan.className = "fg-focus-stat";
-      const bits = [res.total.toLocaleString() + " samples"];
+      const bits = [exportFormatValue ? exportFormatValue(res.total) : res.total.toLocaleString() + " samples"];
       if (pct) bits.push(pct);
       if (selfPct) bits.push(selfPct);
       bits.push(res.occurrences + (res.occurrences === 1 ? " call path" : " call paths"));
@@ -1098,8 +1102,9 @@
         const pct = ((r.total / rootTotal) * 100).toFixed(1);
         const row = document.createElement("div");
         row.className = "fg-sr-row";
-        row.title = (r.fullName || r.name) + "\n" + r.total.toLocaleString() +
-          " samples · " + r.self.toLocaleString() + " self · " +
+        row.title = (r.fullName || r.name) + "\n" +
+          (exportFormatValue ? exportFormatValue(r.total) : r.total.toLocaleString() + " samples") +
+          " · " + (exportFormatValue ? exportFormatValue(r.self) : r.self.toLocaleString()) + " self · " +
           r.sites + (r.sites === 1 ? " call path" : " call paths");
 
         const bar = document.createElement("span");
@@ -1113,7 +1118,7 @@
 
         const size = document.createElement("span");
         size.className = "fg-sr-size";
-        size.textContent = pct + "% · " + r.total.toLocaleString() +
+        size.textContent = pct + "% · " + (exportFormatValue ? exportFormatValue(r.total) : r.total.toLocaleString()) +
           (r.sites > 1 ? " · " + r.sites + " paths" : "");
 
         row.appendChild(bar);
@@ -1547,6 +1552,7 @@
 
     function setData(samples, callframeSymbols, opts) {
       directMode = false;
+      spawnFilter.style.display = "";
       allSamples = samples;
       currentSymbols = callframeSymbols;
       treeOptions = (opts && opts.treeOptions) || null;
@@ -1894,7 +1900,10 @@
       renderAll();
     }
 
-    function setTreeDirect(tree, totalCount) {
+    function setTreeDirect(tree, totalCount, opts) {
+      formatCount = (opts && opts.formatCount) || null;
+      exportTitle = (opts && opts.exportTitle) || "dial9 flamegraph";
+      exportFormatValue = (opts && opts.exportFormatValue) || null;
       directMode = true;
       // For API mode: set a pre-built tree directly (no worker/off-worker split)
       // Preserve the complete structural path: the same raw symbol can occur
@@ -1911,8 +1920,8 @@
       // Aggregated trees are not split into worker/off-worker lanes, so the
       // exported section header should read "All threads" to match the label
       // shown on screen (rather than the default "Worker threads" prefix).
-      workerLabelPrefix = "All threads";
-      workerLabel.textContent = `All threads \u2014 ${totalCount.toLocaleString()} samples`;
+      workerLabelPrefix = (opts && opts.workerLabel) || "All threads";
+      workerLabel.textContent = `${workerLabelPrefix} \u2014 ${exportFormatValue ? exportFormatValue(totalCount) : totalCount.toLocaleString() + " samples"}`;
       offworkerLabel.textContent = "";
       offworkerCanvas.style.display = "none";
       offworkerLabel.style.display = "none";

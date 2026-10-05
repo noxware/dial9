@@ -8,7 +8,8 @@
 // component renders its whole interior imperatively via lit-html into that
 // aside, so the shell's declarative re-renders never clobber it (no child
 // bindings on the aside). It re-renders on its OWN store subscription
-// (selection / trace / uiPrefs / transient) inside the scheduler tick, and on
+// (selection / trace / uiPrefs / view / transient; mixed-mode viewport updates
+// are debounced), and on
 // local UI-state changes (tab switch, section toggle, load-more, frame expand)
 // which render directly.
 //
@@ -28,7 +29,9 @@ import type { QueueData } from "./queue-model.js";
 import { createTaskDetailDerivation } from "./task-detail-track.js";
 import type { TaskDetailData } from "./task-detail-model.js";
 import { deriveAxisInputs, fmtAxisTick } from "./axis.js";
-import { formatHumanDuration } from "../../lib/trace/index.js";
+import { formatHumanDuration, localTaskProfile, type TaskProfile } from "../../lib/trace/index.js";
+import { mixedDisplayTree, captureAlternatives, mixedUnavailable } from "./mixed-flamegraph-model.js";
+import { subscribeInspectorFrames } from "./inspector-updates.js";
 import type {
   CallframeSymbols,
   CustomTraceEvent,
@@ -307,7 +310,8 @@ export function mountInspector(
   //
   // Two render targets so the transient channel stays cheap: the FRAME (status
   // + tabs + body, incl. the heavy Poll/Related derivations) re-renders only on
-  // trace/selection/uiPrefs changes; the at-cursor READOUT re-renders on the
+  // trace/selection/uiPrefs/view changes or viewport changes in mixed mode;
+  // the at-cursor READOUT re-renders on the
   // high-frequency `transient` channel into its own host, so a hover never
   // re-runs buildPollDetail/buildRelated. The readout host is a binding-free
   // node inside the frame template, so a frame re-render leaves its imperative
@@ -319,6 +323,7 @@ export function mountInspector(
     reconcileSelection(s.selection);
     host.style.width = `${s.uiPrefs.sidebarWidth}px`;
     render(frameTemplate(s), host);
+    setMixedRangePending(false);
     renderReadout();
     // Populate the Stack tab's region-analysis host. Idempotent + a no-op
     // unless the Stack tab is showing a retained region; runs after the frame
@@ -543,6 +548,7 @@ export function mountInspector(
         ${taskScopeControls(d)}
         ${offFamilyNote(d)}
         ${showsFamily(d) ? familyStats(d) : singleTaskStats(d)}
+        ${taskProfileControls(d)}
         ${taskFlamegraphBody(d)}
       </div>
     `;
@@ -675,15 +681,66 @@ export function mountInspector(
     store.update("selection", { scopedSpawnLoc: location });
   }
 
+  function taskProfileControls(d: TaskDetailData): TemplateResult | typeof nothing {
+    if (!d.taskDumps.some((sample) => sample.sampled) && state().view.taskFlamegraphMode !== "mixed") return nothing;
+    return html`<div class="d9-task-scope-switch" role="group" aria-label="Task profile">
+      <button type="button" class=${classMap({ "d9-task-scope-btn": true, on: state().view.taskFlamegraphMode === "cpu" })} aria-pressed=${state().view.taskFlamegraphMode === "cpu"}
+        @click=${() => store.update("view", { taskFlamegraphMode: "cpu" })}>CPU samples</button>
+      <button type="button" class=${classMap({ "d9-task-scope-btn": true, on: state().view.taskFlamegraphMode === "mixed" })} aria-pressed=${state().view.taskFlamegraphMode === "mixed"}
+        @click=${() => store.update("view", { taskFlamegraphMode: "mixed" })}>CPU + async</button>
+    </div>`;
+  }
+
+  let mixedCache: { sig: string; profile: TaskProfile } | null = null;
+  function setMixedRangePending(pending: boolean): void {
+    const label = host.querySelector("[data-mixed-range-label]");
+    if (label) label.textContent = pending ? "Previous range (updating…)" : "Visible range";
+  }
+
+  function mixedProfile(d: TaskDetailData): TaskProfile | null {
+    const { trace: { trace }, viewport } = state();
+    if (trace === null || d.taskId === null) return null;
+    const sig = `${traceId(trace)}:${d.taskId}:${viewport.viewStart}:${viewport.viewEnd}`;
+    if (mixedCache?.sig === sig) return mixedCache.profile;
+    const profile = localTaskProfile(trace, d.taskId, d.polls, viewport.viewStart, viewport.viewEnd);
+    mixedCache = { sig, profile };
+    return profile;
+  }
+
+  function mixedBody(d: TaskDetailData): TemplateResult {
+    if (showsFamily(d)) return html`<p class="d9-inspector-hint">Choose “This task” to compare CPU and async time for one task.</p>`;
+    const profile = mixedProfile(d);
+    if (profile === null || profile.tree === null) return html`<p class="d9-inspector-hint" data-mixed-unavailable>
+      ${mixedUnavailable(profile?.unavailable_reason ?? "no_usable_task_samples")}</p>`;
+    return html`
+      <div class="d9-task-fg-note" data-mixed-summary>
+        <span data-mixed-range-label>Visible range</span> · estimated CPU ${formatHumanDuration(profile.cpu_ns)} + idle ${formatHumanDuration(profile.idle_ns)}
+        · ${profile.cpu_samples} CPU samples, ${profile.capture_groups} async captures
+      </div>
+      <div class="d9-task-fg-host d9-mixed-fg-host" id="d9-task-fg" data-task-fg-host></div>
+      <p class="d9-inspector-hint">Orange: CPU. Blue: idle at await, including scheduler delay.
+        Open waits and off-CPU time inside polls are not included.</p>
+      <p class="d9-inspector-hint">Experimental: waits without captured frames are omitted;
+        non-Tokio waits may be attributed to a later await.</p>
+      ${profile.effective_start_ns !== null && profile.effective_start_ns > profile.start_ns
+        ? html`<p class="d9-inspector-hint">The calibration interval is excluded.</p>` : nothing}
+      ${profile.invalid_capture_groups || profile.incomplete_capture_groups
+        ? html`<p class="d9-inspector-hint">${profile.invalid_capture_groups + profile.incomplete_capture_groups} incomplete or invalid captures excluded.</p>` : nothing}
+      ${captureAlternatives(profile.tree).map((node) => html`<details class="d9-capture-alternatives">
+        <summary>${node.alternatives?.length} captured alternatives · ${formatHumanDuration(node.weight_ns)}</summary>
+        <ol>${node.alternatives?.map((stack) => html`<li>${stack.map((frame) =>
+          frame.file ? `${frame.name} (${frame.file})` : frame.name).join(" → ")}</li>`)}</ol>
+      </details>`)}
+    `;
+  }
+
   /**
-   * The CPU profile for the active scope. Always rendered: it is the tab's only
-   * expandable surface, so a toggle bought a click and no choice.
-   *
    * `[data-task-fg-host]` is binding-free so the post-render sync can own the
    * canvas without lit-html reconciling it away (same technique as the poll and
    * region hosts).
    */
   function taskFlamegraphBody(d: TaskDetailData): TemplateResult {
+    if (state().view.taskFlamegraphMode === "mixed") return mixedBody(d);
     const view = taskFlamegraphViewFor(d);
     if (view.samples.length === 0) {
       return html`<p class="d9-inspector-hint" id="d9-task-fg">
@@ -1017,6 +1074,22 @@ export function mountInspector(
       return;
     }
     const d = taskDetail();
+    if (s.view.taskFlamegraphMode === "mixed") {
+      const profile = showsFamily(d) ? null : mixedProfile(d);
+      if (!profile?.tree) { taskFg.detach(); return; }
+      const tree = profile.tree;
+      taskFg.sync({ hostEl, sig: `mixed:${mixedCache?.sig}`, apply: (instance) => {
+        instance.setTreeDirect(mixedDisplayTree(tree), tree.weight_ns, {
+          workerLabel: "CPU + async (estimated)",
+          exportTitle: `CPU + async — task 0x${d.taskId?.toString(16)}`,
+          exportFormatValue: formatHumanDuration,
+          formatCount: (count, total, self) => `${formatHumanDuration(count)} (${(100 * count / total).toFixed(1)}%) · ${formatHumanDuration(self)} self`,
+        });
+        const body = hostEl.querySelector<HTMLElement>(".fg-body");
+        if (body && !instance.getInspectFocus() && !instance.isZoomed()) body.scrollTop = body.scrollHeight;
+      } });
+      return;
+    }
     const view = taskFlamegraphViewFor(d);
     if (view.samples.length === 0) {
       taskFg.detach();
@@ -1514,9 +1587,10 @@ export function mountInspector(
   // Frame re-render on the content slices; readout-only re-render on the
   // high-frequency transient channel (so a hover never re-runs the tab
   // derivations - the split above).
-  const unsubFrame = store.subscribe(
-    ["trace", "selection", "uiPrefs", "view"],
-    () => renderFrame(),
+  const unsubFrame = subscribeInspectorFrames(
+    store,
+    renderFrame,
+    () => setMixedRangePending(true),
   );
   const unsubReadout = store.subscribe(["transient"], () => renderReadout());
 

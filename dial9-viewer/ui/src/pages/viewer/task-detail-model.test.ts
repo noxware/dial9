@@ -404,12 +404,12 @@ describe("buildTaskDetailRenderModel: idle gaps + lifespan", () => {
     expect(m.idleBands).toHaveLength(0);
   });
 
-  it("attaches each poll's capture to its following idle gap", () => {
+  it.each([undefined, true])("attaches captures without interval bounds to the following idle gap (sampled=%s)", (sampled) => {
     const data = detailData({
       polls: [poll(100, 150, 1), poll(300, 350, 1), poll(600, 650, 1)],
       taskDumps: [
-        { timestamp: 101, callchain: ["first"] },
-        { timestamp: 301, callchain: ["second"] },
+        { timestamp: 101, ...(sampled === undefined ? {} : { sampled }), callchain: ["first"] },
+        { timestamp: 301, ...(sampled === undefined ? {} : { sampled }), callchain: ["second"] },
       ],
     });
     const m = buildTaskDetailRenderModel({ data, viewStart: 0, viewEnd: 1000, drawW: 1000 });
@@ -428,6 +428,16 @@ describe("buildTaskDetailRenderModel: idle gaps + lifespan", () => {
     const m = buildTaskDetailRenderModel({ data, viewStart: 0, viewEnd: 1000, drawW: 1000 });
     expect(m.idleBands).toHaveLength(1);
     expect(m.idleBands[0]!.dumps.map((d) => d.timestamp)).toEqual([101]);
+  });
+
+  it("attaches resumed V2 captures to the completed wait, not the synthetic next gap", () => {
+    const data = detailData({
+      polls: [poll(100, 150, 1), poll(300, 350, 1), poll(600, 650, 1)],
+      taskDumps: [{ timestamp: 310, sampled: true, idleStartNs: 140, idleEndNs: 300,
+        inclusionProbability: 0.5, callchain: ["resumed"] }],
+    });
+    const m = buildTaskDetailRenderModel({ data, viewStart: 0, viewEnd: 1000, drawW: 1000 });
+    expect(m.idleBands.map((b) => b.dumps.map((d) => d.timestamp))).toEqual([[310], []]);
   });
 
   it("prefers a fresh capture after a wake-owned gap", () => {
